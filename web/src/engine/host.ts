@@ -35,6 +35,17 @@ export interface BarEvent {
   tension: number;
   haze: number;
   inv: number;
+  /** Why the tempo isn't the daypart's: 9 the valley's moving quickly, 10
+   * it's crawling; −1 it is. */
+  tempo?: number;
+  /** The fleet's flow it was planned from, −1…1. */
+  flow?: number;
+  /** How dark a storm on its way has made the pad, 0–1. */
+  dark?: number;
+  /** The temperature's warmth on the master, −1 (cold) to 1 (heat). */
+  warm?: number;
+  /** The grid's swell on the master, dB. */
+  grid?: number;
   /** In A Day in Twelve Minutes, the moment of the day the bar stands for (UTC ms); 0 live. */
   day: number;
 }

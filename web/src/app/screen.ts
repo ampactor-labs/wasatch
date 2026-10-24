@@ -44,6 +44,7 @@ import { daypartName, type Valley } from "./valley.ts";
 import { FAMILY_TOPIC, STICKER_TOPIC, conditions, type LowdownCtx } from "./lowdown.ts";
 import { season } from "../data/feeds.ts";
 import { STATIONS } from "../data/ground.ts";
+import { utcNow } from "../engine/clock.ts";
 
 export const SECTION_NAMES = ["The theme", "Groove", "Atmosphere", "Journey", "The lake"];
 const MODE_SHORT = ["LYDIAN", "MAJOR", "MIXO", "DORIAN", "MINOR"];
@@ -61,6 +62,7 @@ const PULSE_COLOR: Record<number, string> = {
   3: "#7AC74F", // marimba: GREENbike
   5: "#FF6B35", // quake bell
   11: "#4FA3D9", // canyon drums: ski buses
+  15: "#9AD0F5", // a swell: a plane
 };
 
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -482,7 +484,32 @@ export class PlayScreen {
     this.root.querySelector(".play__map")?.classList.toggle("play__map--live", !!fleet);
     const u = this.u;
     const edge = 9 * u;
-    g.innerHTML = trains
+    const inside = (x: number, y: number) => x >= 0 && y >= 0 && x <= proj.width && y <= proj.height;
+    // Every bus out, faintly, under the trains.
+    const buses = (fleet?.buses ?? [])
+      .map(([lat, lon]) => {
+        const [x, y] = proj.project(lat, lon);
+        return inside(x, y) ? `<circle cx="${n(x)}" cy="${n(y)}" r="${n(1.5 * u)}"/>` : "";
+      })
+      .join("");
+    // Planes in the air near SLC, carried along their track since they
+    // were seen, fading as the sighting ages.
+    const sky = this.day ? null : this.deps.valley.livePlanes();
+    const planes = (sky?.planes ?? [])
+      .map(([lat, lon, track, kt, ft]) => {
+        const age = Math.max(0, (utcNow() - sky!.t) / 1000);
+        const m = (kt * 1852 * Math.min(age, 240)) / 3600;
+        const la = lat + (m * Math.cos((track * Math.PI) / 180)) / 111_320;
+        const lo = lon + (m * Math.sin((track * Math.PI) / 180)) / (111_320 * Math.cos((lat * Math.PI) / 180));
+        const [x, y] = proj.project(la, lo);
+        if (!inside(x, y)) return "";
+        const fade = Math.max(0.3, 1 - age / 300) * (ft > 18_000 ? 0.55 : 1);
+        return `<path d="M5 0L-4 -3.6L-2 0L-4 3.6Z" transform="translate(${n(x)} ${n(y)}) rotate(${n(track - 90)}) scale(${n(u)})" opacity="${fade.toFixed(2)}"/>`;
+      })
+      .join("");
+    g.innerHTML =
+      `<g class="map-buses">${buses}</g>` +
+      trains
       .map((t) => {
         const [x, y] = proj.project(t.lat, t.lon);
         const color = this.deps.schedule.routeColor(t.route);
@@ -497,7 +524,8 @@ export class PlayScreen {
         const s = 3.6 * u;
         return `<rect x="${n(x - s)}" y="${n(y - s)}" width="${n(2 * s)}" height="${n(2 * s)}" rx="${n(2 * u)}" fill="${color}" stroke="#1B1F3B" stroke-width="${n(1.8 * u)}"/>`;
       })
-      .join("");
+      .join("") +
+      `<g class="map-planes">${planes}</g>`;
   }
 
   private pulse(e: Heard<PulseEvent>): void {

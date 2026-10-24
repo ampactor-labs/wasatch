@@ -391,7 +391,7 @@ export class Valley {
       }
     }
     const snow = this.snow?.value;
-    if (snow) parts.push(snow.newIn >= 1 ? `${Math.round(snow.newIn)} in overnight at Snowbird` : "No new snow");
+    if (snow) parts.push(snow.newIn >= 1 ? `${Math.round(snow.newIn)} in of new snow at ${snow.newAt ?? "Snowbird"}` : "No new snow");
     const lake = this.lake?.value;
     if (lake) parts.push(`Lake ${lake.ft.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ft`);
     return parts.join(" · ");
@@ -412,6 +412,9 @@ export class Valley {
       air: sky ? { pm25: sky.value.pm25, inversionC: sky.value.inversionC, observed: sky.observed, receipt: sky.receipt } : undefined,
       alerts: sky ? { names: sky.value.alerts, observed: sky.observed, receipt: sky.receipt } : undefined,
       busesOut: this.liveFleet() ? { count: this.liveFleet()!.counts.buses, observed: this.liveFleet()!.t } : undefined,
+      plane: (ms) => this.planeRows.find((r) => r[0] === ms),
+      serviceAlert: (ms) => this.alertRows.find((r) => r[0] === ms),
+      grid: this.grid ? { ...this.grid.value, observed: this.grid.observed, receipt: this.grid.receipt } : undefined,
     };
   }
 

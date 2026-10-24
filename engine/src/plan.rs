@@ -17,7 +17,7 @@ use sonido_core::rng::CounterRng;
 pub const ANCHOR_HOURS: f64 = 5.0;
 /// Observations younger than this don't steer a boundary (they may not be
 /// published everywhere yet).
-const OBS_LAG_MS: f64 = 20.0 * 60_000.0;
+pub(crate) const OBS_LAG_MS: f64 = 20.0 * 60_000.0;
 
 /// The five section types.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -256,6 +256,10 @@ pub enum Reason {
     NightHome = 7,
     /// The small hours, already home: home sways by a rung.
     NightDrift = 8,
+    /// The buses and trains are moving quicker than usual: the tempo lifts.
+    FlowFaster = 9,
+    /// They're crawling, or running late: the tempo holds back.
+    FlowSlower = 10,
 }
 
 /// One section of the day.
@@ -286,6 +290,10 @@ pub struct Section {
     pub notes_reason: Option<Reason>,
     /// Why home moved without the notes, if it did.
     pub home_reason: Option<Reason>,
+    /// Why the tempo isn't the daypart's, if the valley's flow moved it.
+    pub tempo_reason: Option<Reason>,
+    /// The fleet's flow it was planned from, −1…1 (0 as usual).
+    pub flow: f32,
     /// Index into the mode's progression bank.
     pub progression: u8,
     /// Bars per chord (1 or 2).
@@ -362,8 +370,23 @@ pub fn tension_at(sky_data: &Sky, ms: f64) -> f32 {
     } else {
         0.0
     };
-    (now.alert + 0.6 * building + 0.25 * (now.gust_ms / 20.0).min(1.0)).clamp(0.0, 1.0)
+    (now.alert + 0.6 * building + 0.25 * (now.gust_ms / 20.0).min(1.0) + 0.35 * now.falling())
+        .clamp(0.0, 1.0)
 }
+
+/// The fleet's flow at `ms`, from its lagged slot: 0 inside a dead band, so
+/// an ordinary hour leaves the tempo to the daypart.
+pub fn flow_at(sky_data: &Sky, ms: f64) -> f32 {
+    let f = sky_data.at_or_default(ms - OBS_LAG_MS).flow_or_usual();
+    if f.abs() < 0.15 {
+        0.0
+    } else {
+        (f - 0.15 * f.signum()) / 0.85
+    }
+}
+
+/// The most the valley's flow moves the tempo from the daypart's, BPM.
+pub const FLOW_BPM: f32 = 4.0;
 
 /// One step on the circle toward the home collection.
 fn toward_home(collection: i8) -> i32 {
@@ -424,10 +447,22 @@ pub fn plan_chain(
         }
         let kind = queue.pop().unwrap_or(SectionKind::Groove);
 
-        // Tempo: toward the daypart's base, at most 4 BPM per boundary.
+        // Tempo: toward the daypart's base, nudged by how the valley's
+        // buses and trains are moving, at most 4 BPM per boundary.
+        let flow = flow_at(sky_data, t);
+        let mut tempo_reason = None;
         if index > 0 {
             let base = daypart.base_bpm();
-            bpm += (base - bpm).clamp(-4.0, 4.0);
+            let target = (base + FLOW_BPM * flow).clamp(60.0, 112.0);
+            let step = (target - bpm).clamp(-4.0, 4.0);
+            let plain = (base - bpm).clamp(-4.0, 4.0);
+            bpm += step;
+            // Say so when the flow made a beat's difference or more.
+            if step - plain >= 1.0 {
+                tempo_reason = Some(Reason::FlowFaster);
+            } else if plain - step >= 1.0 {
+                tempo_reason = Some(Reason::FlowSlower);
+            }
         }
 
         let activity = schedule.mean_activity(t, t + 120_000.0);
@@ -534,6 +569,8 @@ pub fn plan_chain(
             if best.2.is_finite() {
                 bars = best.0;
                 bpm = best.1;
+                // The fit sets the tempo now, not the flow.
+                tempo_reason = None;
             }
         }
         let phrases = bars.div_ceil(8) as u8;
@@ -555,6 +592,8 @@ pub fn plan_chain(
             next_key: key,
             notes_reason,
             home_reason,
+            tempo_reason,
+            flow,
             progression,
             bars_per_chord,
             activity,
@@ -627,6 +666,106 @@ mod tests {
         let s = weekday(t0);
         let sky_data = Sky::default();
         plan_chain(20261023, t0, t0 + 29.0 * 3_600_000.0, &s, &sky_data)
+    }
+
+    /// A sky with the same `edit` in every hour of the day.
+    fn sky_with(t0: f64, edit: impl Fn(&mut SkyHour)) -> Sky {
+        let mut sky = Sky::default();
+        for h in 0..32 {
+            let mut hour = SkyHour::default();
+            edit(&mut hour);
+            sky.set(t0 + f64::from(h) * 3_600_000.0, hour);
+        }
+        sky
+    }
+
+    #[test]
+    fn the_valley_s_flow_nudges_the_tempo_a_few_bpm_and_says_so() {
+        let t0 = (20_749.0 * 86_400.0 + 6.0 * 3600.0) * 1000.0;
+        let s = weekday(t0);
+        let end = t0 + 29.0 * 3_600_000.0;
+        let plan = |flow: f32| plan_chain(20261023, t0, end, &s, &sky_with(t0, |h| h.flow = flow));
+        let usual = plan_chain(20261023, t0, end, &s, &Sky::default());
+        let noon = |c: &Chain| {
+            c.sections
+                .iter()
+                .find(|x| x.start_ms >= t0 + 12.0 * 3_600_000.0)
+                .unwrap()
+                .bpm
+        };
+        assert_eq!(noon(&usual), 96.0);
+        assert_eq!(noon(&plan(1.0)), 100.0, "a quick valley lifts it");
+        assert_eq!(noon(&plan(-1.0)), 92.0, "a stuck one holds it back");
+        // An ordinary hour changes nothing: the chain is the usual one.
+        let quiet = plan(0.1);
+        assert!(
+            quiet
+                .sections
+                .iter()
+                .zip(&usual.sections)
+                .all(|(a, b)| a.bpm == b.bpm && a.start_ms == b.start_ms)
+        );
+        for c in [plan(1.0), plan(-1.0)] {
+            for w in c.sections.windows(2) {
+                assert!(
+                    (w[1].bpm - w[0].bpm).abs() <= 4.0 + 1e-3,
+                    "{} to {}",
+                    w[0].bpm,
+                    w[1].bpm
+                );
+            }
+            assert!(c.sections.iter().any(|x| x.tempo_reason.is_some()));
+        }
+        assert!(
+            plan(-1.0)
+                .sections
+                .iter()
+                .all(|x| x.tempo_reason != Some(Reason::FlowFaster))
+        );
+        assert!(usual.sections.iter().all(|x| x.tempo_reason.is_none()));
+    }
+
+    #[test]
+    fn a_slot_s_flow_steers_nothing_before_the_observation_lag() {
+        let t0 = (20_749.0 * 86_400.0 + 6.0 * 3600.0) * 1000.0;
+        let s = weekday(t0);
+        let end = t0 + 29.0 * 3_600_000.0;
+        let usual = plan_chain(20261023, t0, end, &s, &Sky::default());
+        let slot = t0 + 13.0 * 3_600_000.0;
+        let mut sky = Sky::default();
+        sky.set(
+            slot,
+            SkyHour {
+                flow: -1.0,
+                ..SkyHour::default()
+            },
+        );
+        let nudged = plan_chain(20261023, t0, end, &s, &sky);
+        for (a, b) in usual.sections.iter().zip(&nudged.sections) {
+            if a.start_ms < slot + OBS_LAG_MS {
+                assert_eq!((a.bpm, a.start_ms), (b.bpm, b.start_ms));
+            }
+        }
+        assert!(
+            usual
+                .sections
+                .iter()
+                .zip(&nudged.sections)
+                .any(|(a, b)| a.bpm != b.bpm)
+        );
+    }
+
+    #[test]
+    fn falling_pressure_is_a_storm_coming() {
+        let t0 = (20_749.0 * 86_400.0 + 6.0 * 3600.0) * 1000.0;
+        let at = t0 + 15.0 * 3_600_000.0;
+        let steady = tension_at(&sky_with(t0, |h| h.pressure_tend = 0.5), at);
+        let falling = tension_at(&sky_with(t0, |h| h.pressure_tend = -4.0), at);
+        assert!(falling - steady >= 0.3, "{steady} to {falling}");
+        assert_eq!(
+            tension_at(&sky_with(t0, |h| h.pressure_tend = f32::NAN), at),
+            tension_at(&Sky::default(), at)
+        );
     }
 
     #[test]

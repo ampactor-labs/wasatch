@@ -7,9 +7,10 @@
 //! bar, so a phone that joins mid-section replays from that bar.
 
 use crate::music::{
-    Chord, Color, Key, Mode, approach_degree, deceptive_degree, pivot, progressions,
+    Chord, Color, Key, Mode, approach_degree, deceptive_degree, dominant_degree, pivot,
+    progressions,
 };
-use crate::plan::{Daypart, Section, SectionKind, Sky};
+use crate::plan::{Daypart, OBS_LAG_MS, Section, SectionKind, Sky};
 use crate::schedule::{Network, RouteKind, Schedule};
 use crate::theme;
 use crate::voicing::{self, Voicing};
@@ -68,6 +69,10 @@ pub enum Inst {
     Harp = 13,
     /// Bass.
     Bass = 14,
+    /// One voice of a plane's swell (variant: its voice, 0–3, in bits 0–1;
+    /// 4 a legato move of a voice already sounding; 8 landing; the plane's
+    /// size less one in bits 4–6).
+    Swell = 15,
 }
 
 /// Families, for the mix and the vantage.
@@ -174,6 +179,18 @@ pub enum FeatureKind {
     Late = 15,
     /// A weather alert (value: its strength, 0–1).
     Alert = 16,
+    /// A plane taking off or landing at SLC (route 1 landing, stop its size,
+    /// value its altitude in ft).
+    Plane = 17,
+    /// A new UTA service alert (route: 0 buses, 1 TRAX, 2 FrontRunner, 3 ski
+    /// buses; stop 1 if it suspends service).
+    ServiceAlert = 18,
+    /// A storm on its way (value: the snow forecast at Alta, mm).
+    Storm = 19,
+    /// The grid's demand (value: against the usual for the hour).
+    Grid = 20,
+    /// FrontRunner due at Salt Lake Central (value: minutes; event_ms when).
+    Due = 21,
 }
 
 /// A captioned moment.
@@ -220,6 +237,10 @@ pub struct Mix {
     pub grains: f32,
     /// Bikes.
     pub bikes: f32,
+    /// Planes' swells.
+    pub planes: f32,
+    /// How dark the pad's color is with a storm on its way, 0–1.
+    pub dark: f32,
 }
 
 /// A GREENbike dock change.
@@ -335,9 +356,14 @@ impl Default for Slow {
 }
 
 impl Slow {
+    /// Whether the grid's demand is known.
+    pub fn knows_energy(&self) -> bool {
+        self.energy.is_finite() && self.energy > 0.0
+    }
+
     /// The grid's demand against the usual for the hour, 1 unknown.
     pub fn energy_or_usual(&self) -> f32 {
-        if self.energy.is_finite() && self.energy > 0.0 {
+        if self.knows_energy() {
             self.energy.clamp(0.5, 1.5)
         } else {
             1.0
@@ -476,6 +502,8 @@ pub(crate) fn mix_for(sec: &Section, phrase: u32) -> Mix {
             ground: 0.6,
             grains: 0.7,
             bikes: 0.6,
+            planes: 0.55,
+            dark: 0.0,
         },
         SectionKind::Groove => Mix {
             kit: 1.0,
@@ -488,6 +516,8 @@ pub(crate) fn mix_for(sec: &Section, phrase: u32) -> Mix {
             ground: 0.4,
             grains: 0.5,
             bikes: 0.9,
+            planes: 0.6,
+            dark: 0.0,
         },
         SectionKind::Atmosphere => Mix {
             kit: 0.25,
@@ -500,6 +530,8 @@ pub(crate) fn mix_for(sec: &Section, phrase: u32) -> Mix {
             ground: 0.9,
             grains: 1.0,
             bikes: 0.5,
+            planes: 1.0,
+            dark: 0.0,
         },
         SectionKind::Journey => Mix {
             kit: 0.85,
@@ -512,6 +544,8 @@ pub(crate) fn mix_for(sec: &Section, phrase: u32) -> Mix {
             ground: 0.7,
             grains: 0.8,
             bikes: 0.8,
+            planes: 0.8,
+            dark: 0.0,
         },
         SectionKind::Lake => Mix {
             kit: 0.0,
@@ -524,13 +558,104 @@ pub(crate) fn mix_for(sec: &Section, phrase: u32) -> Mix {
             ground: 0.9,
             grains: 0.6,
             bikes: 0.3,
+            planes: 0.9,
+            dark: 0.0,
         },
     };
     if night {
         m.kit *= 0.5;
         m.ground = (m.ground + 0.2).min(1.0);
+        // At night a plane is most of what's moving.
+        m.planes = (m.planes * 1.2).min(1.0);
     }
     m
+}
+
+/// What colors a bar beyond its section: the valley's events and its
+/// outlook, worked out once a bar.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct BarCtx {
+    /// Tension now: the section's, held up while a service alert stands on
+    /// the trains.
+    pub tension: f32,
+    /// A storm on its way, 0–1, from the snow forecast at Alta; 0 once it's
+    /// snowing (the release).
+    pub storm: f32,
+    /// When FrontRunner leaves Salt Lake Central around this phrase's
+    /// cadence, the cadence bar's start: its approach is the dominant, its
+    /// cadence lands home, and the horn lands with it.
+    pub arrival: Option<f64>,
+}
+
+impl BarCtx {
+    /// A bar colored by its section alone.
+    pub(crate) fn plain(sec: &Section) -> Self {
+        BarCtx {
+            tension: sec.tension,
+            storm: 0.0,
+            arrival: None,
+        }
+    }
+}
+
+/// The phrase's length in bars (the day's last section may end on a short one).
+fn phrase_len(sec: &Section, phrase: u32) -> u32 {
+    (sec.bars() - phrase * 8).min(8)
+}
+
+/// How near a storm is, 0–1, from the snow forecast at Alta: from 2 in (50
+/// mm) to a foot (300 mm), eased. The forecast is read from its frozen,
+/// lagged slot, so every phone has the same; once snow is falling the storm
+/// has arrived and its color lets go.
+pub(crate) fn storm_at(valley: &Valley<'_>, ms: f64) -> f32 {
+    let now = valley.sky.at_or_default(ms);
+    if now.snow_cm > 0.1 || now.mtn_snow_cm > 0.3 {
+        return 0.0;
+    }
+    let mm = valley.sky.at_or_default(ms - OBS_LAG_MS).storm_or_none();
+    let x = ((mm - 50.0) / 250.0).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// The bar's color.
+pub(crate) fn bar_ctx(sec: &Section, bar: u32, valley: &Valley<'_>) -> BarCtx {
+    let bar_ms = sec.bar_ms();
+    let start = sec.start_ms + f64::from(bar) * bar_ms;
+    let active = valley.alerts_in_effect(start);
+    let rail_alert = active[1] > 0 || active[2] > 0;
+    BarCtx {
+        tension: if rail_alert {
+            sec.tension.max(0.5)
+        } else {
+            sec.tension
+        },
+        storm: storm_at(valley, start),
+        arrival: cadence_arrival(sec, bar, valley),
+    }
+}
+
+/// On a phrase's approach or cadence bar: the cadence bar's start, if
+/// FrontRunner leaves Central from two beats before it to its end (and the
+/// cadence isn't the section's pivot into a new key).
+fn cadence_arrival(sec: &Section, bar: u32, valley: &Valley<'_>) -> Option<f64> {
+    let phrase = bar / 8;
+    let len = phrase_len(sec, phrase);
+    let cadence = phrase * 8 + len - 1;
+    if len < 4 || !(bar == cadence || bar + 1 == cadence) {
+        return None;
+    }
+    if cadence + 1 == sec.bars() && sec.next_key != sec.key {
+        return None;
+    }
+    let central = valley.network.slc_central?;
+    let bar_ms = sec.bar_ms();
+    let at = sec.start_ms + f64::from(cadence) * bar_ms;
+    valley
+        .schedule
+        .performed_between(at - bar_ms / 2.0, at + bar_ms)
+        .iter()
+        .any(|e| e.stop == central && valley.network.kind(e.route) == RouteKind::FrontRunner)
+        .then_some(at)
 }
 
 /// Lowest MIDI note of pitch class `pc` at or above `floor`.
@@ -539,7 +664,7 @@ pub(crate) fn at_or_above(pc: u8, floor: i32) -> i32 {
 }
 
 /// The chord on a bar (and the chord's color).
-pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>) -> Chord {
+pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>, ctx: &BarCtx) -> Chord {
     let key = sec.key;
     let mode = key.mode();
     let phrase = bar / 8;
@@ -557,7 +682,13 @@ pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>) -> Chord {
         return Chord::new(key, theme::HARMONY[bip as usize], Color::Triad);
     }
     if phrase_len >= 4 && bip + 2 == phrase_len {
-        let color = if sec.tension > 0.4 {
+        // FrontRunner coming in: the dominant, to take it home.
+        if ctx.arrival.is_some()
+            && let Some(deg) = dominant_degree(mode)
+        {
+            return Chord::new(key, deg, Color::Seventh);
+        }
+        let color = if ctx.tension > 0.4 {
             Color::Seventh
         } else {
             Color::Triad
@@ -568,6 +699,12 @@ pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>) -> Chord {
         if last_bar && sec.next_key != key {
             let deg = pivot(key, sec.next_key).unwrap_or(0);
             return Chord::new(key, deg, Color::Triad);
+        }
+        // The train arrives home: outside the lake's own sections, the one
+        // cadence the lake doesn't get to leave open.
+        if ctx.arrival.is_some() && sec.kind != SectionKind::Lake {
+            let color = if snowy { Color::Add9 } else { Color::Triad };
+            return Chord::new(key, 0, color);
         }
         let share = lake_share(valley.slow.lake_ft);
         let unresolved = sec.rng.stream(0x1A4E).chance(u64::from(phrase), share)
@@ -591,7 +728,12 @@ pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>) -> Chord {
     } else {
         Color::Triad
     };
-    Chord::new(key, deg, color)
+    let chord = Chord::new(key, deg, color);
+    // A storm on its way holds the harmony in suspense.
+    if ctx.storm > 0.3 && sec.rng.stream(0x57).chance(u64::from(bar), 0.6 * ctx.storm) {
+        return chord.suspended();
+    }
+    chord
 }
 
 /// Compose bar `bar` of `sec` into `out`.
@@ -617,8 +759,16 @@ pub fn compose(
     out.notes.clear();
     out.harmony.clear();
     out.features.clear();
+    let ctx = bar_ctx(sec, bar, valley);
     out.mix = mix_for(sec, phrase);
+    if ctx.storm > 0.0 {
+        // A storm on its way: the pad darkens and the lake's drone swells.
+        out.mix.dark = ctx.storm;
+        out.mix.lake = out.mix.lake.max(0.35 + 0.45 * ctx.storm);
+    }
     let mix = out.mix;
+    let phrase_len = phrase_len(sec, phrase);
+    let cadence_bars = phrase_len >= 4 && bip + 2 >= phrase_len;
 
     if bar == 0 {
         // A new section starts clean, but for the crash the last one's fill
@@ -654,12 +804,15 @@ pub fn compose(
     }
 
     // Harmony.
-    let chord = chord_for(sec, bar, valley);
+    let chord = chord_for(sec, bar, valley, &ctx);
     let pad = voicing::voice(chord, &state.voicing);
     state.voicing = pad;
     let (tones, n_tones) = chord.pitch_classes();
     let root = chord.root_pc();
-    let bass = at_or_above(root, 33);
+    // With a storm close, the bass holds home under the harmony (a pedal),
+    // letting go for the cadence.
+    let pedal_bass = ctx.storm > 0.5 && !cadence_bars;
+    let bass = at_or_above(if pedal_bass { key.tonic_pc() } else { root }, 33);
     let pedal = at_or_above(key.tonic_pc(), 28);
     out.harmony.push(Harmony {
         at_ms: start,
@@ -687,7 +840,7 @@ pub fn compose(
 
     // Bass.
     if mix.bass > 0.0 {
-        let walking = valley.slow.river > 0.6 && activity > 0.3;
+        let walking = valley.slow.river > 0.6 && activity > 0.3 && !pedal_bass;
         if walking {
             for beat in 0..4u32 {
                 let deg_off = [0, 2, 4, 5][beat as usize];
@@ -798,20 +951,64 @@ pub fn compose(
                 }
             }
         }
-        // A fill into the next phrase when a section ends or a storm warning
-        // is up; its crash lands on the next downbeat (below).
-        let storm = valley.sky.at_or_default(start).alert > 0.3;
-        if bip == 7 && (bar + 1 == sec.bars() || storm) && full {
-            for (i, s) in [12u32, 13, 14, 15].iter().enumerate() {
+    }
+
+    // Fills, on a phrase's last bar: into the next section; into the next
+    // phrase while a storm warning is up or a storm is near (every other
+    // phrase, every one when it's close); and when UTA puts out a new
+    // service alert. One a phrase; its crash lands on the next downbeat.
+    if bip + 1 == phrase_len {
+        let phrase_start = start - f64::from(bip) * bar_ms;
+        let alert = valley
+            .alerts
+            .iter()
+            .find(|a| a.ms >= phrase_start && a.ms < start + 12.0 * step_ms)
+            .copied();
+        let warned = valley.sky.at_or_default(start).alert > 0.3
+            || (ctx.storm > 0.5 && (phrase % 2 == 1 || ctx.storm > 0.8));
+        let full = matches!(sec.kind, SectionKind::Groove | SectionKind::Journey);
+        let mut first = None;
+        if kit_on && full && (bar + 1 == sec.bars() || warned || alert.is_some()) {
+            // A suspension or a closure gets a longer run, harder.
+            let severe = alert.is_some_and(|a| a.severe);
+            let run: &[(u32, i32)] = if severe {
+                &[(11, 52), (12, 50), (13, 47), (14, 45), (15, 43)]
+            } else {
+                &[(12, 50), (13, 47), (14, 45), (15, 43)]
+            };
+            for &(s, m) in run {
                 out.notes.push(note(
-                    start + f64::from(*s) * step_ms,
+                    start + f64::from(s) * step_ms,
                     Inst::Tom,
-                    [50, 47, 45, 43][i],
-                    0.5,
+                    m,
+                    if severe { 0.58 } else { 0.5 },
                     260.0,
                 ));
             }
             state.fill = Fill::Kit;
+            first = Some(start + f64::from(run[0].0) * step_ms);
+        } else if alert.is_some() {
+            // No drums to fill with: a cymbal swell rising into the downbeat.
+            let at = start + 8.0 * step_ms;
+            out.notes.push(Note {
+                variant: 2,
+                ..note(at, Inst::Crash, 49, 0.3, 8.0 * step_ms)
+            });
+            state.fill = Fill::Soft;
+            first = Some(at);
+        }
+        if let (Some(a), Some(at)) = (alert, first) {
+            out.features.push(Feature {
+                at_ms: at,
+                kind: FeatureKind::ServiceAlert,
+                route: a.route_kind,
+                stop: u16::from(a.severe),
+                event_ms: a.ms,
+                late_s: 0,
+                observed: true,
+                value: 0.0,
+            });
+            state.phrase_featured = true;
         }
     }
     // The crash a fill owed this downbeat: with the kit if it's playing, a
@@ -962,6 +1159,10 @@ pub fn compose(
                     bells += 1;
                 }
                 RouteKind::FrontRunner if Some(ev.stop) == valley.network.slc_central => {
+                    // Leaving around the cadence, the horn lands on it, over
+                    // home.
+                    let cadence = ctx.arrival.filter(|&c| (ev.ms - c).abs() <= 2.0 * beat_ms);
+                    let at = cadence.unwrap_or(at);
                     out.features.push(Feature {
                         at_ms: at,
                         kind: FeatureKind::FrontRunner,
@@ -976,7 +1177,11 @@ pub fn compose(
                     let f = (out.features.len() - 1) as u16;
                     horn(
                         key,
-                        chord,
+                        if cadence.is_some() {
+                            Chord::new(key, 0, Color::Triad)
+                        } else {
+                            chord
+                        },
                         at,
                         beat_ms,
                         stop.lat,
@@ -1022,6 +1227,11 @@ pub fn compose(
                 }
             }
         }
+    }
+
+    // Planes.
+    if mix.planes > 0.0 {
+        planes(sec, bar, valley, state, out);
     }
 
     // Bikes: marimba plucks on scale degrees picked by latitude.
@@ -1175,10 +1385,12 @@ pub fn compose(
     if bip == 3 {
         let late_s = valley.schedule.system_late_s(start);
         let bus_rate = valley.schedule.bus_rate(start);
-        let mut notables = [FeatureKind::Snow; 5];
+        let storm_mm = valley.sky.at_or_default(start - OBS_LAG_MS).storm_or_none();
+        let mut notables = [FeatureKind::Snow; 6];
         let mut n_notable = 0;
         for (on, kind) in [
             (snowing > 0.0, FeatureKind::Snow),
+            (ctx.storm > 0.3, FeatureKind::Storm),
             (hour.alert > 0.3, FeatureKind::Alert),
             (hour.ridge_gust_ms > 9.0, FeatureKind::Wind),
             (
@@ -1193,29 +1405,49 @@ pub fn compose(
             }
         }
         let slot = sec.index * 4 + phrase;
-        const TURNS: [FeatureKind; 6] = [
+        const TURNS: [FeatureKind; 7] = [
             FeatureKind::Lake,
             FeatureKind::Buses,
             FeatureKind::Sky,
             FeatureKind::Ground,
             FeatureKind::River,
             FeatureKind::Air,
+            FeatureKind::Grid,
         ];
         let turn = |k: u32| {
-            // No buses to speak of at night: the next turn instead.
-            let i = (k % 6) as usize;
-            if TURNS[i] == FeatureKind::Buses && bus_rate < 1.0 {
-                TURNS[(i + 1) % 6]
-            } else {
-                TURNS[i]
-            }
+            // No buses to speak of at night, and no grid without its
+            // reading: the next turn instead.
+            let i = (k % 7) as usize;
+            let skip = (TURNS[i] == FeatureKind::Buses && bus_rate < 1.0)
+                || (TURNS[i] == FeatureKind::Grid && !valley.slow.knows_energy());
+            if skip { TURNS[(i + 1) % 7] } else { TURNS[i] }
         };
-        let kind = if n_notable > 0 && slot.is_multiple_of(3) {
+        // FrontRunner due at Central in the next few minutes: said once a
+        // train, in place of the phrase's card.
+        let due_in = |at: f64| {
+            valley
+                .schedule
+                .due_at(at)
+                .filter(|&d| (90_000.0..240_000.0).contains(&(d - at)))
+        };
+        let due = due_in(start).filter(|&d| {
+            let before = start - 8.0 * bar_ms;
+            !due_in(before).is_some_and(|p| (p - d).abs() < 120_000.0)
+        });
+        let kind = if due.is_some() {
+            FeatureKind::Due
+        } else if n_notable > 0 && slot.is_multiple_of(3) {
             notables[(slot / 3) as usize % n_notable]
         } else {
             turn(slot)
         };
         let (value, stop) = match kind {
+            FeatureKind::Due => (
+                ((due.unwrap_or(start) - start) / 60_000.0).round() as f32,
+                valley.network.slc_central.unwrap_or(0),
+            ),
+            FeatureKind::Storm => (storm_mm, 0),
+            FeatureKind::Grid => (valley.slow.energy_or_usual(), 0),
             FeatureKind::Snow => (snowing, 0),
             FeatureKind::Wind => (hour.ridge_gust_ms, 0),
             FeatureKind::Lake => (valley.slow.lake_ft, 0),
@@ -1236,15 +1468,219 @@ pub fn compose(
             kind,
             route: 0,
             stop,
-            event_ms: start,
+            event_ms: due.unwrap_or(start),
             late_s: 0,
-            observed: false,
+            observed: due.is_some(),
             value,
         });
         state.phrase_featured = true;
     }
 
     out.notes.sort_by(|a, b| a.at_ms.total_cmp(&b.at_ms));
+}
+
+/// Planes heard at most this often.
+const PLANE_GAP_MS: f64 = 20_000.0;
+/// A swell's register, MIDI: E2 to E4.
+const SWELL_LO: i32 = 40;
+const SWELL_HI: i32 = 64;
+
+/// Whether a plane sounds: it's the first in its twenty seconds, and the
+/// first in the twenty before came at least twenty seconds earlier. Heard
+/// planes are never closer than that, and it takes no memory of earlier
+/// bars, only the forty seconds of planes before (the conductor spaces them
+/// so already; this holds whatever it sent).
+fn plane_heard(valley: &Valley<'_>, p: &PlaneEvent) -> bool {
+    let first_from = |t: f64| {
+        valley
+            .planes
+            .get(valley.planes.partition_point(|q| q.ms < t))
+    };
+    let bucket = (p.ms / PLANE_GAP_MS).floor() * PLANE_GAP_MS;
+    first_from(bucket).is_some_and(|q| q.ms == p.ms)
+        && first_from(bucket - PLANE_GAP_MS)
+            .is_none_or(|q| q.ms >= bucket || p.ms - q.ms >= PLANE_GAP_MS)
+}
+
+/// A plane's swell in a section: the bar it starts in, when (the beat at or
+/// after the plane), and how long it lasts (four bars, or to the section's
+/// end).
+fn swell_onset(sec: &Section, p: &PlaneEvent) -> Option<(u32, f64, f64)> {
+    let bar_ms = sec.bar_ms();
+    let beat = bar_ms / 4.0;
+    // A swell is its plane's section's: it never crosses into the next.
+    if p.ms < sec.start_ms {
+        return None;
+    }
+    let at = sec.start_ms + ((p.ms - sec.start_ms) / beat).ceil() * beat;
+    if at >= sec.end_ms() - beat {
+        return None;
+    }
+    let bar = ((at - sec.start_ms) / bar_ms).floor() as u32;
+    Some((bar, at, (4.0 * bar_ms).min(sec.end_ms() - at)))
+}
+
+/// The chord tone nearest `m` (down first on a tie), in the swell's register.
+fn nearest_tone(chord: Chord, m: i32) -> i32 {
+    let (pcs, n) = chord.pitch_classes();
+    let tone = |x: i32| pcs[..n].contains(&(x.rem_euclid(12) as u8));
+    for d in 0..12 {
+        for x in [m - d, m + d] {
+            if (SWELL_LO..=SWELL_HI).contains(&x) && tone(x) {
+                return x;
+            }
+        }
+    }
+    m.clamp(SWELL_LO, SWELL_HI)
+}
+
+/// The next chord tone above (`dir` 1) or below (−1) `m`, if the register
+/// has one.
+fn next_tone(chord: Chord, m: i32, dir: i32) -> Option<i32> {
+    let (pcs, n) = chord.pitch_classes();
+    (1..=12)
+        .map(|k| m + dir * k)
+        .find(|x| pcs[..n].contains(&(x.rem_euclid(12) as u8)))
+        .filter(|x| (SWELL_LO..=SWELL_HI).contains(x))
+}
+
+/// How far apart a swell's two voices stay: nothing closer than a fifth
+/// below C3, where thirds turn to mud.
+fn swell_gap(lower: i32) -> i32 {
+    if lower < 48 { 7 } else { 3 }
+}
+
+/// A swell's two voices at bar `upto`: set on its first chord by the
+/// plane's height and size (a low plane low, a heavy one lower), then led
+/// bar by bar to the nearest tones of each chord, the upper voice stepping
+/// up a chord tone at a departure's crest and down at an arrival's.
+fn swell_voices(
+    sec: &Section,
+    valley: &Valley<'_>,
+    p: &PlaneEvent,
+    onset_bar: u32,
+    upto: u32,
+) -> [i32; 2] {
+    let chord_at = |b: u32| chord_for(sec, b, valley, &bar_ctx(sec, b, valley));
+    let first = chord_at(onset_bar);
+    // Room above for the upper voice: the lower one no higher than A3.
+    let center = (43.0 + 16.0 * (p.alt_ft / 12_000.0).clamp(0.0, 1.0)
+        - 2.5 * (f32::from(p.size) - 3.0))
+        .clamp(41.0, 57.0);
+    let lower = nearest_tone(first, center.round() as i32);
+    let gap = swell_gap(lower);
+    // An arrival starts wider, to fall.
+    let above = nearest_tone(first, lower + gap);
+    let above = if above < lower + gap {
+        next_tone(first, above, 1).unwrap_or(above)
+    } else {
+        above
+    };
+    let upper = if p.arrival {
+        next_tone(first, above, 1).unwrap_or(above)
+    } else {
+        above
+    };
+    let mut v = [lower, upper];
+    let span = ((sec.end_ms() - (sec.start_ms + f64::from(onset_bar) * sec.bar_ms()))
+        / sec.bar_ms())
+    .ceil()
+    .min(4.0) as u32;
+    let crest = onset_bar + 2.min(span.saturating_sub(1));
+    for b in onset_bar + 1..=upto {
+        let c = chord_at(b);
+        v = [nearest_tone(c, v[0]), nearest_tone(c, v[1])];
+        if b == crest
+            && let Some(x) = next_tone(c, v[1], if p.arrival { -1 } else { 1 })
+            && x >= v[0] + swell_gap(v[0])
+        {
+            v[1] = x;
+        }
+        if v[1] < v[0] + swell_gap(v[0]) {
+            v[1] = next_tone(c, v[0] + swell_gap(v[0]) - 1, 1).unwrap_or(v[1]);
+        }
+    }
+    v
+}
+
+/// A bar's planes: each one climbing out of SLC or coming down to it is a
+/// swell of brass and strings over a few bars, placed where it is, its two
+/// voices moving with the harmony; an airline's is named, once a phrase.
+fn planes(sec: &Section, bar: u32, valley: &Valley<'_>, state: &mut ComposeState, out: &mut Bar) {
+    let bar_ms = sec.bar_ms();
+    let start = sec.start_ms + f64::from(bar) * bar_ms;
+    // Planes whose swell could be sounding in this bar: begun up to four
+    // bars back.
+    let lo = valley
+        .planes
+        .partition_point(|q| q.ms < start - 4.0 * bar_ms - bar_ms);
+    for p in valley.planes[lo..]
+        .iter()
+        .take_while(|q| q.ms < start + bar_ms)
+    {
+        let Some((onset_bar, at, dur)) = swell_onset(sec, p) else {
+            continue;
+        };
+        if onset_bar > bar || at + dur <= start || !plane_heard(valley, p) {
+            continue;
+        }
+        let pair = 2 * ((p.ms / PLANE_GAP_MS).floor() as i64).rem_euclid(2) as u8;
+        let flags = (u8::from(p.arrival) << 3) | ((p.size.clamp(1, 5) - 1) << 4);
+        let vel = 0.35 + 0.1 * f32::from(p.size.clamp(1, 5));
+        let voices = swell_voices(sec, valley, p, onset_bar, bar);
+        if onset_bar == bar {
+            let feature = if p.airline && !state.phrase_plane {
+                state.phrase_plane = true;
+                state.phrase_featured = true;
+                // Named as it becomes audible: halfway up its rise.
+                let u = if p.arrival { 0.125 } else { 0.35 };
+                out.features.push(Feature {
+                    at_ms: at + u * dur,
+                    kind: FeatureKind::Plane,
+                    route: u8::from(p.arrival),
+                    stop: u16::from(p.size),
+                    event_ms: p.ms,
+                    late_s: 0,
+                    observed: true,
+                    value: p.alt_ft,
+                });
+                (out.features.len() - 1) as u16
+            } else {
+                NO_FEATURE
+            };
+            for (i, &m) in voices.iter().enumerate() {
+                out.notes.push(Note {
+                    at_ms: at,
+                    inst: Inst::Swell,
+                    midi: m as f32,
+                    vel: if i == 0 { vel } else { 0.8 * vel },
+                    dur_ms: dur as f32,
+                    variant: (pair + i as u8) | flags,
+                    lat: p.lat,
+                    lon: p.lon,
+                    feature: if i == 0 { feature } else { NO_FEATURE },
+                });
+            }
+        } else {
+            // Legato: the voices that move on this downbeat.
+            let before = swell_voices(sec, valley, p, onset_bar, bar - 1);
+            for i in 0..2 {
+                if voices[i] != before[i] {
+                    out.notes.push(Note {
+                        at_ms: start,
+                        inst: Inst::Swell,
+                        midi: voices[i] as f32,
+                        vel,
+                        dur_ms: (at + dur - start) as f32,
+                        variant: (pair + i as u8) | 4 | flags,
+                        lat: p.lat,
+                        lon: p.lon,
+                        feature: NO_FEATURE,
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// FrontRunner's horn: a major-sixth chord voiced like a five-chime K5LA,
@@ -1471,7 +1907,10 @@ mod tests {
                         | FeatureKind::Late
                         | FeatureKind::Alert
                         | FeatureKind::Wind
-                        | FeatureKind::Snow => {
+                        | FeatureKind::Snow
+                        | FeatureKind::Storm
+                        | FeatureKind::Grid
+                        | FeatureKind::Due => {
                             assert_eq!(b % 8, 3, "a valley card on a phrase's fourth bar");
                             kinds.insert(f.kind as u8);
                             valley_cards += 1;
@@ -1630,6 +2069,374 @@ mod tests {
             "{} in {minutes:.1} min",
             rung.len()
         );
+    }
+
+    /// A sky with the same `edit` in every hour of the fixture's day.
+    fn sky_with(schedule: &Schedule, edit: impl Fn(&mut crate::plan::SkyHour)) -> Sky {
+        let t0 = schedule.days[0].t0_ms;
+        let mut sky = Sky::default();
+        for h in 0..32 {
+            let mut hour = crate::plan::SkyHour::default();
+            edit(&mut hour);
+            sky.set(t0 + f64::from(h) * 3_600_000.0, hour);
+        }
+        sky
+    }
+
+    #[test]
+    fn a_storm_on_its_way_holds_the_music_in_suspense_until_the_snow() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let slow = Slow::default();
+        let run = |sky: &Sky| {
+            let valley = Valley::quiet(&schedule, &network, sky, &slow);
+            let (mut sus, mut dark, mut pedal, mut bars, mut cards) = (0, 0, 0, 0, 0);
+            let mut bar = Bar::default();
+            for sec in chain.sections.iter().skip(20).take(30) {
+                let mut state = ComposeState::default();
+                for b in 0..sec.bars() {
+                    compose(sec, b, &valley, &mut state, &mut bar);
+                    let h = bar.harmony[0];
+                    let cadence = b % 8 + 2 >= phrase_len(sec, b / 8);
+                    bars += 1;
+                    sus +=
+                        usize::from(matches!(h.chord.color, Color::Sus2 | Color::Sus4) && !cadence);
+                    dark += usize::from(bar.mix.dark > 0.5);
+                    let bass = bar.notes.iter().find(|n| n.inst == Inst::Bass);
+                    if !cadence
+                        && bass.is_some_and(|n| {
+                            (n.midi as i32).rem_euclid(12) == i32::from(sec.key.tonic_pc())
+                        })
+                    {
+                        pedal += 1;
+                    }
+                    cards += bar
+                        .features
+                        .iter()
+                        .filter(|f| f.kind == FeatureKind::Storm)
+                        .count();
+                    // Still the notes in play.
+                    for n in &bar.notes {
+                        if !matches!(
+                            n.inst,
+                            Inst::Kick
+                                | Inst::Snare
+                                | Inst::Rim
+                                | Inst::Hat
+                                | Inst::Shaker
+                                | Inst::Tom
+                                | Inst::Crash
+                        ) {
+                            let pc = (n.midi as i32).rem_euclid(12) as u8;
+                            assert!(sec.key.contains(pc) || sec.next_key.contains(pc));
+                        }
+                    }
+                }
+            }
+            (sus, dark, pedal, bars, cards)
+        };
+        let calm = run(&Sky::default());
+        let coming = run(&sky_with(&schedule, |h| h.storm_mm = 280.0));
+        let falling = run(&sky_with(&schedule, |h| {
+            h.storm_mm = 280.0;
+            h.snow_cm = 1.0;
+        }));
+        let (sus, dark, pedal, bars, cards) = coming;
+        assert!(
+            sus > bars / 5 && sus > 4 * calm.0,
+            "suspensions {sus} of {bars} (calm {})",
+            calm.0
+        );
+        assert!(dark > bars / 2, "dark {dark} of {bars}");
+        assert!(
+            pedal > bars / 3 && pedal > 2 * calm.2,
+            "pedal {pedal} of {bars} (calm {})",
+            calm.2
+        );
+        assert!(cards > 0);
+        // Once it snows, the storm has come: its color lets go.
+        assert_eq!((falling.1, falling.4), (0, 0));
+        assert!(falling.0 <= calm.0 + bars / 20);
+    }
+
+    #[test]
+    fn frontrunner_at_the_cadence_gets_its_dominant_and_lands_home_with_the_horn() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let valley = Valley::quiet(&schedule, &network, &sky, &slow);
+        let mut bar = Bar::default();
+        let (mut arrivals, mut dominants) = (0, 0);
+        for sec in &chain.sections {
+            let mut state = ComposeState::default();
+            for b in 0..sec.bars() {
+                compose(sec, b, &valley, &mut state, &mut bar);
+                let ctx = bar_ctx(sec, b, &valley);
+                let Some(cadence) = ctx.arrival else { continue };
+                let len = phrase_len(sec, b / 8);
+                let chord = bar.harmony[0].chord;
+                if b % 8 + 2 == len {
+                    // The approach: the mode's dominant seventh, where it has one.
+                    if let Some(deg) = dominant_degree(sec.key.mode()) {
+                        assert_eq!(
+                            (chord.degree, chord.color),
+                            (deg, Color::Seventh),
+                            "{}",
+                            sec.key.name()
+                        );
+                        let (pcs, n) = chord.pitch_classes();
+                        let r = pcs[0];
+                        let shape: Vec<u8> = pcs[..n].iter().map(|p| (p + 12 - r) % 12).collect();
+                        assert_eq!(shape, [0, 4, 7, 10]);
+                        dominants += 1;
+                    }
+                } else if sec.kind != SectionKind::Lake {
+                    assert_eq!(chord.degree, 0, "the cadence lands home");
+                    arrivals += 1;
+                }
+                // Any horn near the cadence starts on it.
+                for n in bar
+                    .notes
+                    .iter()
+                    .filter(|n| n.inst == Inst::Horn && n.feature != NO_FEATURE)
+                {
+                    if (n.at_ms - cadence).abs() <= sec.bar_ms() / 2.0 {
+                        assert_eq!(n.at_ms, cadence);
+                    }
+                }
+            }
+        }
+        assert!(
+            arrivals >= 5 && dominants >= 5,
+            "{arrivals} arrivals, {dominants} dominants"
+        );
+    }
+
+    #[test]
+    fn a_new_service_alert_fills_the_end_of_its_phrase() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let groove = chain
+            .sections
+            .iter()
+            .find(|s| s.kind == SectionKind::Groove && s.activity > 0.3 && s.bars() >= 24)
+            .unwrap();
+        let lake = chain
+            .sections
+            .iter()
+            .find(|s| s.kind == SectionKind::Lake && s.bars() >= 16)
+            .unwrap();
+        for sec in [groove, lake] {
+            // Two alerts early in the second phrase: one fill.
+            let at = sec.start_ms + 9.5 * sec.bar_ms();
+            let alerts = [
+                AlertEvent {
+                    ms: at,
+                    route_kind: 1,
+                    severe: true,
+                },
+                AlertEvent {
+                    ms: at + 500.0,
+                    route_kind: 0,
+                    severe: false,
+                },
+            ];
+            let valley = Valley {
+                alerts: &alerts,
+                ..Valley::quiet(&schedule, &network, &sky, &slow)
+            };
+            let mut state = ComposeState::default();
+            let mut bar = Bar::default();
+            let mut captions = 0;
+            for b in 0..17 {
+                compose(sec, b, &valley, &mut state, &mut bar);
+                captions += bar
+                    .features
+                    .iter()
+                    .filter(|f| f.kind == FeatureKind::ServiceAlert)
+                    .count();
+                let toms = bar
+                    .notes
+                    .iter()
+                    .filter(|n| n.inst == Inst::Tom && n.variant == 0)
+                    .count();
+                let swell = bar
+                    .notes
+                    .iter()
+                    .any(|n| n.inst == Inst::Crash && n.variant == 2);
+                let crash = bar
+                    .notes
+                    .iter()
+                    .find(|n| n.inst == Inst::Crash && n.at_ms == bar.start_ms);
+                match (sec.kind, b) {
+                    (SectionKind::Groove, 15) => assert_eq!(toms, 5, "a severe alert's longer run"),
+                    (SectionKind::Lake, 15) => assert!(swell && toms == 0),
+                    (_, 16) => assert!(crash.is_some(), "the crash after it"),
+                    (SectionKind::Groove, _) if b % 8 != 7 => assert_eq!(toms, 0),
+                    _ => assert!(!swell),
+                }
+            }
+            assert_eq!(captions, 1, "one alert caption for the phrase");
+        }
+    }
+
+    #[test]
+    fn rail_alerts_in_effect_hold_the_tension_up() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let sec = chain.sections.iter().find(|s| s.tension < 0.4).unwrap();
+        let windows = [AlertWindow {
+            from_ms: sec.start_ms,
+            to_ms: sec.end_ms(),
+            active: [60, 1, 0, 0],
+        }];
+        let valley = Valley {
+            alert_windows: &windows,
+            ..Valley::quiet(&schedule, &network, &sky, &slow)
+        };
+        assert!(bar_ctx(sec, 0, &valley).tension >= 0.5);
+        let quiet = Valley::quiet(&schedule, &network, &sky, &slow);
+        assert_eq!(bar_ctx(sec, 0, &quiet).tension, sec.tension);
+        let buses_only = [AlertWindow {
+            active: [60, 0, 0, 2],
+            ..windows[0]
+        }];
+        let valley = Valley {
+            alert_windows: &buses_only,
+            ..Valley::quiet(&schedule, &network, &sky, &slow)
+        };
+        assert_eq!(bar_ctx(sec, 0, &valley).tension, sec.tension);
+    }
+
+    #[test]
+    fn frontrunner_due_at_central_is_said_once_a_train() {
+        let (mut schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let sec = chain.sections[60];
+        let due = sec.start_ms + 8.0 * sec.bar_ms() + 200_000.0;
+        // Windows from the section's start, all saying the same train is due.
+        let mut w = sec.start_ms;
+        while w < sec.start_ms + 600_000.0 {
+            schedule.perform(w, w + 30_000.0, &[], due);
+            w += 30_000.0;
+        }
+        let valley = Valley::quiet(&schedule, &network, &sky, &slow);
+        let mut state = ComposeState::default();
+        let mut bar = Bar::default();
+        let mut said = Vec::new();
+        for b in 0..sec.bars() {
+            compose(&sec, b, &valley, &mut state, &mut bar);
+            said.extend(
+                bar.features
+                    .iter()
+                    .filter(|f| f.kind == FeatureKind::Due)
+                    .map(|f| (f.value, f.event_ms)),
+            );
+        }
+        assert_eq!(said.len(), 1, "{said:?}");
+        let (minutes, ev) = said[0];
+        assert_eq!(ev, due);
+        assert!((2.0..=4.0).contains(&minutes), "{minutes}");
+    }
+
+    #[test]
+    fn planes_swell_in_chord_tones_one_at_a_time_and_move_with_the_harmony() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let first = &chain.sections[40];
+        // A plane every ten seconds for an hour: departures and arrivals,
+        // airlines and private.
+        let planes: Vec<PlaneEvent> = (0..360)
+            .map(|i| PlaneEvent {
+                ms: first.start_ms + 3_000.0 + f64::from(i) * 10_000.0,
+                lat: 40.79 + 0.01 * (i % 5) as f32,
+                lon: -111.98,
+                alt_ft: 5_000.0 + 1_000.0 * (i % 8) as f32,
+                arrival: i % 3 == 0,
+                size: 1 + (i % 5) as u8,
+                airline: i % 4 != 0,
+            })
+            .collect();
+        let valley = Valley {
+            planes: &planes,
+            ..Valley::quiet(&schedule, &network, &sky, &slow)
+        };
+        let mut onsets: Vec<(f64, f64)> = Vec::new();
+        let (mut ups, mut downs, mut captions) = (0, 0, 0);
+        let mut bar = Bar::default();
+        let mut swells: Vec<(u8, f64, f32, bool)> = Vec::new();
+        for sec in chain.sections.iter().skip(40).take(25) {
+            let mut state = ComposeState::default();
+            for b in 0..sec.bars() {
+                compose(sec, b, &valley, &mut state, &mut bar);
+                let chord = bar.harmony[0].chord;
+                let (pcs, n) = chord.pitch_classes();
+                let mut phrase_named = 0;
+                for f in bar.features.iter().filter(|f| f.kind == FeatureKind::Plane) {
+                    let p = planes.iter().find(|p| p.ms == f.event_ms).unwrap();
+                    assert!(p.airline, "a private aircraft named");
+                    phrase_named += 1;
+                    captions += 1;
+                }
+                assert!(phrase_named <= 1);
+                for note in bar.notes.iter().filter(|n| n.inst == Inst::Swell) {
+                    let m = note.midi as i32;
+                    assert!((SWELL_LO..=SWELL_HI).contains(&m), "{m}");
+                    assert!(
+                        pcs[..n].contains(&(m.rem_euclid(12) as u8)),
+                        "{m} isn't in {} (bar {b} of {}, at +{:.0} ms, variant {})",
+                        chord.symbol(),
+                        sec.bars(),
+                        note.at_ms - bar.start_ms,
+                        note.variant
+                    );
+                    assert!(
+                        note.at_ms + f64::from(note.dur_ms) <= sec.end_ms() + 1.0,
+                        "past the section's end"
+                    );
+                    let voice = note.variant & 3;
+                    if note.variant & 4 != 0 {
+                        assert_eq!(note.at_ms, bar.start_ms, "a voice moves on the downbeat");
+                        if voice & 1 == 1
+                            && let Some(s) = swells.iter_mut().find(|s| s.0 == voice)
+                        {
+                            if note.midi > s.2 && !s.3 {
+                                ups += 1;
+                            } else if note.midi < s.2 && s.3 {
+                                downs += 1;
+                            }
+                            s.2 = note.midi;
+                        }
+                    } else {
+                        if voice & 1 == 0 {
+                            onsets.push((note.at_ms, f64::from(note.dur_ms)));
+                        }
+                        swells.retain(|s| s.0 != voice);
+                        swells.push((voice, note.at_ms, note.midi, note.variant & 8 != 0));
+                    }
+                }
+                if b % 8 == 7 {
+                    state.phrase_plane = false;
+                }
+            }
+        }
+        assert!(onsets.len() > 30, "{} swells", onsets.len());
+        for w in onsets.windows(2) {
+            assert!(
+                w[1].0 - w[0].0 >= PLANE_GAP_MS - 1.0,
+                "two swells {} ms apart",
+                w[1].0 - w[0].0
+            );
+        }
+        assert!(
+            ups > 3 && downs > 3,
+            "{ups} departures rose, {downs} arrivals fell"
+        );
+        assert!(captions > 3);
     }
 
     #[test]

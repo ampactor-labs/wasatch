@@ -309,6 +309,26 @@ impl Chord {
         (t + 12 - r) % 12 == 3 && !self.is_diminished()
     }
 
+    /// The chord with its third suspended: to the fourth where the fourth
+    /// and the fifth above the root are both perfect, else to the second
+    /// where it's a major second; a chord without a perfect fifth stays.
+    pub fn suspended(self) -> Chord {
+        let scale = self.key.scale();
+        let d = usize::from(self.degree);
+        let above = |k: usize| (scale[(d + k) % 7] + 12 - scale[d]) % 12;
+        if above(4) != 7 {
+            return self;
+        }
+        let color = if above(3) == 5 {
+            Color::Sus4
+        } else if above(1) == 2 {
+            Color::Sus2
+        } else {
+            return self;
+        };
+        Chord { color, ..self }
+    }
+
     /// The triad's pitch-class set (order-free), for comparing across keys.
     pub fn triad_set(self) -> [u8; 3] {
         let scale = self.key.scale();
@@ -361,6 +381,19 @@ pub fn approach_degree(mode: Mode) -> u8 {
     match mode {
         Mode::Lydian | Mode::Ionian => 4,
         Mode::Mixolydian | Mode::Dorian | Mode::Aeolian => 6,
+    }
+}
+
+/// The degree whose diatonic seventh is a dominant seventh that leads home:
+/// V in Ionian, II in Lydian, IV in Dorian, ♭VII in Aeolian. Mixolydian's
+/// only dominant seventh is on home itself: none.
+pub fn dominant_degree(mode: Mode) -> Option<u8> {
+    match mode {
+        Mode::Ionian => Some(4),
+        Mode::Lydian => Some(1),
+        Mode::Dorian => Some(3),
+        Mode::Aeolian => Some(6),
+        Mode::Mixolydian => None,
     }
 }
 

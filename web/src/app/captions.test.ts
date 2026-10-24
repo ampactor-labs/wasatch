@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { PLACES, featureCaption, vantageCaption, type ValleyNow } from "./captions.ts";
+import { PLACES, featureCaption, harmonyCaption, vantageCaption, type ValleyNow } from "./captions.ts";
+import type { BarEvent, Heard } from "../engine/host.ts";
 import type { Schedule } from "./schedule.ts";
 
 describe("where you listen from", () => {
@@ -43,6 +44,10 @@ describe("the feed reads like sentences and covers the whole valley", () => {
     alerts: { names: ["Winter Storm Warning"], observed: 0, receipt: "live" },
     busesOut: { count: 203, observed: 0 },
     ground: { station: "Brigham Young Park", level: 0.41, observed: 0, receipt: "live" },
+    plane: (ms) => (ms === 5 ? [5, 40.8, -111.9, 0, 3, 6300, 1, "Delta 1784"] : undefined),
+    serviceAlert: (ms) =>
+      ms === 7 ? [7, 0, 0, "126", "Pioneer Road Closure"] : ms === 8 ? [8, 1, 1, "Blue Line", "Single-tracking at Gallivan Plaza"] : undefined,
+    grid: { mw: 6120, usual: 5885, energy: 1.04, observed: 0, receipt: "live" },
   };
   const key = { c: 0, r: 1 };
   const card = (k: number, extra: Partial<Parameters<typeof featureCaption>[0]> = {}) =>
@@ -61,5 +66,31 @@ describe("the feed reads like sentences and covers the whole valley", () => {
     expect(card(14, { v: 171.6 })).toBe("203 buses out, making 172 stops a minute: the hats and shakers");
     expect(card(15, { v: 150 })).toBe("Trains running 3 min late on average: the drums lay back 25 ms");
     expect(card(16, { v: 0.8 })).toBe("Winter Storm Warning for the valley: tension, and fills in the drums");
+  });
+
+  test("planes, UTA's alerts, a storm coming, the grid and FrontRunner due", () => {
+    expect(card(17, { ev: 5, v: 6312 })).toBe("Delta 1784 taking off from SLC, climbing through 6,300 ft");
+    expect(card(17, { ev: 9, route: 1, v: 7480 })).toBe("A plane coming in to land at SLC, down through 7,500 ft");
+    expect(card(18, { ev: 7 })).toBe("UTA alert for route 126: Pioneer Road Closure");
+    expect(card(18, { ev: 8 })).toBe("UTA alert on Blue Line: Single-tracking at Gallivan Plaza");
+    expect(card(19, { v: 280 })).toBe("11 in of snow forecast at Alta in the next day: the harmony holds in suspense until it falls");
+    expect(card(20, { v: 1.04 })).toBe("The grid's drawing 6,120 MW, 4% above usual for the hour, so the mix swells");
+    expect(card(21, { v: 3 })).toBe("FrontRunner due at Salt Lake Central in 3 min: the phrase it pulls in on turns for home");
+  });
+
+  test("both rivers", () => {
+    const rivers = { ...valley, river: { cfs: 160, position: 0.82, gauges: [{ name: "Jordan River", cfs: 160 }, { name: "Little Cottonwood Creek", cfs: 73.9 }], observed: 0, receipt: "live" as const } };
+    const text = featureCaption({ t: "feat", at: 0, k: 13, route: 0, stop: 0, ev: 0, late: 0, obs: 0, v: 0 }, schedule, rivers, key)?.text;
+    expect(text).toBe("Jordan River 160 cfs and Little Cottonwood Creek 74 cfs, 82nd percentile together: running high, so the bass walks");
+  });
+});
+
+describe("the boundary card says why the tempo moved", () => {
+  const bar = (tempo: number): Heard<BarEvent> =>
+    ({ t: "bar", at: 0, f: 0, chain: 0, sec: 3, kind: 1, bar: 0, bars: 48, bpm: 92.4, start: 0, c: 0, r: 1, pc: 1, pr: 1, nc: 0, nr: 1, why: 2, home: -1, tempo, chord: "C", act: 0.5, bright: 0.5, tension: 0, haze: 0, inv: 0, day: 0 }) as Heard<BarEvent>;
+  test("held back in traffic, up when it's clear, nothing when it's ordinary", () => {
+    expect(harmonyCaption(bar(10)).text).toMatch(/; the buses and trains are crawling, so the tempo's held back at 92$/);
+    expect(harmonyCaption(bar(9)).text).toMatch(/; the buses and trains are moving quickly, so the tempo's up at 92$/);
+    expect(harmonyCaption(bar(-1)).text).not.toMatch(/tempo/);
   });
 });

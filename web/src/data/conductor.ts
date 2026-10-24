@@ -128,7 +128,9 @@ export class Conductor implements GroundFeed {
   private async windows(): Promise<void> {
     const now = utcNow() + this.valley.shift;
     const listening = now - DELAY_MS;
-    const first = Math.floor((listening - 45_000) / WINDOW_MS) * WINDOW_MS;
+    // Back far enough for every bar's look back: whether a plane sounds
+    // depends on the planes up to about a minute before it.
+    const first = Math.floor((listening - 90_000) / WINDOW_MS) * WINDOW_MS;
     const last = Math.floor((now - SEAL_MS) / WINDOW_MS) * WINDOW_MS;
     for (let start = first; start <= last; start += WINDOW_MS) {
       if (this.fetched.has(start)) continue;

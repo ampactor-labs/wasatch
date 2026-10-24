@@ -38,7 +38,12 @@ export type Family =
   | "river"
   | "buses"
   | "late"
-  | "alert";
+  | "alert"
+  | "plane"
+  | "service"
+  | "storm"
+  | "grid"
+  | "due";
 
 /** The engine's feature kinds (engine/src/compose.rs FeatureKind), in order. */
 const FEATURE_FAMILY: Family[] = [
@@ -59,6 +64,11 @@ const FEATURE_FAMILY: Family[] = [
   "buses",
   "late",
   "alert",
+  "plane",
+  "service",
+  "storm",
+  "grid",
+  "due",
 ];
 
 const INTROS: Partial<Record<Family, string>> = {
@@ -79,6 +89,11 @@ const INTROS: Partial<Record<Family, string>> = {
   buses: "The hats and shakers are the buses: how often they stop sets how busy the groove is.",
   late: "When the trains run late, the drums lay back behind the beat with them.",
   alert: "A weather alert builds tension and drum fills until it's lifted.",
+  plane: "That swell of brass and strings was a plane, climbing out of SLC or coming in to land, sounding from where it is in the sky. Airlines are named; private aircraft never are.",
+  service: "That fill was a new UTA service alert. One on the trains holds the harmony's tension up while it stands.",
+  storm: "A storm's on its way: the snow forecast at Alta holds the harmony in suspense, darkens the pad and pins the bass to home, until the snow starts falling.",
+  grid: "The whole mix swells a little when the valley draws more power than usual for the hour, and eases off when it draws less.",
+  due: "When FrontRunner's due into Salt Lake Central, the phrase it arrives in turns for home: its dominant, then home with the horn.",
 };
 
 /** Formatting in Mountain time, whatever the listener's zone. */
@@ -127,11 +142,18 @@ export interface ValleyNow {
   bikeStation(i: number): string;
   /** The loudest station, and its level against a busy day there (0–1). */
   ground?: { station: string; level: number; receipt: Receipt; observed: number };
-  river?: { cfs: number; position: number; observed: number; receipt: Receipt };
+  river?: { cfs: number; position: number; gauges?: { name: string; cfs: number }[]; observed: number; receipt: Receipt };
   air?: { pm25: number; inversionC: number; observed: number; receipt: Receipt };
   alerts?: { names: string[]; observed: number; receipt: Receipt };
   /** Buses out now, counted live, when the conductor has the fleet. */
   busesOut?: { count: number; observed: number };
+  /** A plane a window carried, by its time: [ms, lat, lon, 0 departing / 1
+   * landing, size, ft, an airline's, its name]. */
+  plane?(ms: number): [number, number, number, number, number, number, number, string] | undefined;
+  /** A new service alert a window carried, by its time: [ms, kind, severe,
+   * routes, headline]. */
+  serviceAlert?(ms: number): [number, number, number, string, string] | undefined;
+  grid?: { mw: number; usual: number; energy: number; observed: number; receipt: Receipt };
 }
 
 const SKI_ROUTE: Record<string, string> = {
@@ -154,6 +176,12 @@ const REASON: Record<number, (to: Key) => string> = {
   8: (to) => `Night drift → ${keyName(to)}`,
 };
 
+/** Why the tempo isn't the daypart's (engine/src/plan.rs, Reason 9 and 10). */
+const TEMPO_REASON: Record<number, (bpm: number) => string> = {
+  9: (bpm) => `the buses and trains are moving quickly, so the tempo's up at ${bpm}`,
+  10: (bpm) => `the buses and trains are crawling, so the tempo's held back at ${bpm}`,
+};
+
 /** The caption for a section's first bar: why the harmony moved. In A Day
  * in Twelve Minutes, prefixed with the moment of the day. */
 export function harmonyCaption(bar: Heard<BarEvent>): Caption {
@@ -168,6 +196,8 @@ export function harmonyCaption(bar: Heard<BarEvent>): Caption {
   // The one note that changed, old to new.
   const swap = changedNote(from, to);
   if (swap) text += ` (${swap[1]} becomes ${swap[0]})`;
+  const tempo = TEMPO_REASON[bar.tempo ?? -1];
+  if (tempo && bar.day === 0) text += `; ${tempo(Math.round(bar.bpm))}`;
   if (bar.day > 0) return { text: `${mountainTime(bar.day)} · ${text.charAt(0).toLowerCase()}${text.slice(1)}`, receipt: "scheduled", at: bar.at, family: "harmony" };
   return { text, receipt: "scheduled", at: bar.at, family: "harmony", intro: INTROS.harmony };
 }
@@ -271,7 +301,9 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
       if (!r) return null;
       const pct = Math.round(r.position * 100);
       const how = r.position >= 0.75 ? "running high, so the bass walks" : r.position <= 0.25 ? "running low, so the bass holds long notes" : "about usual for the date";
-      return { ...base, text: `Jordan River ${Math.round(r.cfs)} cfs, ${ordinal(pct)} percentile: ${how}`, receipt: r.receipt, observed: r.observed };
+      const gauges = r.gauges ?? [];
+      const flows = gauges.length > 1 ? list(gauges.map((g) => `${g.name} ${Math.round(g.cfs)} cfs`)) : `Jordan River ${Math.round(r.cfs)} cfs`;
+      return { ...base, text: `${flows}, ${ordinal(pct)} percentile${gauges.length > 1 ? " together" : ""}: ${how}`, receipt: r.receipt, observed: r.observed };
     }
     case "buses": {
       const perMinute = Math.round(f.v);
@@ -289,6 +321,37 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
       const a = valley.alerts;
       if (!a?.names.length) return null;
       return { ...base, text: `${a.names[0]} for the valley: tension, and fills in the drums`, receipt: a.receipt, observed: a.observed };
+    }
+    case "plane": {
+      const row = valley.plane?.(f.ev);
+      const ft = Math.round(f.v / 100) * 100;
+      const arriving = f.route === 1;
+      const name = row?.[7] || "A plane";
+      const text = arriving ? `${name} coming in to land at SLC, down through ${ft.toLocaleString("en-US")} ft` : `${name} taking off from SLC, climbing through ${ft.toLocaleString("en-US")} ft`;
+      return { ...base, text, receipt: "live", observed: f.ev };
+    }
+    case "service": {
+      const row = valley.serviceAlert?.(f.ev);
+      if (!row) return { ...base, text: "A new UTA service alert: a fill in the drums", receipt: "live", observed: f.ev };
+      const [, kind, , routes, headline] = row;
+      const bus = kind === 0 || kind === 3;
+      const named = routes ? (bus ? ` for route${routes.includes(",") ? "s" : ""} ${routes}` : ` on ${routes}`) : "";
+      return { ...base, text: `UTA alert${named}: ${headline}`, receipt: "live", observed: f.ev };
+    }
+    case "storm": {
+      const inches = Math.round(f.v / 25.4);
+      return { ...base, text: `${inches} in of snow forecast at Alta in the next day: the harmony holds in suspense until it falls`, receipt: "live" };
+    }
+    case "grid": {
+      const g = valley.grid;
+      if (!g) return null;
+      const pct = Math.round((g.energy - 1) * 100);
+      const how = pct >= 2 ? `${pct}% above usual for the hour, so the mix swells` : pct <= -2 ? `${-pct}% below usual for the hour, so the mix eases off` : "about usual for the hour";
+      return { ...base, text: `The grid's drawing ${g.mw.toLocaleString("en-US")} MW, ${how}`, receipt: g.receipt, observed: g.observed };
+    }
+    case "due": {
+      const min = Math.max(1, Math.round(f.v));
+      return { ...base, text: `FrontRunner due at Salt Lake Central in ${min} min: the phrase it pulls in on turns for home`, receipt: "live" };
     }
   }
   return null;

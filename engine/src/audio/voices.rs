@@ -980,6 +980,198 @@ impl HornVoice {
     }
 }
 
+// --- Planes --------------------------------------------------------------------
+
+/// A plane's swell: brass and strings rising out of nothing and falling away
+/// over a few bars, slow enough to be weather and low enough to sit under the
+/// bells. The brass is three saws a breath apart, the middle one strongest
+/// so their beating never empties the fundamental, through a low-pass that
+/// opens as it grows (brass brightens as it's blown harder); the strings are
+/// two more saws an octave up and further apart, a shimmer over it with a
+/// slower vibrato, left out for a light aircraft; a little breath of noise
+/// rides the rise. It
+/// peaks late for a departure (climbing away) and early for an arrival
+/// (already near, coming down). Nothing like the horn: two low notes, a slow
+/// attack, no rhythm.
+#[derive(Clone, Debug)]
+pub struct SwellVoice {
+    brass: [Oscillator; 3],
+    strings: [Oscillator; 2],
+    brass_lp: StateVariableFilter,
+    strings_lp: StateVariableFilter,
+    breath_bp: StateVariableFilter,
+    noise: Noise,
+    /// log2 of the sounding frequency, and of the one it glides to.
+    pitch: f32,
+    target: f32,
+    t: u32,
+    len: u32,
+    /// Where in its length it peaks, 0–1.
+    peak: f32,
+    /// How much string there is, 0 (light) to 1.
+    strings_on: f32,
+    /// How far apart the strings are, ×.
+    spread: f32,
+    vibrato: [f32; 2],
+    e: f32,
+    gain: f32,
+    sr: f32,
+    place: Placement,
+    z: f32,
+}
+
+/// The swell's control rate, samples.
+const SWELL_BLOCK: u32 = 16;
+
+impl SwellVoice {
+    /// A silent swell.
+    pub fn new(sr: f32, seed: u32) -> Self {
+        let saw = || {
+            let mut o = Oscillator::new(sr);
+            o.set_waveform(OscillatorWaveform::Saw);
+            o
+        };
+        let filter = |q: f32| {
+            let mut f = StateVariableFilter::new(sr);
+            f.set_resonance(q);
+            f
+        };
+        SwellVoice {
+            brass: [saw(), saw(), saw()],
+            strings: [saw(), saw()],
+            brass_lp: filter(0.75),
+            strings_lp: filter(0.6),
+            breath_bp: filter(1.5),
+            noise: Noise::new(seed),
+            pitch: 0.0,
+            target: 0.0,
+            t: 0,
+            len: 0,
+            peak: 0.7,
+            strings_on: 1.0,
+            spread: 1.0,
+            vibrato: [0.0, 0.25],
+            e: 0.0,
+            gain: 0.0,
+            sr,
+            place: Placement::default(),
+            z: 0.0,
+        }
+    }
+
+    /// `true` while sounding.
+    pub fn is_active(&self) -> bool {
+        self.t < self.len
+    }
+
+    /// Swell for `dur_s`: a departure's peaks late, an arrival's early; a
+    /// plane's size (1 light – 5 heavy) sets how much string and how wide.
+    pub fn start(
+        &mut self,
+        midi: f32,
+        vel: f32,
+        dur_s: f32,
+        arrival: bool,
+        size: u8,
+        place: Placement,
+    ) {
+        self.pitch = libm::log2f(midi_hz(midi));
+        self.target = self.pitch;
+        self.t = 0;
+        self.len = (dur_s.clamp(1.0, 30.0) * self.sr) as u32;
+        self.peak = if arrival { 0.25 } else { 0.7 };
+        self.strings_on = if size <= 2 { 0.0 } else { 1.0 };
+        self.spread = 0.7 + 0.175 * f32::from(size.clamp(1, 5) - 1);
+        self.gain = 0.12 * vel;
+        self.place = place;
+        self.z = 0.0;
+        self.e = 0.0;
+        for (i, o) in self
+            .brass
+            .iter_mut()
+            .chain(self.strings.iter_mut())
+            .enumerate()
+        {
+            o.set_phase(0.23 * i as f32);
+        }
+        self.retune();
+    }
+
+    /// Move to `midi`, legato, over about a fifth of a second.
+    pub fn glide_to(&mut self, midi: f32) {
+        self.target = libm::log2f(midi_hz(midi));
+    }
+
+    /// The envelope at `u` of the way through: a smooth rise to the peak,
+    /// then a fall away, squared.
+    pub fn envelope(u: f32, peak: f32) -> f32 {
+        if u < peak {
+            let x = u / peak;
+            x * x * (3.0 - 2.0 * x)
+        } else {
+            let x = 1.0 - (u - peak) / (1.0 - peak);
+            (x * x).max(0.0)
+        }
+    }
+
+    fn retune(&mut self) {
+        let f0 = libm::exp2f(self.pitch);
+        let u = self.t as f32 / self.len.max(1) as f32;
+        // The vibrato comes in as the swell matures.
+        let depth = if u > 0.3 && self.e > 0.6 {
+            ((u - 0.3) / 0.2).min(1.0)
+        } else {
+            0.0
+        };
+        let vib = |phase: f32, cents: f32| {
+            libm::exp2f(depth * cents / 1200.0 * sonido_core::fast_sin_turns(phase))
+        };
+        let bv = vib(self.vibrato[0], 7.0);
+        let sv = vib(self.vibrato[1], 5.0);
+        let cents = |c: f32| libm::exp2f(c / 1200.0);
+        self.brass[0].set_frequency(f0 * cents(-7.0) * bv);
+        self.brass[1].set_frequency(f0 * bv);
+        self.brass[2].set_frequency(f0 * cents(5.0) * bv);
+        self.strings[0].set_frequency(2.0 * f0 * cents(-9.0 * self.spread) * sv);
+        self.strings[1].set_frequency(2.0 * f0 * cents(9.0 * self.spread) * sv);
+        let e = self.e;
+        self.brass_lp
+            .set_cutoff((f0 * (1.3 + 9.0 * e * libm::sqrtf(e))).clamp(70.0, 4800.0));
+        self.strings_lp
+            .set_cutoff((f0 * (2.5 + 6.0 * e)).clamp(200.0, 3200.0));
+        self.breath_bp.set_cutoff((2.2 * f0).clamp(350.0, 1600.0));
+    }
+
+    /// Render one sample.
+    #[inline]
+    pub fn tick(&mut self, out: &mut Out) {
+        if self.t >= self.len {
+            return;
+        }
+        if self.t.is_multiple_of(SWELL_BLOCK) {
+            let block = SWELL_BLOCK as f32 / self.sr;
+            self.e = Self::envelope(self.t as f32 / self.len as f32, self.peak);
+            // A glide settles in about 0.3 s.
+            self.pitch += (self.target - self.pitch) * (1.0 - libm::expf(-block / 0.06));
+            self.vibrato[0] = (self.vibrato[0] + 4.7 * block).fract();
+            self.vibrato[1] = (self.vibrato[1] + 5.4 * block).fract();
+            self.retune();
+        }
+        self.t += 1;
+        let e = self.e;
+        let brass = 0.2 * self.brass[0].advance()
+            + 0.6 * self.brass[1].advance()
+            + 0.2 * self.brass[2].advance();
+        let (brass, _, _, _) = self.brass_lp.process_all(brass);
+        let strings = 0.55 * self.strings[0].advance() + 0.45 * self.strings[1].advance();
+        let (strings, _, _, _) = self.strings_lp.process_all(strings);
+        let (_, _, breath, _) = self.breath_bp.process_all(self.noise.sample());
+        let breath = breath * (0.1 * e * (1.0 - e) + 0.015 * e);
+        let x = 0.7 * brass + 0.3 * self.strings_on * strings + breath;
+        out.add(x * e * self.gain, &self.place, &mut self.z);
+    }
+}
+
 // --- Harp and air --------------------------------------------------------------
 
 /// Longest harp string, in samples (about 40 Hz at 48 kHz).
@@ -1234,6 +1426,110 @@ mod tests {
             "loudest at block {loudest:?}"
         );
         assert!(blocks[19] > 8.0 * blocks[4], "it grows");
+    }
+
+    /// A swell's loudness and brightness (the share of its energy above
+    /// 600 Hz, where the breath hardly reaches) in 100 ms blocks.
+    fn swell_blocks(arrival: bool, size: u8, glide: Option<(usize, f32)>) -> Vec<(f32, f32)> {
+        let mut v = SwellVoice::new(SR, 3);
+        v.start(45.0, 0.8, 8.0, arrival, size, Placement::default());
+        let mut out = Vec::new();
+        let (mut sum, mut slope, mut n) = (0.0f32, 0.0f32, 0);
+        let mut high = StateVariableFilter::new(SR);
+        high.set_cutoff(600.0);
+        high.set_resonance(0.7);
+        while v.is_active() {
+            let mut o = Out::default();
+            v.tick(&mut o);
+            assert!(o.l.is_finite());
+            sum += o.l * o.l;
+            let (_, hp, _, _) = high.process_all(o.l);
+            slope += hp * hp;
+            n += 1;
+            if n == (SR / 10.0) as usize {
+                if let Some((at, m)) = glide
+                    && out.len() == at
+                {
+                    v.glide_to(m);
+                }
+                out.push(((sum / n as f32).sqrt(), slope / sum.max(1e-12)));
+                (sum, slope, n) = (0.0, 0.0, 0);
+            }
+            assert!(out.len() <= 81, "it stops on time");
+        }
+        out
+    }
+
+    #[test]
+    fn a_departure_swells_late_and_an_arrival_early_brightening_as_it_grows() {
+        for (arrival, lo, hi) in [(false, 48, 64), (true, 16, 28)] {
+            let b = swell_blocks(arrival, 4, None);
+            assert!((79..=81).contains(&b.len()), "{}", b.len());
+            // Loudness over half a second, around each block: the
+            // ensemble's beating averages out.
+            let smooth = |i: usize| {
+                (i.saturating_sub(2)..(i + 3).min(b.len()))
+                    .map(|k| b[k].0)
+                    .sum::<f32>()
+            };
+            let peak = (0..b.len())
+                .max_by(|&i, &j| smooth(i).total_cmp(&smooth(j)))
+                .unwrap();
+            assert!(
+                (lo..=hi).contains(&peak),
+                "arrival {arrival}: peak at block {peak}"
+            );
+            let shape = |u: f32| SwellVoice::envelope(u, if arrival { 0.25 } else { 0.7 });
+            assert_eq!(shape(if arrival { 0.25 } else { 0.7 }), 1.0);
+            assert!(shape(0.0) == 0.0 && shape(1.0) == 0.0);
+            // Brass opens up as it's blown harder and closes as it fades:
+            // brighter at the peak than where it's at a tenth of the peak's
+            // loudness on the way down (and, given a departure's long rise,
+            // on the way up).
+            let bright = |i: usize| {
+                let k = i.saturating_sub(2)..(i + 3).min(b.len());
+                k.clone().map(|j| b[j].1 * b[j].0 * b[j].0).sum::<f32>()
+                    / k.map(|j| b[j].0 * b[j].0).sum::<f32>()
+            };
+            let tail = (peak..b.len())
+                .rev()
+                .find(|&i| smooth(i) > 0.1 * smooth(peak))
+                .unwrap();
+            assert!(
+                bright(peak) > 1.5 * bright(tail),
+                "brightness {} at the peak, {} at block {tail}",
+                bright(peak),
+                bright(tail)
+            );
+            if !arrival {
+                let early = (0..peak).find(|&i| smooth(i) > 0.1 * smooth(peak)).unwrap();
+                assert!(
+                    bright(peak) > 1.5 * bright(early),
+                    "brightness {} at the peak, {} at block {early}",
+                    bright(peak),
+                    bright(early)
+                );
+            }
+            assert!(b[peak].0 > 0.01 && b[peak].0 < 0.5);
+        }
+    }
+
+    #[test]
+    fn a_swell_glides_to_its_next_note_in_a_fifth_of_a_second() {
+        let mut v = SwellVoice::new(SR, 3);
+        v.start(45.0, 0.8, 4.0, false, 3, Placement::default());
+        for _ in 0..(SR as usize) {
+            v.tick(&mut Out::default());
+        }
+        v.glide_to(52.0);
+        for _ in 0..((0.3 * SR) as usize) {
+            v.tick(&mut Out::default());
+        }
+        let hz = libm::exp2f(v.pitch);
+        assert!((hz / midi_hz(52.0) - 1.0).abs() < 0.01, "{hz}");
+        // A light aircraft is brass alone.
+        let light = swell_blocks(false, 1, None);
+        assert_eq!(light.len(), 80);
     }
 
     #[test]

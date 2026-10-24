@@ -24,6 +24,10 @@ export type TopicId =
   | "air"
   | "wind"
   | "alerts"
+  | "service"
+  | "planes"
+  | "storm"
+  | "grid"
   | "quakes"
   | "bikes"
   | "ground"
@@ -116,14 +120,16 @@ export const TOPICS: readonly Topic[] = [
     group: "valley",
     short: "A FrontRunner train pulling into Salt Lake Central blows a five-note horn in the grade-crossing rhythm: long, long, short, long.",
     more:
-      "The horn is voiced like the Nathan K5LA that FrontRunner's locomotives carry (D♯ F♯ G♯ B D♯, a major-sixth chord), rebuilt on the nearest major-sixth chord in the notes in play so it never clashes. A FrontRunner arrival at Central is also where a phrase can come home.",
+      "The horn is voiced like the Nathan K5LA that FrontRunner's locomotives carry (D♯ F♯ G♯ B D♯, a major-sixth chord), rebuilt on the nearest major-sixth chord in the notes in play so it never clashes. The music knows it's coming: the conductor reads FrontRunner's predicted time at Central, a card says when it's due, and the phrase it arrives in turns for home (its dominant, then home, the horn landing on the cadence). It's the one cadence the lake doesn't get to leave open, except in the lake's own sections.",
     plays: "the horn",
     source: { name: "UTA realtime, by the conductor", href: "https://www.rideuta.com/Services/FrontRunner" },
     now: (c) => {
       const fleet = c.valley.liveFleet();
       if (!fleet) return null;
       const n = frontRunnersOut(c);
-      return { value: `${n} FrontRunner ${n === 1 ? "train" : "trains"} out, Ogden to Provo`, receipt: `live ${mountainTime(fleet.t)}` };
+      const due = c.valley.frontRunnerDue;
+      const next = due > c.valley.now() ? ` · next at Central ${mountainTime(due)}` : "";
+      return { value: `${n} FrontRunner ${n === 1 ? "train" : "trains"} out, Ogden to Provo${next}`, receipt: `live ${mountainTime(fleet.t)}` };
     },
   },
   {
@@ -174,29 +180,35 @@ export const TOPICS: readonly Topic[] = [
   },
   {
     id: "river",
-    title: "Jordan River",
+    title: "The rivers",
     group: "valley",
-    short: "The river's flow against what's usual for the date sets the bass: long notes when it runs low, a walking line when it runs high.",
-    more: "The gauge at 1700 South reports every 15 minutes; its flow is placed among that day of the year's percentiles, so spring runoff walks and a dry August holds.",
+    short: "The Jordan and Little Cottonwood Creek, against what's usual for the date, set the bass: long notes when they run low, a walking line when they run high.",
+    more:
+      "Two gauges report every 15 minutes: the Jordan at 1700 South, and Little Cottonwood Creek where it meets it, the canyon's runoff, which jumps in a storm and in the spring melt. Each flow is placed among that day of the year's percentiles and the two are averaged, so spring runoff walks and a dry August holds.",
     plays: "the bass",
-    source: { name: "USGS 10171000, 1700 South", href: "https://waterdata.usgs.gov/monitoring-location/USGS-10171000/" },
+    source: { name: "USGS 10171000 and 10168000", href: "https://waterdata.usgs.gov/monitoring-location/USGS-10171000/" },
     now: (c) => {
       const r = c.valley.river;
-      return r ? { value: `${Math.round(r.value.cfs)} cfs · ${Math.round(r.value.position * 100)}th percentile for the date`, receipt: receipt(r) } : null;
+      if (!r) return null;
+      const gauges = r.value.gauges?.map((g) => `${g.name.replace(" River", "").replace("Little Cottonwood Creek", "Little Cottonwood")} ${Math.round(g.cfs)} cfs`).join(" · ") ?? `${Math.round(r.value.cfs)} cfs`;
+      return { value: `${gauges} · ${Math.round(r.value.position * 100)}th percentile for the date`, receipt: receipt(r) };
     },
   },
   {
     id: "snow",
     title: "Snow",
     group: "valley",
-    short: "New snow at Snowbird swells the dawn, and snow falling in the mountains sparkles: smaller and glassier the lighter the powder.",
+    short: "New snow in the Cottonwoods swells the dawn, and snow falling in the mountains sparkles: smaller and glassier the lighter the powder.",
     more:
-      "Snowbird's SNOTEL station gives the overnight new snow and the snowpack against its median; a fuller snowpack adds voices and upper notes to the pad. Snowfall in the mountains comes from the forecast model, hour by hour. POW DAY is earned at six inches.",
+      "Four SNOTEL stations, Snowbird, Brighton, Thaynes Canyon and Mill-D North, give the overnight new snow (the most at any of them, and where) and the snowpack against its median; a fuller snowpack adds voices and upper notes to the pad. Snowfall in the mountains comes from the forecast model, hour by hour. POW DAY is earned at six inches.",
     plays: "the dawn swell and the sparkle",
-    source: { name: "NRCS SNOTEL 766, Snowbird", href: "https://wcc.sc.egov.usda.gov/nwcc/site?sitenum=766" },
+    source: { name: "NRCS SNOTEL", href: "https://wcc.sc.egov.usda.gov/nwcc/site?sitenum=766" },
     now: (c) => {
       const s = c.valley.snow;
-      return s ? { value: `${s.value.newIn.toFixed(0)} in new overnight · snowpack ${Math.round(s.value.ratio * 100)}% of median`, receipt: receipt(s) } : null;
+      if (!s) return null;
+      const where = s.value.newIn >= 1 && s.value.newAt ? ` at ${s.value.newAt}` : "";
+      const up = s.value.upHighF !== null && s.value.upHighF !== undefined ? ` · ${Math.round(s.value.upHighF)}°F at Snowbird` : "";
+      return { value: `${s.value.newIn.toFixed(0)} in new overnight${where} · snowpack ${Math.round(s.value.ratio * 100)}% of median${up}`, receipt: receipt(s) };
     },
   },
   {
@@ -205,15 +217,20 @@ export const TOPICS: readonly Topic[] = [
     group: "valley",
     short: "The airport's hourly weather report picks how bright the mode is: clear skies lean Lydian and major, cloud and storms lean minor.",
     more:
-      "One report steers each hour, the one KSLC makes near :54, so every phone reads the same sky. Only observations steer the music; the forecast models only color it. A day's sky is sealed into the archive once it's over.",
-    plays: "how bright the mode is",
+      "One report steers each hour, the one KSLC makes near :54, so every phone reads the same sky. Only observations steer the music; the forecast models only color it. Falling pressure (a storm on its way) builds tension. The temperature colors the whole mix: a scorching day gets a little warmth, a gentle saturation and a softer top; a bitter one a glassier top; anything from 41 to 68 °F is left alone. A day's sky is sealed into the archive once it's over.",
+    plays: "how bright the mode is, and the mix's warmth",
     source: { name: "KSLC weather reports", href: "https://www.weather.gov/slc/" },
     now: (c) => {
       const sky = c.valley.sky;
       if (!sky) return null;
       const hour = sky.value.hours.find((h) => h.at === Math.floor((c.valley.now() - 20 * 60_000) / 3_600_000) * 3_600_000);
       const cloud = hour && Number.isFinite(hour.cloud) ? ` · cloud ${Math.round(hour.cloud * 100)}%` : "";
-      return { value: `${sky.value.description || "—"}${cloud}`, receipt: receipt(sky) };
+      const warm = c.bar?.warm ?? 0;
+      const color = warm > 0.05 ? " · warm in the heat" : warm < -0.05 ? " · glassy in the cold" : "";
+      const p = sky.value.pressureHpa;
+      const tend = sky.value.pressureTend ?? Number.NaN;
+      const pressure = p !== undefined && Number.isFinite(p) ? ` · ${Math.round(p).toLocaleString("en-US")} hPa${Number.isFinite(tend) ? (tend <= -1 ? " falling" : tend >= 1 ? " rising" : " steady") : ""}` : "";
+      return { value: `${sky.value.description || "—"}${cloud}${pressure}${color}`, receipt: receipt(sky) };
     },
   },
   {
@@ -228,7 +245,13 @@ export const TOPICS: readonly Topic[] = [
     now: (c) => {
       const sky = c.valley.sky;
       if (!sky || !Number.isFinite(sky.value.pm25)) return null;
-      return { value: `PM2.5 ${sky.value.pm25.toFixed(0)} µg/m³ · ${sky.value.inversionC.toFixed(1)} °C warmer aloft`, receipt: receipt(sky) };
+      // Measured: Snowbird's station against the airport, beyond the usual
+      // fall of about 3.6 °F a thousand feet (17.6 °F between them).
+      const up = c.valley.snow?.value.upHighF;
+      const down = sky.value.tempC;
+      const measured =
+        up !== null && up !== undefined && Number.isFinite(down) ? ` · Snowbird ${Math.round(up)}°F, the valley ${Math.round((down * 9) / 5 + 32)}°F${up - ((down * 9) / 5 + 32 - 17.6) > 4 ? ": inverted" : ""}` : "";
+      return { value: `PM2.5 ${sky.value.pm25.toFixed(0)} µg/m³ · ${sky.value.inversionC.toFixed(1)} °C warmer aloft (model)${measured}`, receipt: receipt(sky) };
     },
   },
   {
@@ -256,6 +279,73 @@ export const TOPICS: readonly Topic[] = [
     now: (c) => {
       const sky = c.valley.sky;
       return sky ? { value: sky.value.alerts.length ? sky.value.alerts.join(", ") : "none", receipt: receipt(sky) } : null;
+    },
+  },
+  {
+    id: "storm",
+    title: "A storm on its way",
+    group: "valley",
+    short: "When the forecast says snow is coming to Alta, the harmony holds in suspense, the pad darkens and the bass pins itself to home, until the snow starts falling.",
+    more:
+      "The National Weather Service's forecast grid gives the snow expected at Alta over the next day. From two inches it starts to color the music; by a foot it's all suspensions, a dark pad, the lake's drone swelled up, and fills every phrase. It's a forecast, so it only colors the bars and never moves the plan; the conductor freezes each hour's reading so every phone hears the same storm coming. The moment snow is falling, the storm has arrived and its color lets go: the release.",
+    plays: "suspensions, a dark pad and a pedal bass",
+    source: { name: "NWS forecast grid, Alta", href: "https://forecast.weather.gov/MapClick.php?lat=40.588&lon=-111.638" },
+    now: (c) => {
+      const sky = c.valley.sky;
+      if (!sky) return null;
+      const hour = sky.value.hours.find((h) => h.at === Math.floor((c.valley.now() - 20 * 60_000) / 3_600_000) * 3_600_000);
+      const mm = hour?.stormMm;
+      if (mm === undefined || !Number.isFinite(mm)) return { value: "no forecast yet", receipt: "waiting" };
+      return { value: mm >= 25 ? `${Math.round(mm / 25.4)} in forecast at Alta in the next day` : "no snow forecast at Alta", receipt: receipt(sky) };
+    },
+  },
+  {
+    id: "service",
+    title: "UTA service alerts",
+    group: "valley",
+    short: "A new UTA service alert, a detour, a closure, a delay, plays a fill into the next phrase. One on the trains holds the tension up while it stands.",
+    more:
+      "The conductor reads UTA's service alerts every minute. A new one is a run on the toms at the end of its phrase and a crash on the next downbeat, a harder run when it suspends service, and a cymbal swell where the drums are out. UTA files an alert per route and direction, so a headline is counted once. While an alert stands on TRAX, the S-Line or FrontRunner, the phrases' approach chords carry a seventh.",
+    plays: "fills, and tension",
+    source: { name: "UTA service alerts", href: "https://www.rideuta.com/Rider-Info/Service-Alerts" },
+    now: (c) => {
+      const a = c.valley.serviceAlerts;
+      if (!a) return null;
+      const [bus, rail, fr, ski] = a.counts;
+      const trains = rail + fr;
+      return { value: `${bus + trains + ski} in effect · ${trains ? `${trains} on the trains` : "none on the trains"}${ski ? ` · ${ski} on the ski buses` : ""}`, receipt: "live" };
+    },
+  },
+  {
+    id: "planes",
+    title: "Planes",
+    group: "valley",
+    short: "Every plane climbing out of SLC or coming in to land is a slow swell of brass and strings, sounding from where it is. A departure peaks late and rises; an arrival peaks early and falls.",
+    more:
+      "ADS-B is the position every airliner broadcasts; volunteers' receivers pick it up and adsb.lol shares it openly. The conductor looks every four minutes and lets one plane at a time into the music, twenty seconds apart at least, like a runway. The swell is two notes of the chord, low for a low plane and lower for a heavy one, and moves with the harmony. Airline flights are named on their cards; private aircraft never are.",
+    plays: "brass and strings",
+    source: { name: "adsb.lol (ODbL)", href: "https://adsb.lol/" },
+    now: (c) => {
+      const p = c.valley.livePlanes();
+      if (!p) return null;
+      const named = p.planes.filter((x) => x[6]).length;
+      return { value: `${p.planes.length} in the air near SLC · ${named} airline ${named === 1 ? "flight" : "flights"}`, receipt: `live ${mountainTime(p.t)}` };
+    },
+  },
+  {
+    id: "grid",
+    title: "The grid",
+    group: "valley",
+    short: "When the valley draws more power than usual for the hour, the whole mix swells a little; when it draws less, it eases off.",
+    more:
+      "The U.S. Energy Information Administration publishes PacifiCorp East's demand hour by hour. The latest hour is set against the same hour on the week's days before it: about a decibel for every 10% over or under, from −2 to +1.5, gliding over a few minutes and applied after the compressor so it isn't squeezed out.",
+    plays: "the whole mix's level",
+    source: { name: "EIA, PacifiCorp East demand", href: "https://www.eia.gov/electricity/gridmonitor/dashboard/electric_overview/balancing_authority/PACE" },
+    now: (c) => {
+      const g = c.valley.grid;
+      if (!g) return null;
+      const pct = Math.round((g.value.energy - 1) * 100);
+      return { value: `${g.value.mw.toLocaleString("en-US")} MW · ${pct >= 0 ? "+" : ""}${pct}% on the usual for the hour`, receipt: receipt(g) };
     },
   },
   {
@@ -331,9 +421,14 @@ export const TOPICS: readonly Topic[] = [
     id: "tempo",
     title: "Tempo",
     group: "music",
-    short: "Each part of the day has its tempo, 72 BPM at night up to 100 at rush hour, nudged by how fast the fleet is moving.",
-    more: "It changes only at a section's start, and by at most 4 BPM at a time, so the drop from last trains into the night takes four sections.",
-    now: (c) => (c.bar ? { value: `${Math.round(c.bar.bpm)} BPM`, receipt: "scheduled" } : null),
+    short: "Each part of the day has its tempo, 72 BPM at night up to 100 at rush hour, nudged up to 4 BPM by how the buses and trains are moving.",
+    more:
+      "The conductor watches the whole fleet's speed against what's usual for that hour of a weekday, a Saturday or a Sunday, and the trains' lateness. Each hour's flow nudges the tempo after it: a valley stuck in traffic holds the music back, a clear one lifts it. The tempo changes only at a section's start, by at most 4 BPM at a time, so the drop from last trains into the night takes four sections.",
+    now: (c) => {
+      if (!c.bar) return null;
+      const why = c.bar.tempo === 9 ? " · up: the valley's moving quickly" : c.bar.tempo === 10 ? " · held back: the valley's crawling" : "";
+      return { value: `${Math.round(c.bar.bpm)} BPM${why}`, receipt: "scheduled" };
+    },
   },
   {
     id: "dayparts",
@@ -382,9 +477,9 @@ export const TOPICS: readonly Topic[] = [
     id: "map",
     title: "The map",
     group: "music",
-    short: "Squares are trains, where UTA last saw them (or the schedule, when it can't). Rings are sounds as they play, smaller and fainter the farther they are from where you listen.",
+    short: "Squares are trains and dots are buses, where UTA last saw them; arrows are planes. Rings are sounds as they play, smaller and fainter the farther they are from where you listen.",
     more:
-      "Rings at the seismometers swell with the ground's rumble. A train past the map's edge, FrontRunner up to Ogden or down to Provo, is an arrow on the frame pointing where it is. Pick a place to listen from and the map marks it with YOU ARE HERE.",
+      "Rings at the seismometers swell with the ground's rumble. A train past the map's edge, FrontRunner up to Ogden or down to Provo, is an arrow on the frame pointing where it is. Planes point where they're flying and fade between sightings. Pick a place to listen from and the map marks it with YOU ARE HERE.",
   },
   {
     id: "stickers",
@@ -423,6 +518,11 @@ export const FAMILY_TOPIC: Record<string, TopicId> = {
   buses: "buses",
   late: "trains",
   alert: "alerts",
+  plane: "planes",
+  service: "service",
+  storm: "storm",
+  grid: "grid",
+  due: "frontrunner",
 };
 
 /** Which topic a sticker explains. */
@@ -492,15 +592,34 @@ export function conditions(c: LowdownCtx): Condition[] {
   add("buses", "Buses", counts.buses.toLocaleString("en-US"), transitReceipt);
   const late = c.conductor?.lateness();
   if (late && !v.shift) add("trains", "Running", Math.abs(late.medianS) < 60 ? "on time" : `${Math.round(late.medianS / 60)} min ${late.medianS > 0 ? "late" : "early"}`, "live");
+  const alerts = v.serviceAlerts;
+  if (alerts && !v.shift) {
+    const trains = alerts.counts[1] + alerts.counts[2];
+    add("service", "UTA alerts", `${alerts.counts.reduce((a, b) => a + b, 0)}${trains ? ` · ${trains} rail` : ""}`, "live");
+  }
+  const planes = v.livePlanes();
+  if (planes) add("planes", "Planes", `${planes.planes.length} near SLC`, `live ${mountainTime(planes.t)}`);
   if (v.lake) add("lake", "Lake", `${v.lake.value.ft.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ft`, receipt(v.lake));
   if (sky && Number.isFinite(sky.value.pm25)) add("air", "Air", `PM2.5 ${Math.round(sky.value.pm25)}${sky.value.inversionC >= 4 ? " · lid" : ""}`, receipt(sky));
   if (sky) {
     const f = Number.isFinite(sky.value.tempC) ? `${Math.round((sky.value.tempC * 9) / 5 + 32)}°F` : "";
     add("sky", "Sky", [sky.value.description, f].filter(Boolean).join(" ") || "—", receipt(sky));
   }
-  if (v.snow) add("snow", "Snow", `${Math.round(v.snow.value.newIn)} in new`, receipt(v.snow));
+  if (v.snow) add("snow", "Snow", `${Math.round(v.snow.value.newIn)} in new${v.snow.value.newIn >= 1 && v.snow.value.newAt ? ` at ${v.snow.value.newAt}` : ""}`, receipt(v.snow));
+  if (sky) {
+    const hour = sky.value.hours.find((h) => h.at === Math.floor((v.now() - 20 * 60_000) / 3_600_000) * 3_600_000);
+    const mm = hour?.stormMm;
+    if (mm !== undefined && mm >= 25) add("storm", "Forecast", `${Math.round(mm / 25.4)} in at Alta`, receipt(sky));
+    const p = sky.value.pressureHpa;
+    const tend = sky.value.pressureTend ?? Number.NaN;
+    if (p !== undefined && Number.isFinite(p)) add("sky", "Pressure", `${Math.round(p).toLocaleString("en-US")} hPa${tend <= -1 ? " ↓" : tend >= 1 ? " ↑" : ""}`, receipt(sky));
+  }
   if (sky && Number.isFinite(sky.value.ridgeGustMs)) add("wind", "Ridges", `${Math.round(sky.value.ridgeGustMs * 2.237)} mph`, receipt(sky));
   if (v.river) add("river", "River", `${Math.round(v.river.value.cfs)} cfs`, receipt(v.river));
+  if (v.grid) {
+    const pct = Math.round((v.grid.value.energy - 1) * 100);
+    add("grid", "Grid", `${v.grid.value.mw.toLocaleString("en-US")} MW · ${pct >= 0 ? "+" : ""}${pct}%`, receipt(v.grid));
+  }
   if (v.ground) {
     const loudest = Math.max(...v.ground.levels);
     add("ground", "Ground", `${Math.round(loudest * 100)}%`, "live");

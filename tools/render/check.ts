@@ -7,9 +7,12 @@
 // Fails if any rendering is too loud or too quiet, peaks above the ceiling,
 // goes silent, produces a NaN, or differs between two runs; then listens to
 // the evening from each vantage (each must sound like its place, and none
-// may jump in loudness on a phone's speaker); then plays the day before as
-// A Day in Twelve Minutes and holds that to the same rules.
+// may jump in loudness on a phone's speaker); then hears the valley's
+// events and outlook (planes, service alerts, a storm on its way, the heat,
+// the grid) and holds them to the same rules; then plays the day before as
+// A Day in Twelve Minutes.
 import { render, type RenderResult } from "./render.ts";
+import { Kind, encodeAlerts, encodePlanes, encodeSky, type EngineHandle, type PlaneEvent, type SkyHour } from "../../web/src/engine/protocol.ts";
 
 const SR = 48_000;
 
@@ -204,6 +207,87 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (lake.highs > everywhere.highs - 4) failures.push(`from the lake: highs ${lake.highs.toFixed(1)} dB, not darker than the map's ${everywhere.highs.toFixed(1)}`);
   if (canyons.width < everywhere.width + 1.5) failures.push(`from the canyons: width ${canyons.width.toFixed(1)} dB, no wider than the map's ${everywhere.width.toFixed(1)}`);
   void downtown;
+
+  // The valley's events and outlook. A sky of defaults but for `edit`, every
+  // hour of the day (the plan reads only what's edited).
+  const sky = (t0: number, edit: Partial<SkyHour>): Uint8Array => {
+    const hours: SkyHour[] = [];
+    for (let h = -4; h < 32; h++) {
+      hours.push({ at: t0 + h * 3_600_000, cloud: Number.NaN, precipMm: 0, snowCm: 0, tempC: 10, windMs: 3, gustMs: 5, pm25: 5, inversionC: 0, alert: 0, ridgeMs: 4, ridgeGustMs: 6, mtnSnowCm: 0, ...edit });
+    }
+    return encodeSky(hours);
+  };
+  const metrics = (r: RenderResult) => {
+    const l = r.left.subarray(settle * SR);
+    const rr = r.right.subarray(settle * SR);
+    return { lufs: loudness(l, rr), tp: Math.max(truePeak(l), truePeak(rr)), quiet: longestSilence(l, rr), ok: finite(r.left) && finite(r.right) };
+  };
+  const events = (r: RenderResult) => r.events.map((e) => JSON.parse(e) as { t: string; i?: number; k?: number; ev?: number; dark?: number; warm?: number; grid?: number });
+  {
+    // The evening rush on a hot day with the grid busy: a plane every 24 s
+    // (every fourth one private), a bus detour and a TRAX suspension.
+    const seconds = 120;
+    const planes: PlaneEvent[] = [];
+    const prime = (e: EngineHandle, at: number, t0: number) => {
+      for (let k = 0; k * 24_000 < seconds * 1000; k++) {
+        planes.push({ ms: at + 15_000 + k * 24_000, lat: 40.79 + 0.02 * (k % 3), lon: -111.98 + 0.03 * (k % 4), altFt: 5_500 + 900 * (k % 6), arrival: k % 2 === 1, size: 1 + (k % 5), airline: k % 4 !== 3 });
+      }
+      e.post(Kind.SKY, sky(t0, { tempC: 34 }));
+      e.post(Kind.PLANES, encodePlanes(at, at + seconds * 1000, planes));
+      e.post(Kind.ALERTS, encodeAlerts(at, at + seconds * 1000, [60, 1, 0, 0], [
+        { ms: at + 20_000, kind: 0, severe: false },
+        { ms: at + 50_000, kind: 1, severe: true },
+      ]));
+    };
+    const plainRender = await render(day, "17:40", seconds);
+    const plain = metrics(plainRender);
+    const r = await render(day, "17:40", seconds, { prime, slow: { energy: 1.15 } });
+    const busy = metrics(r);
+    const slower = r.elapsed / plainRender.elapsed;
+    const again = await render(day, "17:40", 40, { prime, slow: { energy: 1.15 } });
+    const same = again.hash === (await render(day, "17:40", 40, { prime, slow: { energy: 1.15 } })).hash;
+    const ev = events(r);
+    const swells = ev.filter((e) => e.t === "pulse" && e.i === 15).length;
+    const named = ev.filter((e) => e.t === "feat" && e.k === 17);
+    const fills = ev.filter((e) => e.t === "feat" && e.k === 18).length;
+    const warm = Math.max(...ev.filter((e) => e.t === "bar").map((e) => e.warm ?? 0));
+    console.log(
+      `the rush with planes, alerts, heat and a busy grid: ${busy.lufs.toFixed(1)} LUFS (${(busy.lufs - plain.lufs).toFixed(1)} dB on the plain), ${busy.tp.toFixed(2)} dBTP, ${swells} swells, ${named.length} named, ${fills} alert fills, warmth ${warm.toFixed(2)}, ${slower.toFixed(2)}× the render time`,
+    );
+    if (slower > 1.3) failures.push(`events: ${slower.toFixed(2)}× the plain rush's render time`);
+    if (!busy.ok) failures.push("events: NaN or infinity in the output");
+    if (busy.tp > -0.5) failures.push(`events: true peak ${busy.tp.toFixed(2)} dBTP`);
+    if (busy.quiet > 2.5) failures.push(`events: ${busy.quiet.toFixed(2)} s of near-silence`);
+    if (!same) failures.push("events: two identical renders differ");
+    if (swells < 3) failures.push(`events: only ${swells} planes heard`);
+    if (named.length < 2) failures.push(`events: only ${named.length} planes named`);
+    if (named.some((f) => !planes.find((p) => p.ms === f.ev)?.airline)) failures.push("events: a private aircraft was named");
+    if (fills < 1) failures.push("events: no fill for a service alert");
+    if (warm < 0.9) failures.push(`events: the heat's warmth only ${warm.toFixed(2)}`);
+    if (!(busy.lufs - plain.lufs > 0.5 && busy.lufs - plain.lufs < 3)) failures.push(`events: ${(busy.lufs - plain.lufs).toFixed(1)} dB against the plain rush (the grid's swell)`);
+  }
+  {
+    // The small hours with a foot of snow on its way to Alta and none falling yet.
+    const r = await render(day, "03:10", 90, { prime: (e, _at, t0) => e.post(Kind.SKY, sky(t0, { stormMm: 280, pressureTend: -4 })) });
+    const m = metrics(r);
+    const ev = events(r);
+    const cards = ev.filter((e) => e.t === "feat" && e.k === 19).length;
+    const bars = ev.filter((e) => e.t === "bar");
+    const dark = bars.filter((e) => (e.dark ?? 0) > 0.5).length;
+    console.log(`a storm on its way: ${m.lufs.toFixed(1)} LUFS, ${m.tp.toFixed(2)} dBTP, ${cards} storm cards, ${dark} of ${bars.length} bars dark`);
+    if (!m.ok || m.tp > -0.5 || m.quiet > 2.5) failures.push("storm: NaN, a peak or a silence");
+    if (!(m.lufs > -17.5 && m.lufs < -14.5)) failures.push(`storm: loudness ${m.lufs.toFixed(1)} LUFS is outside −17.5…−14.5`);
+    if (dark < bars.length / 2) failures.push(`storm: only ${dark} of ${bars.length} bars darkened`);
+  }
+  {
+    // The grid, both ways, against none.
+    const at = async (energy: number) => metrics(await render(day, "12:20", 60, energy ? { slow: { energy } } : {})).lufs;
+    const usual = await at(0);
+    const [busy, idle] = [(await at(1.2)) - usual, (await at(0.8)) - usual];
+    console.log(`the grid: ${busy.toFixed(1)} dB busy, ${idle.toFixed(1)} dB idle`);
+    if (!(busy > 1 && busy < 2)) failures.push(`grid: ${busy.toFixed(1)} dB when it's busy`);
+    if (!(idle > -2.5 && idle < -1.2)) failures.push(`grid: ${idle.toFixed(1)} dB when it's idle`);
+  }
 
   // A Day in Twelve Minutes: the day before, start to finish, then live.
   const days = Object.keys(manifest.days).sort();

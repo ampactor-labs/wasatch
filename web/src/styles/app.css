@@ -54,6 +54,18 @@ a {
   pointer-events: none;
   will-change: transform;
 }
+/* The valley's buses, faint under the trains; planes overhead in the sky
+   blue of their swell's ring, with the map's own ink for an outline. */
+.map-buses circle {
+  fill: var(--ink, #1b1f3b);
+  opacity: 0.28;
+}
+.map-planes path {
+  fill: #9ad0f5;
+  stroke: var(--ink, #1b1f3b);
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
 /* The sounding summit's pennant stands raised, without flapping: a flap would
    repaint the whole range every frame. */
 .play__skyline .skyline-flag--active path:last-of-type {

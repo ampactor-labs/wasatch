@@ -8,12 +8,12 @@
 
 use crate::audio::Noise;
 use crate::audio::homes::{self, Bus, HOMES, Home, Homes};
-use crate::audio::master::Master;
+use crate::audio::master::{Master, energy_db, warmth_for};
 use crate::audio::skyline::SkylineTables;
 use crate::audio::space::{Room, Vantage, place};
 use crate::audio::voices::{
     Air, Bass, DrumKind, DrumVoice, HarpString, Hit, HornVoice, LakePedal, ModalVoice, Out,
-    PadVoice, PianoSample, PianoVoice, Placement, bell_partials,
+    PadVoice, PianoSample, PianoVoice, Placement, SwellVoice, bell_partials,
 };
 use crate::compose::{
     AlertEvent, AlertWindow, Bar, BikeEvent, ComposeState, Feature, Harmony, Inst, Mix, Note,
@@ -150,6 +150,8 @@ pub struct Engine {
     grains: Vec<ModalVoice<2>>,
     quake_bells: Vec<ModalVoice<2>>,
     horns: Vec<HornVoice>,
+    /// Planes' swells: two voices a plane, two planes' worth.
+    swells: [SwellVoice; 4],
     harp: Vec<HarpString>,
     air: Air,
     ground: [Upconverter<64>; 4],
@@ -213,6 +215,7 @@ impl Engine {
             grains: (0..10).map(|_| ModalVoice::new(sr)).collect(),
             quake_bells: (0..2).map(|_| ModalVoice::new(sr)).collect(),
             horns: (0..10).map(|_| HornVoice::new(sr)).collect(),
+            swells: core::array::from_fn(|i| SwellVoice::new(sr, 0x5E11 + i as u32)),
             harp: (0..6).map(|_| HarpString::new()).collect(),
             air: Air::new(sr),
             ground: core::array::from_fn(|_| Upconverter::new(sr, 10.0)),
@@ -926,6 +929,30 @@ impl Engine {
                     self.pulse(frame, &n, &place);
                 }
             }
+            Inst::Swell => {
+                let i = usize::from(n.variant & 3);
+                if n.variant & 4 != 0 {
+                    // A voice moving: only one already sounding (a phone
+                    // that joined mid-swell missed its start).
+                    if self.swells[i].is_active() {
+                        self.swells[i].glide_to(n.midi);
+                    }
+                    return;
+                }
+                let place = self.placement(n.lat, n.lon, 0.45);
+                let size = ((n.variant >> 4) & 7) + 1;
+                self.swells[i].start(
+                    n.midi,
+                    n.vel * mix.planes.max(0.4),
+                    dur_s,
+                    n.variant & 8 != 0,
+                    size,
+                    place,
+                );
+                if n.variant & 1 == 0 {
+                    self.pulse(frame, &n, &place);
+                }
+            }
             Inst::Marimba => {
                 let place = self.placement(n.lat, n.lon, 0.2);
                 let i = pick(&mut self.rr[3], self.marimbas.iter().map(|v| v.is_active()));
@@ -1114,8 +1141,19 @@ impl Engine {
         for (up, c) in self.ground.iter_mut().zip(carriers) {
             up.set_carrier(c, 1500.0);
         }
-        // Sky-driven tone, once per bar.
-        let hour = self.inputs.sky.at_or_default(sec.start_ms);
+        // Sky-driven tone, once per bar: the sky of the bar's own hour (of
+        // the day being played, in A Day in Twelve Minutes).
+        let hour = self
+            .inputs
+            .sky
+            .at_or_default(if day_ms > 0.0 { day_ms } else { h.at_ms });
+        self.master.set_warmth(warmth_for(hour.temp_c));
+        // The grid's now has nothing to say about a day gone by.
+        self.master.set_energy(if day_ms > 0.0 {
+            0.0
+        } else {
+            energy_db(self.inputs.slow.energy_or_usual())
+        });
         self.haze = ((hour.pm25 - 6.0) / 40.0).clamp(0.0, 1.0);
         let inv = (hour.inversion_c / 8.0).clamp(0.0, 1.0);
         if (inv - self.inversion).abs() > 0.05 {
@@ -1125,19 +1163,21 @@ impl Engine {
         }
         self.wind = (hour.ridge_ms, hour.ridge_gust_ms);
         self.room.set_tempo(sec.bpm);
-        self.pad_cutoff = 900.0
+        self.pad_cutoff = (900.0
             + 3000.0 * sec.brightness
             + if sec.kind == crate::plan::SectionKind::Journey {
                 500.0
             } else {
                 0.0
-            };
+            })
+            // A storm on its way darkens it.
+            * (1.0 - 0.35 * mix.dark);
         for v in &mut self.pad {
             v.set_cutoff(self.pad_cutoff);
         }
         let _ = writeln!(
             self.outbox,
-            r#"{{"t":"bar","f":{frame:.0},"chain":{},"sec":{},"kind":{},"bar":{bar},"bars":{},"bpm":{:.2},"start":{:.0},"c":{},"r":{},"pc":{},"pr":{},"nc":{},"nr":{},"why":{},"home":{},"chord":"{}","act":{:.3},"bright":{:.3},"tension":{:.3},"haze":{:.3},"inv":{:.3},"day":{day_ms:.0}}}"#,
+            r#"{{"t":"bar","f":{frame:.0},"chain":{},"sec":{},"kind":{},"bar":{bar},"bars":{},"bpm":{:.2},"start":{:.0},"c":{},"r":{},"pc":{},"pr":{},"nc":{},"nr":{},"why":{},"home":{},"tempo":{},"flow":{:.2},"chord":"{}","act":{:.3},"bright":{:.3},"tension":{:.3},"haze":{:.3},"inv":{:.3},"dark":{:.2},"warm":{:.2},"grid":{:.2},"day":{day_ms:.0}}}"#,
             sec.chain,
             sec.index,
             sec.kind as u8,
@@ -1152,12 +1192,17 @@ impl Engine {
             sec.next_key.rung,
             sec.notes_reason.map_or(-1, |r| r as i32),
             sec.home_reason.map_or(-1, |r| r as i32),
+            sec.tempo_reason.map_or(-1, |r| r as i32),
+            sec.flow,
             h.chord.symbol(),
             sec.activity,
             sec.brightness,
             sec.tension,
             self.haze,
             self.inversion,
+            mix.dark,
+            self.master.warmth(),
+            self.master.energy(),
         );
         if self.fade_in_at.is_some_and(|t| h.at_ms >= t - 1.0) {
             self.master.set_fade(true);
@@ -1268,6 +1313,9 @@ impl Engine {
                 v.tick(&mut stream);
             }
             for v in &mut self.horns {
+                v.tick(&mut stream);
+            }
+            for v in &mut self.swells {
                 v.tick(&mut stream);
             }
             for v in &mut self.harp {

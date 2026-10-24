@@ -9,8 +9,8 @@
 //! Five movements follow the dayparts, and the theme opens first light.
 
 use crate::compose::{
-    Bar, ComposeState, Feature, FeatureKind, Harmony, Inst, NO_FEATURE, Note, Valley, at_or_above,
-    chord_for, euclid, horn, mix_for,
+    Bar, BarCtx, ComposeState, Feature, FeatureKind, Harmony, Inst, NO_FEATURE, Note, Valley,
+    at_or_above, chord_for, euclid, horn, mix_for,
 };
 use crate::music::Key;
 use crate::plan::{
@@ -235,6 +235,8 @@ pub fn plan_day(date: u32, t0: f64, piece0: f64, schedule: &Schedule, sky_data: 
             next_key: key,
             notes_reason,
             home_reason,
+            tempo_reason: None,
+            flow: 0.0,
             progression: rng.below(5, bank.len() as u32) as u8,
             bars_per_chord: if activity < 0.35 { 2 } else { 1 },
             activity,
@@ -330,7 +332,7 @@ pub fn compose_day(
     }
 
     // Harmony, as the live piece makes it.
-    let chord = chord_for(sec, bar, valley);
+    let chord = chord_for(sec, bar, valley, &BarCtx::plain(sec));
     let pad = voicing::voice(chord, &state.voicing);
     state.voicing = pad;
     let (tones, n_tones) = chord.pitch_classes();

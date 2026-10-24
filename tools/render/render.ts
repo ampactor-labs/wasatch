@@ -25,6 +25,7 @@ import {
   encodeU32,
   type DayFile,
   type NetworkFile,
+  type Slow,
 } from "../../web/src/engine/protocol.ts";
 import { CREST_ELEV_FT } from "../../web/src/art/crest-data.ts";
 
@@ -45,7 +46,17 @@ export async function render(
   date: string,
   time: string,
   seconds: number,
-  opts: { scalar?: boolean; sampleRate?: number; twelve?: { date: string; after: number }; vantage?: number } = {},
+  opts: {
+    scalar?: boolean;
+    sampleRate?: number;
+    twelve?: { date: string; after: number };
+    vantage?: number;
+    /** Slow values other than the defaults (the grid's demand, say). */
+    slow?: Partial<Slow>;
+    /** Anything else to post before it starts, given the listening time it
+     * starts at and the service day's start: the sky, planes, alerts. */
+    prime?: (engine: EngineHandle, listeningMs: number, t0: number) => void;
+  } = {},
 ): Promise<RenderResult> {
   const sr = opts.sampleRate ?? 48_000;
   const wasm = readFileSync(join(pub, "engine", opts.scalar ? "wasatch.wasm" : "wasatch-simd.wasm"));
@@ -78,10 +89,12 @@ export async function render(
   }
   engine.post(
     Kind.SLOW,
-    encodeSlow({ lakeFt: 4189.8, lakeDevFt: 0, river: 0.5, snowpack: 1, newSnowIn: 0, powder: 0.5, season: 0, ground: [0, 0, 0, 0] }),
+    encodeSlow({ lakeFt: 4189.8, lakeDevFt: 0, river: 0.5, snowpack: 1, newSnowIn: 0, powder: 0.5, season: 0, ground: [0, 0, 0, 0], ...opts.slow }),
   );
   const [h, m] = time.split(":").map(Number);
-  engine.post(Kind.CLOCK, encodeClock(0, target + ((h ?? 0) * 60 + (m ?? 0)) * 60_000 + DELAY_MS));
+  const listening = target + ((h ?? 0) * 60 + (m ?? 0)) * 60_000;
+  opts.prime?.(engine, listening, target);
+  engine.post(Kind.CLOCK, encodeClock(0, listening + DELAY_MS));
   if (opts.vantage) engine.post(Kind.VANTAGE, encodeU32(opts.vantage));
   engine.post(Kind.START, new Uint8Array(0));
 
