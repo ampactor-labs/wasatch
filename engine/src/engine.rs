@@ -530,9 +530,15 @@ impl Engine {
             (start <= l && l < end).then_some((d.date, d.t0_ms, end))
         });
         let (date, t0, end) = covering.unwrap_or_else(|| {
-            let mdt = 6.0 * 3_600_000.0;
-            let t0 = ((l - mdt - ANCHOR_HOURS * 3_600_000.0) / 86_400_000.0).floor() * 86_400_000.0
-                + mdt;
+            // Local midnight's offset from UTC, from the nearest day we know
+            // (6 h in summer, 7 in winter); MDT with nothing to go on.
+            let offset = days
+                .iter()
+                .min_by(|a, b| (a.t0_ms - l).abs().total_cmp(&(b.t0_ms - l).abs()))
+                .map_or(6.0 * 3_600_000.0, |d| d.t0_ms.rem_euclid(86_400_000.0));
+            let t0 = ((l - offset - ANCHOR_HOURS * 3_600_000.0) / 86_400_000.0).floor()
+                * 86_400_000.0
+                + offset;
             (0, t0, anchor(t0) + 86_400_000.0)
         });
         let stale = self.chain_version != self.inputs.version;
@@ -1175,4 +1181,37 @@ fn pick(rr: &mut usize, active: impl ExactSizeIterator<Item = bool>) -> usize {
 
 fn at_or_above(pc: u8, floor: i32) -> i32 {
     floor + (i32::from(pc) - floor).rem_euclid(12)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A day of the schedule whose local midnight is `offset_h` hours after
+    /// UTC midnight (6 in summer, 7 in winter).
+    fn day(date: u32, utc_day: f64, offset_h: f64) -> ServiceDay {
+        ServiceDay {
+            date,
+            t0_ms: (utc_day * 24.0 + offset_h) * 3_600_000.0,
+            rail: vec![(6 * 3600, 0)],
+            ski: vec![],
+            bus: vec![10; 1800],
+            bus_west: vec![5; 1800],
+        }
+    }
+
+    #[test]
+    fn without_a_covering_day_the_fallback_keeps_the_season_s_clock() {
+        // Winter: the schedule knows Nov 2 (MST, UTC−7), and the listener is
+        // three days later than anything compiled.
+        let mut e = Engine::new(48_000.0);
+        e.set_day(day(20261102, 20_759.0, 7.0));
+        let l = (20_762.0 * 24.0 + 7.0 + 12.0) * 3_600_000.0; // Nov 5, noon MST
+        e.set_clock(0.0, l + DELAY_MS);
+        e.start();
+        let chain = e.chain().expect("a fallback chain");
+        // Its anchor is 05:00 MST that day: 12:00 UTC, not 11:00.
+        assert_eq!(chain.anchor_ms.rem_euclid(86_400_000.0), 12.0 * 3_600_000.0);
+        assert!(chain.anchor_ms <= l && l < chain.end_ms);
+    }
 }
