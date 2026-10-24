@@ -163,6 +163,17 @@ pub enum FeatureKind {
     Sky = 10,
     /// A section boundary: the harmony moved.
     Boundary = 11,
+    /// The air: haze and the inversion's lid (value PM2.5, stop the
+    /// inversion in tenths of a degree).
+    Air = 12,
+    /// The Jordan River (value: its flow's percentile for the date, 0–1).
+    River = 13,
+    /// The buses (value: their stop events a minute).
+    Buses = 14,
+    /// The trains running late as a system (value: median seconds late).
+    Late = 15,
+    /// A weather alert (value: its strength, 0–1).
+    Alert = 16,
 }
 
 /// A captioned moment.
@@ -298,6 +309,11 @@ pub struct Valley<'a> {
 pub struct ComposeState {
     pub(crate) voicing: Voicing,
     pub(crate) phrase_featured: bool,
+    /// Trains captioned this phrase (two at most, so the feed has room for
+    /// the rest of the valley and a card stays up long enough to read).
+    pub(crate) phrase_trains: u8,
+    /// A bike captioned this phrase.
+    pub(crate) phrase_bike: bool,
     pub(crate) fill_pending: bool,
     pub(crate) last_quake_ms: f64,
 }
@@ -503,6 +519,8 @@ pub fn compose(
     }
     if bip == 0 {
         state.phrase_featured = false;
+        state.phrase_trains = 0;
+        state.phrase_bike = false;
     }
 
     // A section's first bar is a boundary: caption the harmony's move.
@@ -779,7 +797,12 @@ pub fn compose(
                     } else {
                         key.scale()[(usize::from(chord.degree) + 1) % 7]
                     };
-                    let feature = if !state.phrase_featured || bells == 0 {
+                    // The phrase's first train, and one more in its second
+                    // half: the first bell of its bar.
+                    let feature = if bells == 0
+                        && (state.phrase_trains == 0 || (state.phrase_trains == 1 && bip >= 4))
+                    {
+                        state.phrase_trains += 1;
                         out.features.push(Feature {
                             at_ms: at,
                             kind: FeatureKind::Trax,
@@ -889,7 +912,8 @@ pub fn compose(
             let at = start + f64::from(step) * step_ms;
             let deg = (((b.lat - 40.70) / 0.10 * 7.0).round() as i32).clamp(0, 7);
             let tonic = key.tonic_at_or_above(72);
-            let feature = if n == 0 && !state.phrase_featured {
+            let feature = if n == 0 && !state.phrase_bike {
+                state.phrase_bike = true;
                 out.features.push(Feature {
                     at_ms: at,
                     kind: FeatureKind::Bike,
@@ -1011,27 +1035,75 @@ pub fn compose(
         }
     }
 
-    // Every phrase carries a caption: if nothing legible happened by the
-    // phrase's fourth bar, the slow world gets one.
-    if bip == 3 && !state.phrase_featured {
-        let kind = if snowing > 0.0 {
-            FeatureKind::Snow
-        } else if hour.ridge_gust_ms > 9.0 {
-            FeatureKind::Wind
-        } else {
-            [FeatureKind::Lake, FeatureKind::Sky, FeatureKind::Ground][(phrase % 3) as usize]
+    // Every phrase carries a card about the valley at large, on its fourth
+    // bar: what's notable now every third phrase (snow falling, an alert, a
+    // gale on the ridges, a lid of bad air, the trains running late, taking
+    // turns when there are several), and a turn through the rest in
+    // between, so the feed gets to all of it.
+    if bip == 3 {
+        let late_s = valley.schedule.system_late_s(start);
+        let bus_rate = valley.schedule.bus_rate(start);
+        let mut notables = [FeatureKind::Snow; 5];
+        let mut n_notable = 0;
+        for (on, kind) in [
+            (snowing > 0.0, FeatureKind::Snow),
+            (hour.alert > 0.3, FeatureKind::Alert),
+            (hour.ridge_gust_ms > 9.0, FeatureKind::Wind),
+            (
+                hour.inversion_c >= 4.0 || hour.pm25 >= 12.0,
+                FeatureKind::Air,
+            ),
+            (late_s >= 120.0, FeatureKind::Late),
+        ] {
+            if on {
+                notables[n_notable] = kind;
+                n_notable += 1;
+            }
+        }
+        let slot = sec.index * 4 + phrase;
+        const TURNS: [FeatureKind; 6] = [
+            FeatureKind::Lake,
+            FeatureKind::Buses,
+            FeatureKind::Sky,
+            FeatureKind::Ground,
+            FeatureKind::River,
+            FeatureKind::Air,
+        ];
+        let turn = |k: u32| {
+            // No buses to speak of at night: the next turn instead.
+            let i = (k % 6) as usize;
+            if TURNS[i] == FeatureKind::Buses && bus_rate < 1.0 {
+                TURNS[(i + 1) % 6]
+            } else {
+                TURNS[i]
+            }
         };
-        let value = match kind {
-            FeatureKind::Snow => snowing,
-            FeatureKind::Wind => hour.ridge_gust_ms,
-            FeatureKind::Lake => valley.slow.lake_ft,
-            _ => sec.brightness,
+        let kind = if n_notable > 0 && slot.is_multiple_of(3) {
+            notables[(slot / 3) as usize % n_notable]
+        } else {
+            turn(slot)
+        };
+        let (value, stop) = match kind {
+            FeatureKind::Snow => (snowing, 0),
+            FeatureKind::Wind => (hour.ridge_gust_ms, 0),
+            FeatureKind::Lake => (valley.slow.lake_ft, 0),
+            FeatureKind::Alert => (hour.alert, 0),
+            FeatureKind::Air => (
+                hour.pm25,
+                (hour.inversion_c.max(0.0) * 10.0)
+                    .round()
+                    .min(f32::from(u16::MAX)) as u16,
+            ),
+            FeatureKind::Late => (late_s, 0),
+            FeatureKind::River => (valley.slow.river, 0),
+            FeatureKind::Buses => (bus_rate, 0),
+            _ => (sec.brightness, 0),
         };
         out.features.push(Feature {
             at_ms: start,
             kind,
             route: 0,
-            stop: 0,
+            stop,
             event_ms: start,
             late_s: 0,
             observed: false,
@@ -1244,6 +1316,65 @@ mod tests {
         }
         assert!(bells > 100, "{bells}");
         assert!(horns > 0, "{horns}");
+    }
+
+    #[test]
+    fn the_feed_has_room_for_the_whole_valley() {
+        let (schedule, network) = valley_fixture();
+        let t0 = schedule.days[0].t0_ms;
+        let sky = Sky::default();
+        let chain = plan_chain(20261023, t0, t0 + 29.0 * 3_600_000.0, &schedule, &sky);
+        let slow = Slow::default();
+        let valley = Valley {
+            schedule: &schedule,
+            network: &network,
+            sky: &sky,
+            slow: &slow,
+            bikes: &[],
+            quakes: &[],
+        };
+        let mut bar = Bar::default();
+        let mut kinds = std::collections::BTreeSet::new();
+        let mut phrases = 0;
+        for sec in chain.sections.iter().take(60) {
+            let mut state = ComposeState::default();
+            let (mut trains, mut valley_cards) = (0, 0);
+            for b in 0..sec.bars() {
+                compose(sec, b, &valley, &mut state, &mut bar);
+                for f in &bar.features {
+                    match f.kind {
+                        FeatureKind::Trax => trains += 1,
+                        FeatureKind::Lake
+                        | FeatureKind::Sky
+                        | FeatureKind::Ground
+                        | FeatureKind::Buses
+                        | FeatureKind::River
+                        | FeatureKind::Air
+                        | FeatureKind::Late
+                        | FeatureKind::Alert
+                        | FeatureKind::Wind
+                        | FeatureKind::Snow => {
+                            assert_eq!(b % 8, 3, "a valley card on a phrase's fourth bar");
+                            kinds.insert(f.kind as u8);
+                            valley_cards += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                if b % 8 == 7 || b + 1 == sec.bars() {
+                    // Two trains a phrase at most, however busy the lines.
+                    assert!(trains <= 2, "{trains} train cards in a phrase");
+                    if b % 8 >= 3 {
+                        assert_eq!(valley_cards, 1, "one valley card a phrase");
+                    }
+                    phrases += 1;
+                    (trains, valley_cards) = (0, 0);
+                }
+            }
+        }
+        assert!(phrases > 100);
+        // Over a few hours the turn reaches every kind it has.
+        assert!(kinds.len() >= 5, "{kinds:?}");
     }
 
     #[test]

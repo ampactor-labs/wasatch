@@ -65,6 +65,8 @@
 .boot__sticker {
   position: absolute;
   width: clamp(70px, 20cqw, 128px);
+  /* The layer lets taps through; the stickers themselves explain. */
+  pointer-events: auto;
 }
 .boot__sticker--a {
   top: max(8px, env(safe-area-inset-top));

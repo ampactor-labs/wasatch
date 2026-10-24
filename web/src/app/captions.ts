@@ -33,9 +33,33 @@ export type Family =
   | "snow"
   | "sky"
   | "harmony"
-  | "vantage";
+  | "vantage"
+  | "air"
+  | "river"
+  | "buses"
+  | "late"
+  | "alert";
 
-const FEATURE_FAMILY: Family[] = ["trax", "frontrunner", "skibus", "bike", "quake", "theme", "lake", "ground", "wind", "snow", "sky", "harmony"];
+/** The engine's feature kinds (engine/src/compose.rs FeatureKind), in order. */
+const FEATURE_FAMILY: Family[] = [
+  "trax",
+  "frontrunner",
+  "skibus",
+  "bike",
+  "quake",
+  "theme",
+  "lake",
+  "ground",
+  "wind",
+  "snow",
+  "sky",
+  "harmony",
+  "air",
+  "river",
+  "buses",
+  "late",
+  "alert",
+];
 
 const INTROS: Partial<Record<Family, string>> = {
   trax: "That bell was TRAX: every train leaving a station rings one, on its line's chord tone.",
@@ -50,6 +74,11 @@ const INTROS: Partial<Record<Family, string>> = {
   snow: "The sparkle is snow falling in the mountains.",
   harmony: "Every few minutes the harmony moves one note, and this line says why.",
   vantage: "Where you listen changes the mix, never the music: what's near is close, bright and dry, what's far is quiet, dark and echoing. Friends listening elsewhere are still in the same bar.",
+  air: "The air is the lid: haze dulls the pad and the skyline, and an inversion puts a low ceiling on the reverb.",
+  river: "The bass is the Jordan River: long notes when it runs low, a walking line when it runs high.",
+  buses: "The hats and shakers are the buses: how often they stop sets how busy the groove is.",
+  late: "When the trains run late, the drums lay back behind the beat with them.",
+  alert: "A weather alert builds tension and drum fills until it's lifted.",
 };
 
 /** Formatting in Mountain time, whatever the listener's zone. */
@@ -96,7 +125,13 @@ export interface ValleyNow {
   snow?: { newIn: number; observed: number; receipt: Receipt };
   quakes: { originMs: number; mag: number; place: string }[];
   bikeStation(i: number): string;
-  ground?: { station: string; receipt: Receipt; observed: number };
+  /** The loudest station, and its level against a busy day there (0–1). */
+  ground?: { station: string; level: number; receipt: Receipt; observed: number };
+  river?: { cfs: number; position: number; observed: number; receipt: Receipt };
+  air?: { pm25: number; inversionC: number; observed: number; receipt: Receipt };
+  alerts?: { names: string[]; observed: number; receipt: Receipt };
+  /** Buses out now, counted live, when the conductor has the fleet. */
+  busesOut?: { count: number; observed: number };
 }
 
 const SKI_ROUTE: Record<string, string> = {
@@ -130,8 +165,9 @@ export function harmonyCaption(bar: Heard<BarEvent>): Caption {
     // Both moved: the notes, then home.
     text = `${(REASON[bar.why] ?? REASON[1]!)(to).split(" → ")[0]}, and ${(REASON[bar.home] ?? REASON[3]!)(to).toLowerCase()}`;
   }
+  // The one note that changed, old to new.
   const swap = changedNote(from, to);
-  if (swap) text += ` (${swap[0]} for ${swap[1]})`;
+  if (swap) text += ` (${swap[1]} becomes ${swap[0]})`;
   if (bar.day > 0) return { text: `${mountainTime(bar.day)} · ${text.charAt(0).toLowerCase()}${text.slice(1)}`, receipt: "scheduled", at: bar.at, family: "harmony" };
   return { text, receipt: "scheduled", at: bar.at, family: "harmony", intro: INTROS.harmony };
 }
@@ -165,21 +201,22 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
   switch (family) {
     case "trax": {
       const route = schedule.routeName(f.route);
-      if (f.obs) return { ...base, text: `${route} · ${schedule.stopName(f.stop)} · ${lateness(f.late)}`, receipt: "live", observed: f.ev };
-      return { ...base, text: `${route} · ${schedule.stopName(f.stop)} · departing ${mountainTime(f.ev)}`, receipt: "scheduled" };
+      const stop = schedule.stopName(f.stop);
+      if (f.obs) return { ...base, text: `${route} left ${stop}${Math.abs(f.late) < 60 ? " on time" : `, ${lateness(f.late)}`}`, receipt: "live", observed: f.ev };
+      return { ...base, text: `${route} leaving ${stop} at ${mountainTime(f.ev)}`, receipt: "scheduled" };
     }
     case "frontrunner":
-      if (f.obs) return { ...base, text: `FrontRunner at Salt Lake Central · ${lateness(f.late)}`, receipt: "live", observed: f.ev };
-      return { ...base, text: `FrontRunner at Salt Lake Central · ${mountainTime(f.ev)}`, receipt: "scheduled" };
+      if (f.obs) return { ...base, text: `FrontRunner pulled into Salt Lake Central${Math.abs(f.late) < 60 ? " on time" : `, ${lateness(f.late)}`}`, receipt: "live", observed: f.ev };
+      return { ...base, text: `FrontRunner due at Salt Lake Central at ${mountainTime(f.ev)}`, receipt: "scheduled" };
     case "skibus": {
       const r = schedule.network.routes[f.route];
       const where = SKI_ROUTE[r?.short ?? ""] ?? "up the canyon";
-      return { ...base, text: `Ski bus ${r?.short ?? ""} ${where}`.replace("  ", " "), receipt: "scheduled" };
+      return { ...base, text: `Ski bus ${r?.short ?? ""} heading ${where}`.replace("  ", " "), receipt: "scheduled" };
     }
     case "bike":
       return {
         ...base,
-        text: `GREENbike · a bike ${f.v < 0 ? "out" : "back"} at ${valley.bikeStation(f.stop)}`,
+        text: `A GREENbike ${f.v < 0 ? "checked out" : "returned"} at ${valley.bikeStation(f.stop)}`,
         receipt: "live",
         observed: f.ev,
       };
@@ -200,24 +237,76 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
     case "ground": {
       const g = valley.ground;
       if (!g) return skyCaption(base, valley, key);
-      return { ...base, text: `The ground at ${g.station}`, receipt: g.receipt, observed: g.observed };
+      return {
+        ...base,
+        text: `The city's rumble under ${g.station}: ${Math.round(g.level * 100)}% of a busy day there`,
+        receipt: g.receipt,
+        observed: g.observed,
+      };
     }
     case "wind": {
       const mph = Math.round(f.v * 2.237);
-      return { ...base, text: `Gusts to ${mph} mph on the ridges`, receipt: valley.wind?.receipt ?? "live", observed: valley.wind?.observed };
+      return { ...base, text: `Gusts to ${mph} mph on the ridges, so the harp sounds higher`, receipt: valley.wind?.receipt ?? "live", observed: valley.wind?.observed };
     }
     case "snow":
-      return { ...base, text: `Snow falling in the Cottonwoods`, receipt: valley.snow?.receipt ?? "live", observed: valley.snow?.observed };
+      return { ...base, text: `Snow falling in the Cottonwoods: the sparkle`, receipt: valley.snow?.receipt ?? "live", observed: valley.snow?.observed };
     case "sky":
       return skyCaption(base, valley, key);
+    case "air": {
+      const air = valley.air;
+      if (!air || !Number.isFinite(air.pm25)) return null;
+      const pm = Math.round(air.pm25);
+      const inversion = air.inversionC >= 4;
+      const text = inversion
+        ? `Inversion: ${fmt1(air.inversionC)} °C warmer aloft, PM2.5 ${pm}, a lid on the reverb`
+        : pm >= 35.5
+          ? `Unhealthy air, PM2.5 ${pm}: the skyline's a silhouette`
+          : pm >= 12
+            ? `Hazy, PM2.5 ${pm}: haze on the pad`
+            : `Clean air, PM2.5 ${pm}: every ridge in the skyline`;
+      return { ...base, text, receipt: air.receipt, observed: air.observed };
+    }
+    case "river": {
+      const r = valley.river;
+      if (!r) return null;
+      const pct = Math.round(r.position * 100);
+      const how = r.position >= 0.75 ? "running high, so the bass walks" : r.position <= 0.25 ? "running low, so the bass holds long notes" : "about usual for the date";
+      return { ...base, text: `Jordan River ${Math.round(r.cfs)} cfs, ${ordinal(pct)} percentile: ${how}`, receipt: r.receipt, observed: r.observed };
+    }
+    case "buses": {
+      const perMinute = Math.round(f.v);
+      const out = valley.busesOut;
+      return out
+        ? { ...base, text: `${out.count.toLocaleString("en-US")} buses out, making ${perMinute} stops a minute: the hats and shakers`, receipt: "live", observed: out.observed }
+        : { ...base, text: `Buses making ${perMinute} stops a minute: the hats and shakers`, receipt: "scheduled" };
+    }
+    case "late": {
+      const min = Math.round(f.v / 60);
+      const ms = Math.round(Math.min(30, f.v / 6));
+      return { ...base, text: `Trains running ${min} min late on average: the drums lay back ${ms} ms`, receipt: "live" };
+    }
+    case "alert": {
+      const a = valley.alerts;
+      if (!a?.names.length) return null;
+      return { ...base, text: `${a.names[0]} for the valley: tension, and fills in the drums`, receipt: a.receipt, observed: a.observed };
+    }
   }
   return null;
+}
+
+/** 1st, 2nd, 3rd, 4th… */
+function ordinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${n}${suffix}`;
 }
 
 function skyCaption(base: { at: number; intro?: string }, valley: ValleyNow, key: Key): Caption | null {
   const sky = valley.sky;
   if (!sky || !sky.description) return null;
-  return { ...base, family: "sky", text: `${sky.description} over the valley · ${keyName(key)}`, receipt: sky.receipt, observed: sky.observed };
+  // The sky picks how bright the mode is: Lydian and major bright, minor dark.
+  const lean = key.r <= 1 ? "so the mode is bright" : key.r >= 3 ? "so the mode leans dark" : "so the mode sits in between";
+  return { ...base, family: "sky", text: `${sky.description} over the valley, ${lean}: ${keyName(key)}`, receipt: sky.receipt, observed: sky.observed };
 }
 
 export { fmt1 };

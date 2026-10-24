@@ -12,6 +12,8 @@ import { Valley, daypartName } from "./app/valley.ts";
 import { PlayScreen } from "./app/screen.ts";
 import { keyName } from "./app/music.ts";
 import { Menu } from "./app/menu.ts";
+import { Explainer } from "./app/explain.ts";
+import { withTerms } from "./app/lowdown.ts";
 import { Ground, GroundSource } from "./data/ground.ts";
 import { Kind, encodeTwelve } from "./engine/protocol.ts";
 
@@ -85,6 +87,9 @@ async function main(): Promise<void> {
   let valley: Valley | null = null;
   let host: Host | null = null;
   let screen: PlayScreen | null = null;
+  /** The menu and the explanations: there before the tap, so the start
+   * screen's readings explain themselves too. */
+  let menu: Menu | null = null;
   let listen = { text: "Tuning up…", enabled: false };
 
   // --- The boot screen, redrawn on resize with its button's state intact.
@@ -104,8 +109,8 @@ async function main(): Promise<void> {
     if (!valley) return;
     const s1 = app.querySelector('[data-slot="status1"]');
     const s2 = app.querySelector('[data-slot="status2"]');
-    if (s1) s1.textContent = valley.status1();
-    if (s2) s2.textContent = valley.status2();
+    if (s1) s1.innerHTML = withTerms(valley.status1());
+    if (s2) s2.innerHTML = withTerms(valley.status2());
   };
   const drawBoot = () => {
     if (screen) return;
@@ -120,6 +125,7 @@ async function main(): Promise<void> {
       skylineHeight: Math.round(Math.max(140, Math.min(260, w * 0.5, window.innerHeight * 0.22))),
     });
     applyListen();
+    setStatus();
     button()?.addEventListener("click", () => start());
   };
   let resized = 0;
@@ -150,12 +156,12 @@ async function main(): Promise<void> {
       schedule,
       valley: v,
       onVantage: (code) => h.setVantage(code),
-      onMenu: () => menu.open(),
+      onMenu: () => menu?.open(),
       onPause: () => void toggle(),
       onLive: () => h.post(Kind.TWELVE, encodeTwelve(null)),
     });
     screen = s;
-    const menu = new Menu({ host: h, valley: v, schedule, screen: s, base: BASE, conductor });
+    menu?.setScreen(s);
     h.onEvent((e: Heard<EngineEvent>) => {
       if (e.t === "bar") s.onBar(e);
       else if (e.t === "feat") s.onFeature(e);
@@ -221,6 +227,12 @@ async function main(): Promise<void> {
   const h = host;
   const v = new Valley(h, schedule);
   const conductor = conductorAt ? new Conductor(conductorAt, h, v) : null;
+  const m = new Menu({ host: h, valley: v, schedule, screen: null, base: BASE, conductor });
+  menu = m;
+  new Explainer(
+    () => m.lowdownCtx(),
+    (id) => m.lowdown(id),
+  );
   // A handle for the end-to-end test and for the curious.
   Object.assign(window, {
     __wasatch: {

@@ -113,9 +113,9 @@ export function bootScene(opts: BootSceneOpts = {}): string {
     ${cloudSvg("boot__cloud--a", cloudFill)}${cloudSvg("boot__cloud--b", cloudFill)}${cloudSvg("boot__cloud--c", cloudFill)}
     ${gullsFar}
   </div>
-  <div class="boot__stickers" aria-hidden="true">
-    <div class="boot__sticker boot__sticker--a">${sticker(a)}</div>
-    <div class="boot__sticker boot__sticker--b">${sticker(b)}</div>
+  <div class="boot__stickers">
+    <div class="boot__sticker boot__sticker--a" data-topic="stickers" tabindex="0" aria-label="${a}: what's this?">${sticker(a)}</div>
+    <div class="boot__sticker boot__sticker--b" data-topic="stickers" tabindex="0" aria-label="${b}: what's this?">${sticker(b)}</div>
   </div>
   <h1 class="boot__title"><span class="boot__title-a">Wasatch</span><span class="boot__title-b">Symphony</span></h1>
   <div class="sign boot__status" role="status" aria-live="polite">

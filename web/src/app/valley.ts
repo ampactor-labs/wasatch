@@ -20,6 +20,7 @@ import {
 import type { Host } from "../engine/host.ts";
 import { Kind, encodeBikes, encodeDay, encodeNetwork, encodeQuakes, encodeSky, encodeSkyline, encodeSlow, type Fleet } from "../engine/protocol.ts";
 import { utcNow } from "../engine/clock.ts";
+import { STATIONS } from "../data/ground.ts";
 import { CREST_ELEV_FT } from "../art/crest-data.ts";
 import { mountainDay, mountainHour, mountainTime, type ValleyNow } from "./captions.ts";
 import type { Schedule } from "./schedule.ts";
@@ -306,7 +307,20 @@ export class Valley {
       snow: this.snow ? { newIn: this.snow.value.newIn, observed: this.snow.observed, receipt: this.snow.receipt } : undefined,
       quakes: this.quakes?.value ?? [],
       bikeStation: (i) => this.bikes.stationName(i),
-      ground: this.ground ? { station: this.ground.station, receipt: "live", observed: this.ground.observed } : undefined,
+      ground: this.ground ? this.loudestGround(this.ground) : undefined,
+      river: this.river ? { ...this.river.value, observed: this.river.observed, receipt: this.river.receipt } : undefined,
+      air: sky ? { pm25: sky.value.pm25, inversionC: sky.value.inversionC, observed: sky.observed, receipt: sky.receipt } : undefined,
+      alerts: sky ? { names: sky.value.alerts, observed: sky.observed, receipt: sky.receipt } : undefined,
+      busesOut: this.liveFleet() ? { count: this.liveFleet()!.counts.buses, observed: this.liveFleet()!.t } : undefined,
     };
+  }
+
+  /** The station whose band is loudest against its own busy day. */
+  private loudestGround(g: GroundState): NonNullable<ValleyNow["ground"]> {
+    let best = 0;
+    g.levels.forEach((l, i) => {
+      if (l > (g.levels[best] ?? 0)) best = i;
+    });
+    return { station: STATIONS[best]?.name ?? g.station, level: g.levels[best] ?? 0, receipt: "live", observed: g.observed };
   }
 }

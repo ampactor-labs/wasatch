@@ -40,6 +40,7 @@ import { midiName } from "./music.ts";
 import { dialLabels, homePos, keyName, noteName, push, type Key } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
 import { daypartName, type Valley } from "./valley.ts";
+import { FAMILY_TOPIC, STICKER_TOPIC } from "./lowdown.ts";
 import { season } from "../data/feeds.ts";
 import { STATIONS } from "../data/ground.ts";
 
@@ -127,24 +128,24 @@ export class PlayScreen {
 
   mount(): void {
     this.root.innerHTML = `<main class="play">
-      <header class="play__sky">
+      <header class="play__sky" data-topic="theme">
         <div class="play__skyline"></div>
       </header>
-      <div class="play__status"><span class="play__status-line"><span data-slot="clock"></span></span><span class="play__status-line"><span data-slot="key"></span><span data-slot="section"></span></span><button type="button" class="play__live" data-action="share" hidden>Share this day</button><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
+      <div class="play__status"><span class="play__status-line"><span data-slot="clock" data-topic="sync" tabindex="0"></span><span data-slot="daypart" data-topic="dayparts" tabindex="0"></span></span><span class="play__status-line"><span data-slot="key" data-topic="key" tabindex="0"></span><span data-slot="section" data-topic="sections" tabindex="0"></span><span data-slot="bpm" data-topic="tempo" tabindex="0"></span></span><button type="button" class="play__live" data-action="share" hidden>Share this day</button><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
       <div class="play__note" aria-hidden="true"></div>
       <section class="play__valley">
         <div class="play__mapwrap">
-          <div class="play__map" aria-label="The valley map"></div>
-          <div class="play__sticker play__sticker--a" aria-hidden="true"></div>
-          <div class="play__sticker play__sticker--b" aria-hidden="true"></div>
+          <div class="play__map" aria-label="The valley map" data-topic="map"></div>
+          <div class="play__sticker play__sticker--a" tabindex="0"></div>
+          <div class="play__sticker play__sticker--b" tabindex="0"></div>
         </div>
-        <div class="play__dial"></div>
+        <div class="play__dial" data-topic="key"></div>
         <div class="play__podium" aria-hidden="true">${gull({ pose: "conduct" })}</div>
       </section>
       <section class="play__captions" aria-live="polite" aria-label="What you're hearing"></section>
       <nav class="play__bar">
         <div class="play__vantage" role="radiogroup" aria-label="Where you're listening from">
-          <span class="play__vantage-label" aria-hidden="true">Listen from</span>
+          <span class="play__vantage-label" data-topic="vantages">Listen from</span>
           ${VANTAGES.map(
             (v) => `<button type="button" role="radio" class="vantage" data-vantage="${v.code}" aria-checked="${v.code === 0}">
               ${trailIcon(VANTAGE_TRAIL[v.id], { size: 30 })}<span class="vantage__long">${esc(v.name)}</span><span class="vantage__short">${esc(v.short)}</span></button>`,
@@ -368,7 +369,7 @@ export class PlayScreen {
       </svg>
       <div class="play__marks" aria-hidden="true">${STATIONS.map((s, band) => {
         const [x, y] = proj.project(s.lat, s.lon);
-        return `<div class="seis" data-band="${band}" style="left:${n(x)}px;top:${n(y)}px"><i class="seis__ring"></i><i class="seis__dot"></i></div>`;
+        return `<div class="seis" data-band="${band}" data-topic="ground" style="left:${n(x)}px;top:${n(y)}px"><i class="seis__ring"></i><i class="seis__dot"></i></div>`;
       }).join("")}</div>`;
     const routes = host.querySelector("svg.map .map-routes");
     if (routes) routes.innerHTML = this.routesSvg();
@@ -535,10 +536,18 @@ export class PlayScreen {
 
   private renderStickers(): void {
     const [a, b] = this.stickers;
-    const sa = this.root.querySelector(".play__sticker--a");
-    const sb = this.root.querySelector(".play__sticker--b");
-    if (sa) sa.innerHTML = sticker(a);
-    if (sb) sb.innerHTML = sticker(b);
+    const sa = this.root.querySelector<HTMLElement>(".play__sticker--a");
+    const sb = this.root.querySelector<HTMLElement>(".play__sticker--b");
+    // Each sticker explains why the valley earned it.
+    for (const [el, kind] of [
+      [sa, a],
+      [sb, b],
+    ] as const) {
+      if (!el) continue;
+      el.innerHTML = sticker(kind);
+      el.dataset.topic = STICKER_TOPIC[kind] ?? "stickers";
+      el.setAttribute("aria-label", `${kind}: what's this?`);
+    }
     if (!reducedMotion()) {
       sa?.firstElementChild?.classList.add("sticker-pop");
       sb?.firstElementChild?.classList.add("sticker-pop");
@@ -575,7 +584,8 @@ export class PlayScreen {
     if (this.day) {
       this.dayTick();
     } else {
-      if (clock) clock.textContent = `${v.shift ? "⏪ " : ""}${mountainTime(t)} · ${daypartName(t)}`;
+      if (clock) clock.textContent = `${v.shift ? "⏪ " : ""}${mountainTime(t)}`;
+      this.setSlot("daypart", daypartName(t));
       this.drawVehicles();
     }
     const s = this.pickStickers();
@@ -590,7 +600,8 @@ export class PlayScreen {
   private dayTick(): void {
     const now = this.dayNow();
     const clock = this.root.querySelector('[data-slot="clock"]');
-    if (clock) clock.textContent = `⏩ ${mountainTime(now)} · ${daypartName(now)}`;
+    if (clock) clock.textContent = `⏩ ${mountainTime(now)}`;
+    this.setSlot("daypart", daypartName(now));
     this.drawVehicles();
   }
 
@@ -641,7 +652,8 @@ export class PlayScreen {
     const keyEl = this.root.querySelector('[data-slot="key"]');
     if (keyEl) keyEl.textContent = keyName(this.key);
     const secEl = this.root.querySelector('[data-slot="section"]');
-    if (secEl) secEl.textContent = `${SECTION_NAMES[e.kind] ?? ""} · ${Math.round(e.bpm)} BPM`;
+    if (secEl) secEl.textContent = SECTION_NAMES[e.kind] ?? "";
+    this.setSlot("bpm", `${Math.round(e.bpm)} BPM`);
     if (e.kind !== 0) this.carve(e);
     if (Math.abs(e.haze - this.haze) > 0.08) {
       this.haze = e.haze;
@@ -716,7 +728,7 @@ export class PlayScreen {
     if (!host) return;
     host.innerHTML = this.captions
       .map(
-        (k, i) => `<div class="sign sign--${k.receipt} caption${i ? " sign--small caption--old" : " caption--new"}">
+        (k, i) => `<div class="sign sign--${k.receipt} caption${i ? " sign--small caption--old" : " caption--new"}" data-topic="${FAMILY_TOPIC[k.family] ?? "receipts"}" tabindex="0">
           <p class="sign__line">${esc(k.text)}</p>${i === 0 && k.intro ? `<p class="sign__line caption__intro">${esc(k.intro)}</p>` : ""}
           <span class="sign__receipt">${esc(receiptText(k))}</span></div>`,
       )
@@ -730,6 +742,16 @@ export class PlayScreen {
 
   currentKey(): Key {
     return this.key;
+  }
+
+  private setSlot(name: string, text: string): void {
+    const el = this.root.querySelector(`[data-slot="${name}"]`);
+    if (el && el.textContent !== text) el.textContent = text;
+  }
+
+  /** Where the listener is listening from (0 the map). */
+  currentVantage(): number {
+    return this.vantage;
   }
 
   currentBar(): Heard<BarEvent> | null {

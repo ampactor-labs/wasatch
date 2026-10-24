@@ -103,6 +103,8 @@ a {
 .play__status-line + .play__status-line::before,
 .play__status-line [data-slot] + [data-slot]::before {
   content: "·";
+  /* An inline block, so a slot's underline doesn't run under it. */
+  display: inline-block;
   margin: 0 10px;
   color: var(--granite);
 }
@@ -145,7 +147,7 @@ a {
 .play__sticker {
   position: absolute;
   width: clamp(58px, 17vw, 124px);
-  pointer-events: none;
+  cursor: pointer;
 }
 .play__sticker--a {
   left: 4px;
@@ -264,7 +266,7 @@ a {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   white-space: nowrap;
-  pointer-events: none;
+  cursor: pointer;
 }
 .vantage {
   appearance: none;
@@ -635,37 +637,62 @@ a {
   font: 700 22px/1 var(--font-mono);
 }
 
-.table-wrap {
-  overflow-x: auto;
+/* The lowdown: one card per topic. */
+.topics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 12px;
+}
+.topic {
+  padding: 12px 14px 10px;
   border: 3px solid var(--ink);
   border-radius: 12px;
   background: var(--white);
+  scroll-margin-top: 12px;
 }
-.mappings {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
+.topic--focus {
+  box-shadow: 0 0 0 4px var(--sun), var(--shadow-hard);
+  animation: topic-focus 1.6s ease-out;
 }
-.mappings th,
-.mappings td {
-  padding: 7px 9px;
-  border-bottom: 1px solid rgb(27 31 59 / 0.15);
-  text-align: left;
-  vertical-align: top;
+@keyframes topic-focus {
+  from {
+    background: rgb(255 210 63 / 0.55);
+  }
+  to {
+    background: var(--white);
+  }
 }
-.mappings thead th {
-  font: 700 11px/1.2 var(--font-mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  background: var(--ink);
-  color: var(--powder);
+.topic__title {
+  margin: 0 0 4px;
+  font: 400 19px/1.1 var(--font-display);
 }
-.mappings tbody th {
-  white-space: nowrap;
+.topic__now {
+  margin: 0 0 6px;
 }
-.mappings .num {
-  font-family: var(--font-mono);
+.topic__now:empty {
+  display: none;
+}
+.topic__now .num {
+  font: 700 13px/1.4 var(--font-mono);
   color: #b4441c;
+}
+.topic__about {
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.topic__meta {
+  margin: 0;
+  font: 700 11px/1.4 var(--font-mono);
+  letter-spacing: 0.02em;
+  opacity: 0.8;
+}
+.tag--you {
+  background: var(--sun);
+}
+.tag--waiting,
+.tag--live-only {
+  background: var(--powder);
 }
 .tag {
   display: inline-block;
@@ -1032,4 +1059,93 @@ a {
   color: var(--powder);
   font: inherit;
   cursor: pointer;
+}
+
+/* Everything that explains itself: a dotted underline on the words, a
+   pointer everywhere. */
+[data-topic] {
+  cursor: pointer;
+}
+.term {
+  appearance: none;
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-decoration: underline dotted;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.play__status [data-topic] {
+  text-decoration: underline dotted rgb(247 244 234 / 0.45);
+  text-underline-offset: 3px;
+}
+[data-topic]:focus-visible {
+  outline: 3px solid var(--pink);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.seis {
+  pointer-events: auto;
+}
+
+/* The toast: what a thing is, in a breath; tapped, the lowdown. */
+.toast {
+  position: fixed;
+  z-index: 60;
+  opacity: 0;
+  translate: 0 6px;
+  transition:
+    opacity 0.18s ease,
+    translate 0.18s ease;
+}
+.toast--on {
+  opacity: 1;
+  translate: 0 0;
+}
+.toast__card {
+  appearance: none;
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px 9px;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  background: var(--ink);
+  color: var(--powder);
+  box-shadow: 4px 5px 0 rgb(27 31 59 / 0.35);
+  text-align: left;
+  font: 400 14px/1.4 var(--font-body);
+  cursor: pointer;
+}
+.toast__title {
+  color: var(--sun);
+  font: 400 17px/1.1 var(--font-display);
+}
+.toast__now {
+  font: 700 12px/1.4 var(--font-mono);
+  color: #ffb08a;
+}
+.toast__receipt {
+  opacity: 0.8;
+  font-weight: 400;
+}
+.toast__more {
+  justify-self: end;
+  color: var(--sun);
+  font: 700 12px/1.2 var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .topic--focus {
+    transition: none;
+    animation: none;
+  }
 }

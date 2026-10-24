@@ -60,7 +60,14 @@ sealed windows on disk across restarts; `/data` on Railway).
 The repository's `Dockerfile` is the conductor's image: Node 24, the
 conductor's sources and the page code it shares, no build step. Railway
 builds it on its own (the site itself is GitHub Pages and is never built
-there). From the repository's root, with the project linked:
+there).
+
+The service deploys from GitHub: a push to `main` that touches what the
+conductor runs (`conductor/**`, `web/src/data/**`,
+`web/src/engine/protocol.ts`, `Dockerfile`, `package.json`, its watch
+patterns) rebuilds and redeploys it; any other push leaves it alone. To
+ship local changes without pushing, from the repository's root with the
+project linked:
 
 ```sh
 railway up --ci -m "what changed"

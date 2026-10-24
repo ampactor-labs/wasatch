@@ -226,7 +226,24 @@ monospaced face, safety orange only on measured values.
   arc is a key change; a move of the dot is a change of mode. An arrow shows
   where the valley is pushing. Two minutes of watching teaches the rule.
 - **The caption line** at the bottom: the last three things you heard, each
-  with its receipt ("live 5:42 PM", "cached 4:45 PM", "scheduled").
+  with its receipt ("live 5:42 PM", "cached 4:45 PM", "scheduled"). It's a
+  feed with a cadence, set in the score so every phone shows the same cards:
+  at most two train departures a phrase, however busy the lines, and one
+  card a phrase about the valley at large. That card is what's notable now
+  every third phrase (snow falling, an alert, a gale on the ridges, a lid of
+  bad air, the trains running late, taking turns) and otherwise a turn
+  through the lake, the buses, the sky, the ground, the river and the air,
+  so a few minutes' listening reaches all of it. Each card is a sentence
+  that says what happened and what it played: "Red Line left Millcreek,
+  4 min late", "Clean air, PM2.5 5: every ridge in the skyline", "202 buses
+  out, making 149 stops a minute: the hats and shakers".
+- **Everything explains itself.** Tap any reading (a word in the status
+  lines, the key, the section, the tempo, a card, a sticker, the dial, the
+  map, a seismometer, the skyline) and a toast says what it is and what the
+  piece does with it, with its live reading; it fades after a few seconds,
+  and tapped, it opens Show mappings at that topic. One list of topics
+  (web/src/app/lowdown.ts) is the toast, the lowdown and the receipts, so
+  they can't disagree.
 - **Vantage**: a four-way control (Everywhere, Downtown, The Canyons, The
   Lake).
 - **Play along**, **Add your run**, **Rewind**, **Tune to the room** behind a
@@ -973,10 +990,13 @@ All optional; the default is just listening.
   low-latency path reports about 24 ms whatever the headset, because it leaves
   the Bluetooth delay out, and there the microphone works raw with
   `echoCancellation: false`.
-- **Show mappings.** The data-nerd view: every stream, its role, its last
-  value, live, cached or scheduled, with the source; a live spectrogram of the
-  mix; the ground's 0–50 Hz spectrogram for each station, where the day's
-  traffic is visible as a rising band.
+- **Show mappings.** The lowdown on everything: a card for every stream
+  and every musical idea (the key and the dial, the sections, the tempo,
+  the day's parts, the theme, where you listen from, the receipts, the
+  clock, the map, the stickers), each with its live reading and receipt,
+  what it is, what it plays and its source; a live spectrogram of the mix.
+  It opens before Listen too, from the start screen's readings. (The
+  ground's 0–50 Hz spectrogram per station is still to come.)
 
 ### A Day in Twelve Minutes
 

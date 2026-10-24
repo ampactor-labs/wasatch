@@ -107,6 +107,7 @@ try {
       mkdirSync(shots, { recursive: true });
       await page.screenshot({ path: join(shots, `${view.name}-boot.png`) });
     }
+    if (view.name === "phone" && !query) await explains(page, failures, shots);
     await page.click('button[data-action="listen"]');
     await page.waitForSelector(".play", { timeout: 10_000 });
     await new Promise((r) => setTimeout(r, seconds * 1000));
@@ -138,6 +139,17 @@ try {
       if (!panel.some((r) => /% of a core/.test(r) && !/^engine 0\.0%/.test(r))) failures.push(`${view.name}: ?debug didn't measure the engine`);
     }
     if (view.name === "phone" && !query) await vantages(page, failures, shots);
+    if (view.name === "phone" && !query) {
+      // While playing, a caption card explains itself too.
+      const sign = await page.$(".play__captions .sign[data-topic]");
+      const topic = await sign?.evaluate((e) => (e as HTMLElement).dataset.topic);
+      await sign?.click();
+      await new Promise((r) => setTimeout(r, 400));
+      const title = await page.$eval(".toast--on .toast__title", (e) => e.textContent ?? "").catch(() => "");
+      console.log(`  a card (${topic}) explains itself: "${title}"`);
+      if (!title) failures.push("a caption card didn't explain itself");
+      await page.mouse.click(5, 5);
+    }
     if (view.name === "desktop" && !query) await interactions(page, failures);
     for (const e of real) failures.push(`${view.name}: ${e}`);
     for (const e of errors) console.log(`  ${e}`);
@@ -147,6 +159,34 @@ try {
   await browser.close();
   server?.close();
 }
+/** Before Listen: a data word explains itself in a toast, and the toast
+ * opens the lowdown there. */
+async function explains(page: import("puppeteer-core").Page, failures: string[], shots: string | undefined): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const terms = await page.$$eval(".term[data-topic]", (t) => t.map((x) => `${x.textContent}→${(x as HTMLElement).dataset.topic}`));
+  console.log(`  explainable words: ${terms.join(", ")}`);
+  if (!terms.some((t) => t.endsWith("→buses"))) failures.push("the buses don't explain themselves");
+  await page.click('.term[data-topic="buses"]');
+  await sleep(400);
+  const toast = await page.$eval(".toast--on", (e) => (e as HTMLElement).innerText).catch(() => "");
+  console.log(`  toast: ${toast.replace(/\s+/g, " ").slice(0, 160)}`);
+  if (!/Buses/.test(toast)) failures.push("tapping buses showed no toast");
+  if (shots) await page.screenshot({ path: join(shots, "phone-toast.png") });
+  await page.click(".toast__card");
+  await sleep(800);
+  const focus = await page.$eval(".sheet--open .topic--focus", (e) => e.id).catch(() => "");
+  console.log(`  the lowdown opened at ${focus || "nothing"}`);
+  if (focus !== "topic-buses") failures.push(`the toast didn't open the lowdown at the buses (${focus})`);
+  if (shots) await page.screenshot({ path: join(shots, "phone-lowdown.png") });
+  await page.click(".sheet__close");
+  await sleep(400);
+  // It fades on its own.
+  await page.click('.term[data-topic="trains"]');
+  await sleep(5200);
+  const gone = await page.$(".toast--on");
+  if (gone) failures.push("the toast didn't fade");
+}
+
 /** Tap each place to listen from: the engine answers with what's near and
  * far, a caption says so, and the map marks the spot. Back to the map last. */
 async function vantages(page: import("puppeteer-core").Page, failures: string[], shots: string | undefined): Promise<void> {
@@ -264,12 +304,12 @@ async function interactions(page: import("puppeteer-core").Page, failures: strin
   // Show mappings.
   await sleep(400);
   await menu("mappings");
-  await page.waitForSelector("table.mappings", { visible: true });
-  await sleep(1500);
-  const rows = await page.$$eval("table.mappings tbody tr", (r) => r.length);
-  const ground = await page.$$eval("table.mappings tbody tr", (r) => r.find((x) => /ground/i.test(x.textContent ?? ""))?.querySelector(".num")?.textContent ?? "");
-  console.log(`  mappings: ${rows} streams · the ground: ${ground}`);
-  if (rows < 10) failures.push(`Show mappings: only ${rows} rows`);
+  await page.waitForSelector(".topics", { visible: true });
+  await sleep(2500);
+  const rows = await page.$$eval(".topic", (r) => r.length);
+  const ground = await page.$eval('[data-now="ground"] .num', (e) => e.textContent ?? "").catch(() => "");
+  console.log(`  mappings: ${rows} topics · the ground: ${ground}`);
+  if (rows < 20) failures.push(`Show mappings: only ${rows} topics`);
   if (shots) await page.screenshot({ path: join(shots, "desktop-mappings.png") });
   await page.click(".sheet__close");
 

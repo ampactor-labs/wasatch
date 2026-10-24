@@ -10,7 +10,8 @@ import { mountainDate, mountainDay, mountainTime, receiptText } from "./captions
 import { keyName, midiName } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
 import { SECTION_NAMES, type PlayScreen } from "./screen.ts";
-import { transitPhrase, type Valley } from "./valley.ts";
+import type { Valley } from "./valley.ts";
+import { TOPICS, type LowdownCtx, type Topic, type TopicId } from "./lowdown.ts";
 import { STATIONS } from "../data/ground.ts";
 import type { Conductor } from "../data/conductor.ts";
 import { Kind, encodeSolo, encodeTwelve } from "../engine/protocol.ts";
@@ -22,7 +23,8 @@ export interface MenuDeps {
   host: Host;
   valley: Valley;
   schedule: Schedule;
-  screen: PlayScreen;
+  /** The play screen, once Listen is tapped; the lowdown opens before it. */
+  screen: PlayScreen | null;
   base: string;
   conductor: Conductor | null;
 }
@@ -34,7 +36,7 @@ const ITEMS: { id: PanelId; title: string; blurb: string; icon: IconName }[] = [
   { id: "run", title: "Add your run", blurb: "A GPX of your run becomes a solo over the valley", icon: "mountain" },
   { id: "rewind", title: "Rewind", blurb: "An earlier hour, or a whole day in twelve minutes", icon: "chairlift" },
   { id: "tune", title: "Line up with a friend", blurb: "Nudge this phone to match the one next to it", icon: "bell" },
-  { id: "mappings", title: "Show mappings", blurb: "Every stream, what it plays, and where it came from", icon: "seismometer" },
+  { id: "mappings", title: "Show mappings", blurb: "The lowdown: every stream, what it plays, and where it came from", icon: "seismometer" },
   { id: "about", title: "About", blurb: "What this is, who made the data, the licenses", icon: "gull-small" },
 ];
 
@@ -137,7 +139,23 @@ export class Menu {
     clearInterval(this.refresh);
     this.tidy();
     this.closeTimer = window.setTimeout(() => (this.sheet.hidden = true), 250);
-    this.deps.screen.root.querySelector<HTMLElement>('[data-action="menu"]')?.focus();
+    this.deps.screen?.root.querySelector<HTMLElement>('[data-action="menu"]')?.focus();
+  }
+
+  /** The play screen, once it exists. */
+  setScreen(screen: PlayScreen): void {
+    this.deps.screen = screen;
+  }
+
+  /** What the lowdown's live readings need. */
+  lowdownCtx(): LowdownCtx {
+    const { valley, schedule, conductor, screen } = this.deps;
+    return { valley, schedule, conductor, bar: screen?.currentBar() ?? null, vantage: screen?.currentVantage() ?? 0 };
+  }
+
+  /** Open the lowdown at `id`. */
+  lowdown(id: TopicId): void {
+    this.mappings(id);
   }
 
   open(): void {
@@ -184,7 +202,7 @@ export class Menu {
       .map(([date, t0]) => ({ date, label: now - t0 < 29 * 3_600_000 ? "Today so far" : `${mountainDay(t0 + 12 * 3_600_000)}, ${mountainDate(t0 + 12 * 3_600_000).replace(/, \d{4}$/, "")}` }));
     const oldest = playable.at(-1)?.[0];
     const newest = playable[0]?.[0];
-    const inDay = this.deps.screen.inDay();
+    const inDay = this.deps.screen?.inDay() ?? false;
     this.show(`<h2 class="sheet__title" id="sheet-title">Rewind</h2>
       ${valley.shift || inDay ? `<button type="button" class="btn btn--sun" data-shift="0">Back to live</button>` : ""}
       <h3 class="sheet__sub">A Day in Twelve Minutes</h3>
@@ -221,7 +239,7 @@ export class Menu {
       .forEach((b) =>
         b.addEventListener("click", async () => {
           const shift = Number(b.dataset.shift);
-          if (this.deps.screen.inDay()) host.post(Kind.TWELVE, encodeTwelve(null));
+          if (this.deps.screen?.inDay()) host.post(Kind.TWELVE, encodeTwelve(null));
           valley.shift = shift;
           await valley.loadDays();
           host.setTimeShift(shift);
@@ -315,11 +333,11 @@ export class Menu {
         const { name, points } = parseGpx(await file.text());
         const { run, notes } = soloFromRun(points, name || file.name.replace(/\.gpx$/i, ""));
         host.post(Kind.SOLO, encodeSolo(notes));
-        screen.startSolo(notes.length);
+        screen?.startSolo(notes.length);
         const ft = Math.round(run.dropM * 3.28084).toLocaleString("en-US");
         const mi = (run.distanceM / 1609.344).toFixed(1);
         result.textContent = `${run.name ? `${run.name}: ` : ""}${ft} ft of vertical, ${mi} mi, ${run.turns} turns, as ${notes.length} notes. It starts at the next bar.`;
-        screen.caption({ text: `Your run: ${ft} ft of vertical, ${run.turns} turns, as a solo`, receipt: "live", observed: Date.now(), at: performance.now(), family: "harmony" });
+        screen?.caption({ text: `Your run: ${ft} ft of vertical, ${run.turns} turns, as a solo`, receipt: "live", observed: Date.now(), at: performance.now(), family: "harmony" });
         if (clip && "MediaRecorder" in window) {
           clip.hidden = false;
           if (hint) hint.hidden = false;
@@ -402,134 +420,71 @@ export class Menu {
 
   // --- Mappings ---------------------------------------------------------------
 
-  private mappingRows(): string {
-    const { valley, schedule, screen } = this.deps;
-    const now = valley.now();
-    const row = (name: string, role: string, value: string, receipt: string, source: string, href: string) =>
-      `<tr><th scope="row">${esc(name)}</th><td>${esc(role)}</td><td class="num">${esc(value)}</td><td><span class="tag tag--${receipt.split(" ")[0]}">${esc(receipt)}</span></td><td><a href="${href}" target="_blank" rel="noopener">${esc(source)}</a></td></tr>`;
-    const r = <T>(x: { receipt: "live" | "cached" | "scheduled"; observed: number; value: T } | null) => (x ? receiptText(x) : "waiting");
-    const sky = valley.sky;
-    const hour = sky?.value.hours.find((h) => h.at === Math.floor((now - 20 * 60_000) / 3_600_000) * 3_600_000);
-    const bar = screen.currentBar();
-    const c = this.deps.conductor;
-    const fleet = valley.liveFleet();
-    const rows = [
-      c
-        ? row(
-            "Transit",
-            "the groove: bells, horn, drums, bass",
-            `${
-              fleet
-                ? transitPhrase(fleet.counts, "out") || "nothing out"
-                : transitPhrase(schedule.transitAt(now), "in service") || "nothing in service"
-            } · ${c.stats.observed} departures seen live, ${c.stats.scheduled} from the schedule`,
-            fleet ? `live ${mountainTime(fleet.t)}` : c.stats.windows ? `live ${mountainTime(c.stats.latest)}` : "waiting",
-            "UTA realtime, by the conductor",
-            "https://www.rideuta.com/",
-          )
-        : row("Transit", "the groove: bells, horn, drums, bass", transitPhrase(schedule.transitAt(now), "in service") || "nothing in service", "scheduled", "UTA GTFS", "https://www.rideuta.com/Rider-Info/Developer-Resources"),
-      row(
-        "Great Salt Lake",
-        "the drone under everything; whether phrases come home",
-        valley.lake ? `${valley.lake.value.ft.toFixed(1)} ft` : "…",
-        r(valley.lake),
-        "USGS 10010000",
-        "https://waterdata.usgs.gov/monitoring-location/USGS-10010000/",
-      ),
-      row(
-        "Jordan River",
-        "a walking bass when it runs high",
-        valley.river ? `${Math.round(valley.river.value.cfs)} cfs · ${Math.round(valley.river.value.position * 100)}th pct` : "…",
-        r(valley.river),
-        "USGS 10171000",
-        "https://waterdata.usgs.gov/monitoring-location/USGS-10171000/",
-      ),
-      row(
-        "Snowbird snow",
-        "the dawn swell; how light the snow's sparkle is",
-        valley.snow ? `${valley.snow.value.newIn.toFixed(0)} in new · ${Math.round(valley.snow.value.ratio * 100)}% of median` : "…",
-        r(valley.snow),
-        "NRCS SNOTEL 766",
-        "https://wcc.sc.egov.usda.gov/nwcc/site?sitenum=766",
-      ),
-      row(
-        "The sky",
-        "how bright the mode is; tension",
-        hour ? `${sky?.value.description || "—"} · cloud ${Number.isFinite(hour.cloud) ? `${Math.round(hour.cloud * 100)}%` : "?"}` : sky?.value.description ?? "…",
-        r(sky),
-        "NWS KSLC",
-        "https://www.weather.gov/slc/",
-      ),
-      row("Alerts", "storms push tension", sky?.value.alerts.length ? sky.value.alerts.join(", ") : "none", r(sky), "NWS alerts", "https://alerts.weather.gov/"),
-      row(
-        "Air",
-        "haze on the pad and the skyline",
-        sky && Number.isFinite(sky.value.pm25) ? `PM2.5 ${sky.value.pm25.toFixed(0)} µg/m³` : "…",
-        r(sky),
-        "Open-Meteo CAMS",
-        "https://open-meteo.com/en/docs/air-quality-api",
-      ),
-      row("Inversion", "the lid: a low ceiling on the reverb", sky ? `${sky.value.inversionC.toFixed(1)} °C warmer aloft` : "…", r(sky), "Open-Meteo", "https://open-meteo.com/"),
-      row(
-        "Ridge wind",
-        "the Aeolian harp",
-        sky && Number.isFinite(sky.value.ridgeGustMs) ? `gusts ${Math.round(sky.value.ridgeGustMs * 2.237)} mph at Alta` : "…",
-        r(sky),
-        "Open-Meteo",
-        "https://open-meteo.com/",
-      ),
-      row(
-        "Earthquakes",
-        "a deep bell, in the chord",
-        valley.quakes?.value.length ? `${valley.quakes.value.length} in 2 days · last M${valley.quakes.value.at(-1)?.mag.toFixed(1)}` : "none",
-        r(valley.quakes),
-        "USGS catalog",
-        "https://earthquake.usgs.gov/earthquakes/map/",
-      ),
-      row("GREENbike", "a marimba pluck per bike out or back", `${valley.bikes.events.length} changes in 10 min`, valley.shift ? "live only" : "live", "GBFS", "https://greenbikeutah.org/"),
-      row(
-        "The ground",
-        "the seismometers, moved up onto the chord",
-        valley.ground ? STATIONS.map((s, i) => `${s.code} ${Math.round((valley.ground?.levels[i] ?? 0) * 100)}`).join(" · ") : "not connected",
-        valley.ground ? "live" : "waiting",
-        "EarthScope · UU",
-        "https://quake.utah.edu/",
-      ),
-      row("Sun and moon", "how bright the mode is", "computed for SLC", "scheduled", "NOAA formulas", "https://gml.noaa.gov/grad/solcalc/"),
-    ];
-    const now2 = bar ? `${keyName({ c: bar.c, r: bar.r })} · ${SECTION_NAMES[bar.kind]} · bar ${bar.bar + 1} of ${bar.bars} · ${bar.chord}` : "";
-    return `<p class="fine">${esc(now2)}</p><div class="table-wrap"><table class="mappings"><thead><tr><th>Stream</th><th>Plays</th><th>Now</th><th>Receipt</th><th>Source</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  /** One topic's live reading, as HTML. */
+  private reading(t: Topic, ctx: LowdownCtx): string {
+    const now = t.now?.(ctx);
+    if (!now) return "";
+    return `<span class="num">${esc(now.value)}</span> <span class="tag tag--${esc(now.receipt.split(" ")[0] ?? "")}">${esc(now.receipt)}</span>`;
   }
 
-  private mappings(): void {
+  private topicCard(t: Topic, ctx: LowdownCtx): string {
+    const meta = [t.plays ? `Plays ${esc(t.plays)}` : "", t.source ? `<a href="${t.source.href}" target="_blank" rel="noopener">${esc(t.source.name)}</a>` : ""].filter(Boolean).join(" · ");
+    return `<section class="topic" id="topic-${t.id}">
+        <h3 class="topic__title">${esc(t.title)}</h3>
+        <p class="topic__now" data-now="${t.id}">${this.reading(t, ctx)}</p>
+        <p class="topic__about">${esc(t.short)} ${esc(t.more)}</p>
+        ${meta ? `<p class="topic__meta">${meta}</p>` : ""}
+      </section>`;
+  }
+
+  /** Show mappings: the lowdown on everything, opened at `focus`. */
+  private mappings(focus?: TopicId): void {
+    const ctx = this.lowdownCtx();
+    const group = (g: Topic["group"]) => TOPICS.filter((t) => t.group === g).map((t) => this.topicCard(t, ctx)).join("");
+    const playing = this.deps.host.ctx.state === "running";
     this.show(`<h2 class="sheet__title" id="sheet-title">Show mappings</h2>
-      <div data-rows>${this.mappingRows()}</div>
-      <h3 class="sheet__sub">The mix, live</h3>
-      <canvas class="spectrogram" width="720" height="200" aria-label="A spectrogram of what's playing"></canvas>`);
+      <p class="sheet__lede">Everything the piece reads from the valley, what it does with it, and where it came from, live.</p>
+      <h3 class="sheet__sub">The valley</h3>
+      <div class="topics">${group("valley")}</div>
+      <h3 class="sheet__sub">The music</h3>
+      <div class="topics">${group("music")}</div>
+      ${playing ? `<h3 class="sheet__sub">The mix, live</h3><canvas class="spectrogram" width="720" height="200" aria-label="A spectrogram of what's playing"></canvas>` : ""}`);
+    if (focus) {
+      const card = this.body().querySelector<HTMLElement>(`#topic-${focus}`);
+      if (card) {
+        card.classList.add("topic--focus");
+        // After the sheet's slide starts, so it scrolls inside the card.
+        requestAnimationFrame(() => card.scrollIntoView({ block: "start", behavior: "auto" }));
+      }
+    }
     this.refresh = window.setInterval(() => {
-      const rows = this.body().querySelector("[data-rows]");
-      if (rows) rows.innerHTML = this.mappingRows();
+      const c = this.lowdownCtx();
+      for (const t of TOPICS) {
+        const el = this.body().querySelector(`[data-now="${t.id}"]`);
+        if (el) el.innerHTML = this.reading(t, c);
+      }
     }, 2000);
+    if (!playing) return;
     const canvas = this.body().querySelector<HTMLCanvasElement>(".spectrogram");
     const analyser = this.deps.host.analyser(2048);
     if (!canvas || !analyser) return;
     this.cleanup.push(() => this.deps.host.output()?.disconnect(analyser));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const ctx2d = canvas.getContext("2d");
+    if (!ctx2d) return;
     const bins = new Float32Array(analyser.frequencyBinCount);
     const sr = this.deps.host.ctx.sampleRate;
     const draw = () => {
       analyser.getFloatFrequencyData(bins);
       // Scroll left one pixel, then paint the newest column on a log axis.
-      ctx.drawImage(canvas, -1, 0);
+      ctx2d.drawImage(canvas, -1, 0);
       const h = canvas.height;
       for (let y = 0; y < h; y++) {
         const f = 30 * Math.pow(16000 / 30, 1 - y / h);
         const k = Math.min(bins.length - 1, Math.round((f / (sr / 2)) * bins.length));
         const db = bins[k] ?? -140;
         const v = Math.max(0, Math.min(1, (db + 110) / 80));
-        ctx.fillStyle = `hsl(${250 - 230 * v} 90% ${8 + 60 * v}%)`;
-        ctx.fillRect(canvas.width - 1, y, 1, 1);
+        ctx2d.fillStyle = `hsl(${250 - 230 * v} 90% ${8 + 60 * v}%)`;
+        ctx2d.fillRect(canvas.width - 1, y, 1, 1);
       }
       this.raf = requestAnimationFrame(draw);
     };

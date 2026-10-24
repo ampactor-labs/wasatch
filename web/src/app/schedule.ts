@@ -128,6 +128,20 @@ export class Schedule {
     return [date, next].filter((d) => d in this.manifest.days);
   }
 
+  /** The ski buses scheduled on the service day covering `utcMs`, by route
+   * short name ("994": 2). */
+  skiTrips(utcMs: number): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const d of this.days.values()) {
+      if (utcMs < d.t0 || utcMs >= d.t0 + 24 * 3_600_000) continue;
+      for (const s of d.day.ski) {
+        const short = this.network.routes[s.r]?.short ?? "?";
+        out[short] = (out[short] ?? 0) + 1;
+      }
+    }
+    return out;
+  }
+
   /** The earliest and latest instants the compiled schedule covers. */
   span(): [number, number] {
     const t0s = Object.values(this.manifest.t0);

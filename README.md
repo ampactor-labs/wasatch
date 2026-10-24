@@ -47,8 +47,13 @@ Everything else is in the menu, all optional:
 - **Line up with a friend.** Phones play the same bar; on Android and
   desktop, *Tune to the room* listens for the phone next to it and lines
   this one up (a Bluetooth speaker's delay included). iPhones get a nudge.
-- **Show mappings.** Every stream, what it plays, its last value, where it
-  came from, and a live spectrogram.
+- **Show mappings.** The lowdown: every stream and every musical idea, what
+  it plays, its live value, where it came from, and a live spectrogram.
+
+Anything on screen that comes from the valley explains itself: tap a word
+in the status lines, a card in the feed, the key, a sticker, the dial or
+the map, and a toast says what it is and what the music does with it; tap
+the toast for the lowdown.
 
 [DESIGN.md](DESIGN.md) is the whole design: the music theory, the data, the
 sync, and why each choice was made.
