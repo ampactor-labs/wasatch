@@ -252,10 +252,11 @@ export interface SkyNow {
 const SLOT_WINDOW_MS = 15 * 60_000;
 
 /**
- * The hour slot an observation fills. Slot H takes the last observation made
- * in the quarter hour before H:00 (KSLC's routine report is at :54). The plan
- * first reads slot H at H:20, so by then every phone has fetched the same
- * report; anything later in the hour never changes a slot already in use.
+ * The hour slot an observation fills. Slot H takes a report made in the
+ * quarter hour before H:00, the one nearest :54 (KSLC's routine hourly
+ * report; the station also reports every five minutes). The plan first
+ * reads slot H at H:20, so by then every phone has fetched the same report;
+ * anything later in the hour never changes a slot already in use.
  */
 export function obsSlot(obsMs: number): number | null {
   const next = Math.ceil(obsMs / HOUR) * HOUR;
@@ -271,130 +272,233 @@ export function alertLevel(event: string): number {
   return 0.2;
 }
 
-export function fetchSky(): Promise<Reading<SkyNow> | null> {
-  return cached("sky", async () => {
-    const [obs, alerts, slc, alta, air] = await Promise.all([
-      json<{ features: NwsObs[] }>("https://api.weather.gov/stations/KSLC/observations?limit=100", { headers: NWS_HEADERS }),
-      json<{ features: NwsAlert[] }>("https://api.weather.gov/alerts/active?point=40.7608,-111.891", { headers: NWS_HEADERS }).catch(
-        () => ({ features: [] as NwsAlert[] }),
-      ),
-      json<{ hourly: Record<string, number[]> }>(
-        "https://api.open-meteo.com/v1/forecast?latitude=40.76&longitude=-111.89&hourly=temperature_2m,temperature_850hPa,temperature_800hPa,temperature_750hPa,temperature_700hPa&past_days=3&forecast_days=2&timeformat=unixtime",
-      ).catch(() => null),
-      json<{ hourly: Record<string, number[]> }>(
-        "https://api.open-meteo.com/v1/forecast?latitude=40.588&longitude=-111.638&hourly=wind_speed_10m,wind_gusts_10m,snowfall&past_days=3&forecast_days=2&timeformat=unixtime&wind_speed_unit=ms",
-      ).catch(() => null),
-      json<{ hourly: Record<string, number[]> }>(
-        "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=40.76&longitude=-111.89&hourly=pm2_5&past_days=3&forecast_days=2&timeformat=unixtime",
-      ).catch(() => null),
-    ]);
+/** One surface report, from either source, in the plan's terms. */
+export interface Obs {
+  /** UTC ms. */
+  t: number;
+  /** Cloud cover 0–1 (NaN when not reported). */
+  cloud: number;
+  /** Rain and snow falling, 0 none, 0.3 light, 1, 2.5 heavy. */
+  rain: number;
+  snow: number;
+  tempC: number | null;
+  windMs: number | null;
+  gustMs: number | null;
+  /** Measured precipitation in the last hour, mm. */
+  precipMm: number | null;
+  text: string;
+}
 
-    const byHour = new Map<number, SkyHour>();
-    const get = (h: number): SkyHour => {
-      let r = byHour.get(h);
-      if (!r) {
-        r = {
-          at: h,
-          cloud: Number.NaN,
-          precipMm: 0,
-          snowCm: 0,
-          tempC: 10,
-          windMs: 3,
-          gustMs: 5,
-          pm25: 5,
-          inversionC: 0,
-          alert: 0,
-          ridgeMs: 4,
-          ridgeGustMs: 6,
-          mtnSnowCm: 0,
-        };
-        byHour.set(h, r);
-      }
-      return r;
-    };
-    const series = (src: { hourly: Record<string, number[]> } | null, key: string, apply: (r: SkyHour, v: number) => void) => {
-      const t = src?.hourly.time ?? [];
-      const v = src?.hourly[key] ?? [];
-      t.forEach((sec, i) => {
-        const x = v[i];
-        if (x !== undefined && x !== null && Number.isFinite(x)) apply(get(Math.floor((sec * 1000) / HOUR) * HOUR), x);
-      });
-    };
+function intensity(s: string): number {
+  return s.startsWith("+") || /heavy/.test(s) ? 2.5 : s.startsWith("-") || /light/.test(s) ? 0.3 : 1;
+}
 
-    // What steers the plan: observations, one per slot.
-    const chosen = new Map<number, number>();
-    for (const f of obs.features) {
-      const p = f.properties;
-      const t = Date.parse(p.timestamp);
-      const slot = obsSlot(t);
-      if (slot === null || (chosen.get(slot) ?? -Infinity) >= t) continue;
-      chosen.set(slot, t);
-      const r = get(slot);
-      const layers = p.cloudLayers;
-      r.cloud = layers === null ? Number.NaN : layers.length ? Math.max(...layers.map((l) => CLOUD[l.amount] ?? 0.5)) : 0;
-      let rain = 0;
-      let snow = 0;
-      for (const w of p.presentWeather ?? []) {
-        const what = `${w.weather ?? ""} ${w.rawString ?? ""}`.toLowerCase();
-        const k = w.intensity === "heavy" ? 2.5 : w.intensity === "light" ? 0.3 : 1;
-        if (/snow|\bsn\b|\bsg\b/.test(what)) snow = Math.max(snow, k);
-        else if (/rain|drizzle|\bra\b|\bdz\b|shower|thunder/.test(what)) rain = Math.max(rain, k);
+/** A report from api.weather.gov (every five minutes, with gaps). */
+export function obsFromNws(f: NwsObs): Obs {
+  const p = f.properties;
+  const layers = p.cloudLayers;
+  let rain = 0;
+  let snow = 0;
+  for (const w of p.presentWeather ?? []) {
+    const what = `${w.weather ?? ""} ${w.rawString ?? ""}`.toLowerCase();
+    const k = w.intensity === "heavy" ? 2.5 : w.intensity === "light" ? 0.3 : 1;
+    if (/snow|\bsn\b|\bsg\b/.test(what)) snow = Math.max(snow, k);
+    else if (/rain|drizzle|\bra\b|\bdz\b|shower|thunder/.test(what)) rain = Math.max(rain, k);
+  }
+  const wind = p.windSpeed.value !== null ? p.windSpeed.value / 3.6 : null;
+  return {
+    t: Date.parse(p.timestamp),
+    cloud: layers === null ? Number.NaN : layers.length ? Math.max(...layers.map((l) => CLOUD[l.amount] ?? 0.5)) : 0,
+    rain,
+    snow,
+    tempC: p.temperature.value,
+    windMs: wind,
+    gustMs: p.windGust.value !== null ? p.windGust.value / 3.6 : wind,
+    precipMm: p.precipitationLastHour?.value ?? null,
+    text: p.textDescription,
+  };
+}
+
+/** A METAR from aviationweather.gov's data API (hourly, complete, but not
+ * readable from a browser; the archive uses it). */
+export interface Metar {
+  obsTime: number;
+  clouds: { cover: string; base: number | null }[] | null;
+  wxString: string | null;
+  temp: number | null;
+  wspd: number | null;
+  wgst: number | null;
+  precip: number | null;
+  rawOb: string;
+}
+
+export function obsFromMetar(m: Metar): Obs {
+  let rain = 0;
+  let snow = 0;
+  for (const w of (m.wxString ?? "").split(/\s+/).filter(Boolean)) {
+    const k = intensity(w);
+    if (/SN|SG|PL/.test(w)) snow = Math.max(snow, k);
+    else if (/RA|DZ|SH|TS/.test(w)) rain = Math.max(rain, k);
+  }
+  const clouds = m.clouds ?? [];
+  const kt = 0.514444;
+  return {
+    t: m.obsTime * 1000,
+    cloud: clouds.length ? Math.max(...clouds.map((c) => CLOUD[c.cover] ?? 0.5)) : 0,
+    rain,
+    snow,
+    tempC: m.temp,
+    windMs: m.wspd !== null ? m.wspd * kt : null,
+    gustMs: m.wgst !== null ? m.wgst * kt : m.wspd !== null ? m.wspd * kt : null,
+    precipMm: m.precip !== null ? m.precip * 25.4 : null,
+    text: m.rawOb,
+  };
+}
+
+/** Everything the sky is built from. */
+export interface SkyRaw {
+  /** Surface reports, newest first. */
+  obs: Obs[];
+  /** The latest report's words ("Partly Cloudy"), when the source has them. */
+  latest: { text: string; tempC: number | null; t: number } | null;
+  alerts: { features: NwsAlert[] };
+  slc: { hourly: Record<string, number[]> } | null;
+  alta: { hourly: Record<string, number[]> } | null;
+  air: { hourly: Record<string, number[]> } | null;
+}
+
+/**
+ * Download the sky's sources: every KSLC report from `from` (UTC ms) to `to`
+ * (now by default), and `pastDays` of model history (Open-Meteo allows 92).
+ * The span must be the same on every phone: the day's plan builds on every
+ * hour since its 5 AM anchor.
+ */
+export async function fetchSkyRaw(from: number, to?: number, pastDays = 3): Promise<SkyRaw> {
+  const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const span = `start=${iso(from)}${to ? `&end=${iso(to)}` : ""}`;
+  const [obs, alerts, slc, alta, air] = await Promise.all([
+    json<{ features: NwsObs[] }>(`https://api.weather.gov/stations/KSLC/observations?${span}&limit=500`, { headers: NWS_HEADERS }, 20_000),
+    json<{ features: NwsAlert[] }>("https://api.weather.gov/alerts/active?point=40.7608,-111.891", { headers: NWS_HEADERS }).catch(
+      () => ({ features: [] as NwsAlert[] }),
+    ),
+    json<{ hourly: Record<string, number[]> }>(
+      `https://api.open-meteo.com/v1/forecast?latitude=40.76&longitude=-111.89&hourly=temperature_2m,temperature_850hPa,temperature_800hPa,temperature_750hPa,temperature_700hPa&past_days=${pastDays}&forecast_days=2&timeformat=unixtime`,
+    ).catch(() => null),
+    json<{ hourly: Record<string, number[]> }>(
+      `https://api.open-meteo.com/v1/forecast?latitude=40.588&longitude=-111.638&hourly=wind_speed_10m,wind_gusts_10m,snowfall&past_days=${pastDays}&forecast_days=2&timeformat=unixtime&wind_speed_unit=ms`,
+    ).catch(() => null),
+    json<{ hourly: Record<string, number[]> }>(
+      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=40.76&longitude=-111.89&hourly=pm2_5&past_days=${Math.min(pastDays, 92)}&forecast_days=1&timeformat=unixtime`,
+    ).catch(() => null),
+  ]);
+  const reports = obs.features.map(obsFromNws).sort((a, b) => b.t - a.t);
+  const first = reports[0];
+  return { obs: reports, latest: first ? { text: first.text, tempC: first.tempC, t: first.t } : null, alerts, slc, alta, air };
+}
+
+/** The sky's hours from its sources, by the slot rules above: the same on
+ * every phone, and the same in the archive. */
+export function skyFrom(raw: SkyRaw, now = Date.now()): { value: SkyNow; observed: number } {
+  const { alerts, slc, alta, air } = raw;
+  const byHour = new Map<number, SkyHour>();
+  const get = (h: number): SkyHour => {
+    let r = byHour.get(h);
+    if (!r) {
+      r = {
+        at: h,
+        cloud: Number.NaN,
+        precipMm: 0,
+        snowCm: 0,
+        tempC: 10,
+        windMs: 3,
+        gustMs: 5,
+        pm25: 5,
+        inversionC: 0,
+        alert: 0,
+        ridgeMs: 4,
+        ridgeGustMs: 6,
+        mtnSnowCm: 0,
+      };
+      byHour.set(h, r);
+    }
+    return r;
+  };
+  const series = (src: { hourly: Record<string, number[]> } | null, key: string, apply: (r: SkyHour, v: number) => void) => {
+    const t = src?.hourly.time ?? [];
+    const v = src?.hourly[key] ?? [];
+    t.forEach((sec, i) => {
+      const x = v[i];
+      if (x !== undefined && x !== null && Number.isFinite(x)) apply(get(Math.floor((sec * 1000) / HOUR) * HOUR), x);
+    });
+  };
+
+  // What steers the plan: observations, one per slot.
+  const chosen = new Map<number, number>();
+  for (const o of raw.obs) {
+    const slot = obsSlot(o.t);
+    const routine = slot === null ? 0 : slot - 6 * 60_000;
+    const held = slot === null ? undefined : chosen.get(slot);
+    if (slot === null || (held !== undefined && Math.abs(held - routine) <= Math.abs(o.t - routine))) continue;
+    chosen.set(slot, o.t);
+    const r = get(slot);
+    r.cloud = o.cloud;
+    r.precipMm = o.precipMm !== null && o.precipMm > 0 ? o.precipMm : o.rain;
+    r.snowCm = o.snow;
+    if (o.tempC !== null) r.tempC = o.tempC;
+    r.windMs = o.windMs ?? 3;
+    r.gustMs = o.gustMs ?? r.windMs;
+  }
+  // Issued alerts count from the hour after they're sent, for the same reason.
+  const active: string[] = [];
+  for (const a of alerts.features) {
+    const p = a.properties;
+    active.push(p.event);
+    const level = alertLevel(p.event);
+    const from = Math.max(Math.ceil(Date.parse(p.sent) / HOUR), Math.floor(Date.parse(p.onset ?? p.effective) / HOUR)) * HOUR;
+    const to = Date.parse(p.ends ?? p.expires);
+    for (let h = from; h <= to && h < from + 72 * HOUR; h += HOUR) {
+      const r = get(h);
+      r.alert = Math.max(r.alert, level);
+    }
+  }
+  // What only colors bars: models.
+  series(alta, "wind_speed_10m", (r, v) => (r.ridgeMs = v));
+  series(alta, "wind_gusts_10m", (r, v) => (r.ridgeGustMs = v));
+  series(alta, "snowfall", (r, v) => (r.mtnSnowCm = v));
+  series(air, "pm2_5", (r, v) => (r.pm25 = v));
+  if (slc) {
+    (slc.hourly.time ?? []).forEach((sec, i) => {
+      const t2 = slc.hourly.temperature_2m?.[i];
+      if (t2 === undefined || t2 === null) return;
+      let inv = 0;
+      for (const lvl of ["850", "800", "750", "700"]) {
+        const tl = slc.hourly[`temperature_${lvl}hPa`]?.[i];
+        if (tl !== undefined && tl !== null && Number.isFinite(tl)) inv = Math.max(inv, tl - t2);
       }
-      const measured = p.precipitationLastHour?.value;
-      r.precipMm = measured !== null && measured !== undefined && measured > 0 ? measured : rain;
-      r.snowCm = snow;
-      if (p.temperature.value !== null) r.tempC = p.temperature.value;
-      const wind = p.windSpeed.value !== null ? p.windSpeed.value / 3.6 : 3;
-      r.windMs = wind;
-      r.gustMs = p.windGust.value !== null ? p.windGust.value / 3.6 : wind;
-    }
-    // Issued alerts count from the hour after they're sent, for the same reason.
-    const active: string[] = [];
-    for (const a of alerts.features) {
-      const p = a.properties;
-      active.push(p.event);
-      const level = alertLevel(p.event);
-      const from = Math.max(Math.ceil(Date.parse(p.sent) / HOUR), Math.floor(Date.parse(p.onset ?? p.effective) / HOUR)) * HOUR;
-      const to = Date.parse(p.ends ?? p.expires);
-      for (let h = from; h <= to && h < from + 72 * HOUR; h += HOUR) {
-        const r = get(h);
-        r.alert = Math.max(r.alert, level);
-      }
-    }
-    // What only colors bars: models.
-    series(alta, "wind_speed_10m", (r, v) => (r.ridgeMs = v));
-    series(alta, "wind_gusts_10m", (r, v) => (r.ridgeGustMs = v));
-    series(alta, "snowfall", (r, v) => (r.mtnSnowCm = v));
-    series(air, "pm2_5", (r, v) => (r.pm25 = v));
-    if (slc) {
-      (slc.hourly.time ?? []).forEach((sec, i) => {
-        const t2 = slc.hourly.temperature_2m?.[i];
-        if (t2 === undefined || t2 === null) return;
-        let inv = 0;
-        for (const lvl of ["850", "800", "750", "700"]) {
-          const tl = slc.hourly[`temperature_${lvl}hPa`]?.[i];
-          if (tl !== undefined && tl !== null && Number.isFinite(tl)) inv = Math.max(inv, tl - t2);
-        }
-        get(Math.floor((sec * 1000) / HOUR) * HOUR).inversionC = inv;
-      });
-    }
-    const latest = obs.features[0]?.properties;
-    const nowHour = byHour.get(Math.floor(Date.now() / HOUR) * HOUR);
-    const hours = [...byHour.values()].sort((a, b) => a.at - b.at);
-    return {
-      value: {
-        description: latest?.textDescription ?? "",
-        tempC: latest?.temperature.value ?? Number.NaN,
-        pm25: nowHour?.pm25 ?? Number.NaN,
-        inversionC: nowHour?.inversionC ?? 0,
-        ridgeGustMs: nowHour?.ridgeGustMs ?? Number.NaN,
-        mtnSnowCm: nowHour?.mtnSnowCm ?? 0,
-        alerts: active,
-        hours,
-      },
-      observed: latest ? Date.parse(latest.timestamp) : Date.now(),
-    };
-  });
+      get(Math.floor((sec * 1000) / HOUR) * HOUR).inversionC = inv;
+    });
+  }
+  const latest = raw.latest;
+  const nowHour = byHour.get(Math.floor(now / HOUR) * HOUR);
+  const hours = [...byHour.values()].sort((a, b) => a.at - b.at);
+  return {
+    value: {
+      description: latest?.text ?? "",
+      tempC: latest?.tempC ?? Number.NaN,
+      pm25: nowHour?.pm25 ?? Number.NaN,
+      inversionC: nowHour?.inversionC ?? 0,
+      ridgeGustMs: nowHour?.ridgeGustMs ?? Number.NaN,
+      mtnSnowCm: nowHour?.mtnSnowCm ?? 0,
+      alerts: active,
+      hours,
+    },
+    observed: latest?.t ?? now,
+  };
+}
+
+/** The sky from `from` (UTC ms) to now. */
+export function fetchSky(from: number): Promise<Reading<SkyNow> | null> {
+  return cached("sky", async () => skyFrom(await fetchSkyRaw(from)));
 }
 
 // --- Earthquakes (USGS) -----------------------------------------------------

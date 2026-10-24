@@ -52,6 +52,8 @@ export class Valley {
   ground: GroundState | null = null;
   private timers: number[] = [];
   private postedDays = new Set<string>();
+  /** Hours a sealed day covers: the live fetch never overrides them. */
+  private sealed = new Set<number>();
   private listeners: (() => void)[] = [];
   /** Rewind offset, ms: the valley is read as of now + shift. */
   shift = 0;
@@ -109,20 +111,37 @@ export class Valley {
   }
 
   /** Post the service days around now (or the rewound now). */
-  async loadDays(): Promise<void> {
-    for (const date of this.schedule.datesAround(this.now())) {
+  async loadDays(dates = this.schedule.datesAround(this.now())): Promise<void> {
+    for (const date of dates) {
       const d = await this.schedule.day(date);
       if (!d || this.postedDays.has(date)) continue;
       this.host.post(Kind.DAY, encodeDay(date, d.t0, d.day));
       this.postedDays.add(date);
+      // A sealed sky is the same for everyone, so it outranks the live one.
+      const hours = await this.schedule.sealedSky(date);
+      if (hours?.length) {
+        for (const h of hours) this.sealed.add(h.at);
+        this.host.post(Kind.SKY, encodeSky(hours));
+      }
     }
   }
 
+  /** Where the sky must start: four hours before the 5 AM anchor of the
+   * day being played, the same instant on every phone. */
+  skyFrom(): number {
+    const now = this.now();
+    const anchors = Object.values(this.schedule.manifest.t0)
+      .map((t0) => t0 + 5 * 3_600_000)
+      .filter((a) => a <= now);
+    const anchor = anchors.length ? Math.max(...anchors) : now - 24 * 3_600_000;
+    return anchor - 4 * 3_600_000;
+  }
+
   async refreshSky(): Promise<void> {
-    const sky = await fetchSky();
+    const sky = await fetchSky(this.skyFrom());
     if (!sky) return;
     this.sky = sky;
-    this.host.post(Kind.SKY, encodeSky(sky.value.hours));
+    this.host.post(Kind.SKY, encodeSky(sky.value.hours.filter((h) => !this.sealed.has(h.at))));
     this.changed();
   }
 

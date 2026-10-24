@@ -24,6 +24,7 @@ thread_local! {
     static INBOX: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static OUTBOX: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static PCM: RefCell<(f32, Vec<i16>)> = const { RefCell::new((0.0, Vec::new())) };
+    static DELAY_CONFIDENCE: core::cell::Cell<f32> = const { core::cell::Cell::new(0.0) };
 }
 
 /// Message kinds.
@@ -376,9 +377,159 @@ pub extern "C" fn wasatch_pcm_rate() -> f32 {
     PCM.with(|p| p.borrow().0)
 }
 
+/// Tune to the room: how many samples the second of two signals in the
+/// inbox lags the first (`n_x` then `n_y` little-endian floats), searched
+/// within ±`max_lag`, by GCC-PHAT with weighting `beta` (sonido-analysis).
+/// [`wasatch_delay_confidence`] then says how far the peak stands out.
+#[unsafe(no_mangle)]
+pub extern "C" fn wasatch_delay(n_x: u32, n_y: u32, max_lag: u32, beta: f32) -> i32 {
+    let (x, y) = INBOX.with(|b| {
+        let b = b.borrow();
+        let floats = |from: usize, n: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| {
+                    let at = from + 4 * i;
+                    b.get(at..at + 4)
+                        .map_or(0.0, |w| f32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+                })
+                .collect()
+        };
+        (
+            floats(0, n_x as usize),
+            floats(4 * n_x as usize, n_y as usize),
+        )
+    });
+    let max_lag = max_lag as usize;
+    if x.is_empty() || y.is_empty() {
+        DELAY_CONFIDENCE.with(|c| c.set(0.0));
+        return 0;
+    }
+    let r = sonido_analysis::xcorr::gcc_phat(&x, &y, max_lag, beta.clamp(0.0, 1.0));
+    let (lag, peak) = sonido_analysis::xcorr::peak_lag(&r, max_lag);
+    DELAY_CONFIDENCE.with(|c| c.set(prominence(&r, lag + max_lag as i32, peak)));
+    lag
+}
+
+/// How far a correlation's peak stands above the rest of it: the peak over
+/// the RMS of every lag more than 8 samples away. Noise alone across
+/// `n` lags tops out near √(2 ln n), about 5 for a second at 48 kHz.
+fn prominence(r: &[f32], at: i32, peak: f32) -> f32 {
+    let (mut sum, mut n) = (0.0f64, 0usize);
+    for (i, v) in r.iter().enumerate() {
+        if (i as i32 - at).abs() > 8 {
+            sum += f64::from(*v) * f64::from(*v);
+            n += 1;
+        }
+    }
+    let rms = (sum / n.max(1) as f64).sqrt() as f32;
+    if rms > 0.0 { peak.abs() / rms } else { 0.0 }
+}
+
+/// The last [`wasatch_delay`]'s prominence: its peak over the RMS of the
+/// rest of the correlation.
+#[unsafe(no_mangle)]
+pub extern "C" fn wasatch_delay_confidence() -> f32 {
+    DELAY_CONFIDENCE.with(|c| c.get())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delay_finds_a_known_lag() {
+        // A noise burst and the same burst 37 samples later, in some hiss.
+        let mut seed = 0x1234_5678u32;
+        let mut noise = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as i32) as f32 / 2_147_483_648.0
+        };
+        let n = 8192;
+        let x: Vec<f32> = (0..n).map(|_| noise()).collect();
+        let y: Vec<f32> = (0..n)
+            .map(|i| if i >= 37 { x[i - 37] } else { 0.0 } + 0.3 * noise())
+            .collect();
+        let mut bytes = Vec::new();
+        for v in x.iter().chain(&y) {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let ptr = wasatch_inbox(bytes.len() as u32);
+        INBOX.with(|b| b.borrow_mut().copy_from_slice(&bytes));
+        let _ = ptr;
+        assert_eq!(wasatch_delay(n as u32, n as u32, 400, 0.5), 37);
+        assert!(
+            wasatch_delay_confidence() > 10.0,
+            "{}",
+            wasatch_delay_confidence()
+        );
+    }
+
+    fn delay_of(x: &[f32], y: &[f32], max_lag: u32, beta: f32) -> (i32, f32) {
+        let mut bytes = Vec::new();
+        for v in x.iter().chain(y) {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let _ = wasatch_inbox(bytes.len() as u32);
+        INBOX.with(|b| b.borrow_mut().copy_from_slice(&bytes));
+        let lag = wasatch_delay(x.len() as u32, y.len() as u32, max_lag, beta);
+        (lag, wasatch_delay_confidence())
+    }
+
+    /// The thresholds the page uses (web/src/app/tune.ts): music heard
+    /// through a reverberant room at a distance stands well clear; a
+    /// microphone that hears something unrelated never does.
+    #[test]
+    fn delay_confidence_separates_a_room_from_nothing() {
+        let sr = 48_000usize;
+        let mut seed = 0x9E37_79B9u32;
+        let mut noise = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as i32) as f32 / 2_147_483_648.0
+        };
+        // Four seconds of "music": plucked partials every 300 ms plus hats.
+        let n = 4 * sr;
+        let mut music = vec![0.0f32; n];
+        for k in 0..(n / 14_400) {
+            let f = [196.0, 247.0, 294.0, 392.0][k % 4];
+            for i in 0..12_000.min(n - k * 14_400) {
+                let t = i as f32 / sr as f32;
+                music[k * 14_400 + i] +=
+                    0.3 * (core::f32::consts::TAU * f * t).sin() * (-t * 4.0).exp();
+            }
+        }
+        for v in &mut music {
+            *v += 0.05 * noise();
+        }
+        // The other phone, 180 ms late, through a room: an exponential tail.
+        let delay = (0.18 * sr as f32) as usize;
+        let mut room = vec![0.0f32; n];
+        for (i, v) in room.iter_mut().enumerate() {
+            if i >= delay {
+                *v = 0.4 * music[i - delay];
+            }
+        }
+        let mut tail = 0.0f32;
+        for v in &mut room {
+            tail = 0.97 * tail + 0.02 * *v;
+            *v += 3.0 * tail + 0.05 * noise();
+        }
+        let (lag, conf) = delay_of(&music, &room, sr as u32, 0.5);
+        assert!((lag - delay as i32).abs() <= 2, "lag {lag}");
+        assert!(conf > 12.0, "a room: {conf}");
+        // A beep that has nothing to do with it.
+        let beep: Vec<f32> = (0..n)
+            .map(|i| 0.5 * (core::f32::consts::TAU * 1000.0 * i as f32 / sr as f32).sin())
+            .collect();
+        let (_, conf) = delay_of(&music, &beep, sr as u32, 0.5);
+        assert!(conf < 7.0, "a beep: {conf}");
+        let hiss: Vec<f32> = (0..n).map(|_| 0.1 * noise()).collect();
+        let (_, conf) = delay_of(&music, &hiss, sr as u32, 0.5);
+        assert!(conf < 7.0, "hiss: {conf}");
+    }
 
     fn post(kind: u32, bytes: &[u8]) -> i32 {
         let ptr = wasatch_inbox(bytes.len() as u32);

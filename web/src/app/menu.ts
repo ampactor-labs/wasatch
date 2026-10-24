@@ -15,6 +15,7 @@ import { STATIONS } from "../data/ground.ts";
 import { Kind, encodeSolo, encodeTwelve } from "../engine/protocol.ts";
 import { PlayAlong } from "./playalong.ts";
 import { parseGpx, soloFromRun } from "./run.ts";
+import { TuneError, tuneToRoom } from "./tune.ts";
 
 export interface MenuDeps {
   host: Host;
@@ -153,38 +154,49 @@ export class Menu {
       if (at < earliest) break;
       hours.push({ label: `${back} h ago · ${mountainDate(at).replace(/, \d{4}$/, "")} ${mountainTime(at)}`, shift: -back * 3_600_000 });
     }
-    // Whole days: any compiled day that has begun, as far back as the sky
-    // observations reach.
+    // Whole days: any day that has begun and whose sky is known, live or
+    // sealed in the archive.
     const now = Date.now();
-    const days = Object.entries(schedule.manifest.t0)
-      .filter(([, t0]) => t0 + 5 * 3_600_000 < now && t0 > now - 4 * 86_400_000)
-      .sort((a, b) => b[1] - a[1])
+    const playable = Object.entries(schedule.manifest.t0)
+      .filter(([date, t0]) => t0 + 5 * 3_600_000 < now && (t0 > now - 30 * 3_600_000 || schedule.manifest.sky?.[date]))
+      .sort((a, b) => b[1] - a[1]);
+    const days = playable
+      .slice(0, 7)
       .map(([date, t0]) => ({ date, label: now - t0 < 29 * 3_600_000 ? "Today so far" : `${mountainDay(t0 + 12 * 3_600_000)}, ${mountainDate(t0 + 12 * 3_600_000).replace(/, \d{4}$/, "")}` }));
+    const oldest = playable.at(-1)?.[0];
+    const newest = playable[0]?.[0];
     const inDay = this.deps.screen.inDay();
     this.show(`<h2 class="sheet__title" id="sheet-title">Rewind</h2>
       ${valley.shift || inDay ? `<button type="button" class="btn btn--sun" data-shift="0">Back to live</button>` : ""}
       <h3 class="sheet__sub">A Day in Twelve Minutes</h3>
       <p class="sheet__lede">A whole day, 5 AM to 5 AM, composed for the speed: three hundred bars, every bar 4.8 minutes of the day, the harmony moving every 38. Watch the trains race across the map.</p>
       <div class="chips">${days.map((d) => `<button type="button" class="chip" data-twelve="${d.date}">${esc(d.label)}</button>`).join("")}</div>
+      ${playable.length > 7 && oldest && newest ? `<div class="pickday"><label>Another day <input type="date" min="${oldest}" max="${newest}" value="${playable[7]?.[0] ?? oldest}" /></label><button type="button" class="chip" data-pick>Play it</button></div>` : ""}
       <h3 class="sheet__sub">An earlier hour</h3>
       <p class="fine">The schedule, the sky, the lake and the quakes come back; GREENbike and the ground only play live.</p>
       <div class="chips">${hours
         .filter((_, i) => i < 6 || i % 3 === 2)
         .map((h) => `<button type="button" class="chip${h.shift === valley.shift ? " chip--on" : ""}" data-shift="${h.shift}">${esc(h.label)}</button>`)
         .join("")}</div>`);
+    const playDay = async (date: string) => {
+      if (!(date in schedule.manifest.days)) return;
+      if (valley.shift) {
+        valley.shift = 0;
+        host.setTimeShift(0);
+      }
+      await valley.loadDays([date]);
+      host.post(Kind.TWELVE, encodeTwelve(date));
+      this.close();
+    };
     this.body()
       .querySelectorAll<HTMLButtonElement>("[data-twelve]")
-      .forEach((b) =>
-        b.addEventListener("click", async () => {
-          if (valley.shift) {
-            valley.shift = 0;
-            host.setTimeShift(0);
-          }
-          await valley.loadDays();
-          host.post(Kind.TWELVE, encodeTwelve(b.dataset.twelve ?? null));
-          this.close();
-        }),
-      );
+      .forEach((b) => b.addEventListener("click", () => void playDay(b.dataset.twelve ?? "")));
+    this.body()
+      .querySelector<HTMLButtonElement>("[data-pick]")
+      ?.addEventListener("click", () => {
+        const input = this.body().querySelector<HTMLInputElement>('.pickday input[type="date"]');
+        if (input?.value) void playDay(input.value);
+      });
     this.body()
       .querySelectorAll<HTMLButtonElement>("[data-shift]")
       .forEach((b) =>
@@ -324,6 +336,8 @@ export class Menu {
     const latency = Math.round(1000 * ((host.ctx.baseLatency || 0) + ((host.ctx as AudioContext & { outputLatency?: number }).outputLatency || 0)));
     this.show(`<h2 class="sheet__title" id="sheet-title">Line up with a friend</h2>
       <p class="sheet__lede">Every phone plays the same bar at the same moment. A Bluetooth speaker adds its own delay, which phones don't always report; nudge until the two of you sound like one.</p>
+      ${isIOS() ? "" : `<button type="button" class="btn btn--sun" data-tune>Tune to the room</button>
+      <p class="fine" data-tuned aria-live="polite">It ducks this phone for a few seconds and listens for the other one. Nothing is recorded or sent.</p>`}
       <div class="nudge">
         <button type="button" class="btn" data-nudge="-20" aria-label="Play 20 milliseconds earlier">−20 ms</button>
         <output class="nudge__value" aria-live="polite">${host.nudge >= 0 ? "+" : ""}${host.nudge} ms</output>
@@ -331,6 +345,32 @@ export class Menu {
       </div>
       <p class="fine">This phone's clock: ${est.source === "header" ? `set from our server to within ±${Math.round(est.uncertainty)} ms` : "its own (the server's clock didn't answer)"}. Output delay it reports: ${latency} ms.${isIOS() ? " On an iPhone, the microphone can't be used for this without dropping Web Audio to call volume, so it's by ear." : ""}</p>`);
     const out = this.body().querySelector("output");
+    const tuned = this.body().querySelector<HTMLElement>("[data-tuned]");
+    this.body()
+      .querySelector<HTMLButtonElement>("[data-tune]")
+      ?.addEventListener("click", async (e) => {
+        const b = e.currentTarget as HTMLButtonElement;
+        b.disabled = true;
+        try {
+          const r = await tuneToRoom(host, (msg) => {
+            if (tuned) tuned.textContent = msg;
+          });
+          const shift = Math.round(r.shiftMs);
+          host.setNudge(host.nudge + shift);
+          if (out) out.textContent = `${host.nudge >= 0 ? "+" : ""}${host.nudge} ms`;
+          if (tuned) {
+            tuned.textContent =
+              Math.abs(shift) < 15
+                ? "You're already together, within 15 ms."
+                : `The other phone is ${Math.abs(shift)} ms ${shift > 0 ? "behind" : "ahead"}; this one ${shift > 0 ? "waits for it" : "catches up"} over the next few seconds. (This phone's own round trip: ${Math.round(r.ownMs)} ms.)`;
+          }
+        } catch (err) {
+          if (tuned) tuned.textContent = err instanceof TuneError ? err.message : "Something went wrong listening. Use the nudge instead.";
+          if (!(err instanceof TuneError)) console.warn("tune:", err instanceof Error ? `${err.name}: ${err.message}` : err);
+        } finally {
+          b.disabled = false;
+        }
+      });
     this.body()
       .querySelectorAll<HTMLButtonElement>("[data-nudge]")
       .forEach((b) =>

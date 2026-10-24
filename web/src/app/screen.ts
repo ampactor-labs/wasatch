@@ -101,7 +101,7 @@ export class PlayScreen {
       <header class="play__sky">
         <div class="play__skyline"></div>
       </header>
-      <div class="play__status" role="status"><span data-slot="clock"></span><span data-slot="key"></span><span data-slot="section"></span><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
+      <div class="play__status" role="status"><span data-slot="clock"></span><span data-slot="key"></span><span data-slot="section"></span><button type="button" class="play__live" data-action="share" hidden>Share this day</button><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
       <div class="play__note" aria-hidden="true"></div>
       <section class="play__valley">
         <div class="play__mapwrap">
@@ -131,6 +131,7 @@ export class PlayScreen {
     this.root.querySelector('[data-action="menu"]')?.addEventListener("click", () => this.deps.onMenu());
     this.root.querySelector('[data-action="pause"]')?.addEventListener("click", () => this.deps.onPause());
     this.root.querySelector('[data-action="live"]')?.addEventListener("click", () => this.deps.onLive());
+    this.root.querySelector('[data-action="share"]')?.addEventListener("click", () => void this.shareDay());
     this.layout();
     window.addEventListener("resize", () => {
       clearTimeout(this.resizeTimer);
@@ -429,8 +430,10 @@ export class PlayScreen {
   private enterDay(e: Heard<BarEvent>): void {
     this.day = { ms: e.day, at: e.at, first: e.day };
     this.root.querySelector(".play")?.classList.add("play--day");
-    const live = this.root.querySelector<HTMLButtonElement>('[data-action="live"]');
-    if (live) live.hidden = false;
+    for (const action of ["live", "share"]) {
+      const b = this.root.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+      if (b) b.hidden = false;
+    }
     clearInterval(this.dayTimer);
     this.dayTimer = window.setInterval(() => this.dayTick(), 200);
     this.caption({
@@ -446,8 +449,10 @@ export class PlayScreen {
     this.day = null;
     clearInterval(this.dayTimer);
     this.root.querySelector(".play")?.classList.remove("play--day");
-    const live = this.root.querySelector<HTMLButtonElement>('[data-action="live"]');
-    if (live) live.hidden = true;
+    for (const action of ["live", "share"]) {
+      const b = this.root.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+      if (b) b.hidden = true;
+    }
     this.caption({ text: `That was ${mountainDay(first)} in twelve minutes. Back to the valley, live.`, receipt: "scheduled", at: e.at, family: "harmony" });
     this.tick();
   }
@@ -566,6 +571,24 @@ export class PlayScreen {
     clearInterval(this.tickTimer);
     clearInterval(this.dayTimer);
     cancelAnimationFrame(this.riderAnim);
+  }
+
+  /** A link that plays this day in twelve minutes, shared or copied. */
+  private async shareDay(): Promise<void> {
+    if (!this.day) return;
+    const date = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Denver", year: "numeric", month: "2-digit", day: "2-digit" }).format(this.day.first);
+    const url = new URL(location.href);
+    url.search = `?day=${date}`;
+    const title = `${mountainDay(this.day.first)}, ${mountainDate(this.day.first)}, in twelve minutes`;
+    try {
+      if (navigator.share) await navigator.share({ title: `Wasatch Symphony: ${title}`, url: url.href });
+      else {
+        await navigator.clipboard.writeText(url.href);
+        this.flashNote("Link copied");
+      }
+    } catch {
+      // The listener closed the share sheet.
+    }
   }
 
   /** Whether A Day in Twelve Minutes is playing. */

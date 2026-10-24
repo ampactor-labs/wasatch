@@ -1,7 +1,7 @@
 // The compiled schedule (tools/gtfs): which service days exist, the rail
 // network's shapes, and where every scheduled train is at any moment.
 
-import type { DayFile, NetworkFile } from "../engine/protocol.ts";
+import type { DayFile, NetworkFile, SkyHour } from "../engine/protocol.ts";
 
 export interface Manifest {
   version: number;
@@ -9,6 +9,8 @@ export interface Manifest {
   timezone: string;
   days: Record<string, string>;
   t0: Record<string, number>;
+  /** Service dates whose sky is sealed (tools/archive/sky.ts), and their files. */
+  sky?: Record<string, string>;
 }
 
 export interface Day extends DayFile {
@@ -149,6 +151,18 @@ export class Schedule {
       }
     }
     return loaded;
+  }
+
+  /** A sealed day's sky, if the archive has it. */
+  async sealedSky(date: string): Promise<SkyHour[] | null> {
+    const file = this.manifest.sky?.[date];
+    if (!file) return null;
+    try {
+      const body = (await fetch(`${this.base}schedule/${file}`).then((r) => r.json())) as { hours: (Omit<SkyHour, "cloud"> & { cloud: number | null })[] };
+      return body.hours.map((h) => ({ ...h, cloud: h.cloud ?? Number.NaN }));
+    } catch {
+      return null;
+    }
   }
 
   loadedDays(): LoadedDay[] {

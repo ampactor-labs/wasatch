@@ -295,6 +295,8 @@ interface Exports {
   wasatch_decode(len: number, maxSeconds: number): number;
   wasatch_pcm_ptr(): number;
   wasatch_pcm_rate(): number;
+  wasatch_delay(nX: number, nY: number, maxLag: number, beta: number): number;
+  wasatch_delay_confidence(): number;
 }
 
 /** A thin handle on an engine instance. Views onto WebAssembly memory are
@@ -338,6 +340,18 @@ export class EngineHandle {
     const n = this.x.wasatch_outbox_len();
     if (n === 0) return new Uint8Array(0);
     return new Uint8Array(this.x.memory.buffer, this.x.wasatch_outbox_ptr(), n).slice();
+  }
+
+  /** How many samples `y` lags `x` (GCC-PHAT, sonido-analysis), and how far
+   * the peak stands out. */
+  delay(x: Float32Array, y: Float32Array, maxLag: number, beta = 0.5): { lag: number; confidence: number } {
+    const bytes = (x.length + y.length) * 4;
+    const ptr = this.x.wasatch_inbox(bytes);
+    const view = new Float32Array(this.x.memory.buffer, ptr, x.length + y.length);
+    view.set(x, 0);
+    view.set(y, x.length);
+    const lag = this.x.wasatch_delay(x.length, y.length, maxLag, beta);
+    return { lag, confidence: this.x.wasatch_delay_confidence() };
   }
 
   /** Decode an MP3 with the engine's own decoder: mono 16-bit PCM. */

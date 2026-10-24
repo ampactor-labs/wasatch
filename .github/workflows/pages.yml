@@ -35,7 +35,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run build
+      - name: Build the engine (SIMD and scalar)
+        run: npm run engine
+      # The deployed site is the archive: every earlier date it has comes
+      # along, with its day file and its sealed sky.
+      - name: Compile UTA's schedule, carrying the archive forward
+        run: node tools/gtfs/compile.ts --previous https://ampactor.dev/wasatch/schedule
+      - name: Seal the finished days' skies
+        run: node tools/archive/sky.ts --previous https://ampactor.dev/wasatch/schedule
+      - run: npx vite build --config web/vite.config.ts
       - uses: actions/upload-pages-artifact@v5
         with:
           path: dist

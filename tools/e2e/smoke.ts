@@ -73,7 +73,14 @@ if (!url) {
 const browser = await puppeteer.launch({
   executablePath: chrome,
   headless: true,
-  args: ["--autoplay-policy=no-user-gesture-required", "--no-sandbox", "--disable-dev-shm-usage"],
+  args: [
+    "--autoplay-policy=no-user-gesture-required",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    // A fake microphone for Tune to the room, granted without a prompt.
+    "--use-fake-ui-for-media-stream",
+    "--use-fake-device-for-media-stream",
+  ],
 });
 const failures: string[] = [];
 try {
@@ -87,6 +94,7 @@ try {
     page.on("pageerror", (e) => errors.push(`pageerror: ${e instanceof Error ? e.message : String(e)}`));
     page.on("console", (m) => {
       if (m.type() === "error") errors.push(`console: ${m.text()}`);
+      else if (m.type() === "warn") console.log(`  warn: ${m.text()}`);
     });
     const t0 = Date.now();
     await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -218,6 +226,18 @@ async function interactions(page: import("puppeteer-core").Page, failures: strin
   console.log(`  mappings: ${rows} streams`);
   if (rows < 10) failures.push(`Show mappings: only ${rows} rows`);
   if (shots) await page.screenshot({ path: join(shots, "desktop-mappings.png") });
+  await page.click(".sheet__close");
+
+  // Tune to the room, against Chrome's fake microphone (a beep that can't
+  // hear this phone): it must run the whole procedure and say so plainly.
+  await sleep(400);
+  await menu("tune");
+  await page.click("[data-tune]");
+  await page.waitForFunction(() => !(document.querySelector("[data-tune]") as HTMLButtonElement | null)?.disabled, { timeout: 20_000 });
+  const tuned = await page.$eval("[data-tuned]", (e) => e.textContent ?? "");
+  console.log(`  tune to the room: "${tuned}"`);
+  // The fake microphone can't hear this phone's tick, so the honest answer is a refusal.
+  if (!/couldn't hear its own tick/.test(tuned)) failures.push(`Tune to the room: "${tuned}"`);
   await page.click(".sheet__close");
 }
 

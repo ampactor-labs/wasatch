@@ -1,6 +1,15 @@
 // Compiles UTA's GTFS into the score the browser engine plays.
 //
 //   node tools/gtfs/compile.ts [--zip <path|url>] [--out web/public/schedule] [--days 9]
+//                              [--previous <dir|url>]
+//
+// With --previous (the deployed schedule, e.g. https://ampactor.dev/wasatch/
+// schedule), the network stays append-only, so stations, routes and
+// headsigns keep their indices from build to build, and every past date the
+// previous build had stays in the manifest with its day file: the archive
+// that Rewind and A Day in Twelve Minutes reach back into. Day files are
+// keyed by the feed and the services together, so a new feed that reuses a
+// service id never overwrites an archived day.
 //
 // Writes manifest.json, network.json and one day-<key>.json per distinct set
 // of running services, for every date from yesterday through --days ahead in
@@ -55,10 +64,41 @@ interface Args {
   zip: string | null;
   out: string;
   days: number;
+  previous: string | null;
+}
+
+/** How long the archive keeps a past date. */
+const ARCHIVE_DAYS = 400;
+
+interface PreviousNetwork {
+  routes: { id: string; short: string; name: string; type: number; kind: string; color: string; text: string }[];
+  stops: { id: string; ids: string[]; name: string; lat: number; lon: number }[];
+  shapes: { r: number; d: number; pts: [number, number][] }[];
+  headsigns: string[];
+}
+
+interface PreviousManifest {
+  days: Record<string, string>;
+  t0: Record<string, number>;
+  sky?: Record<string, string>;
+}
+
+/** Read a file of the previous build, from a directory or a URL. */
+async function previousFile(src: string, name: string): Promise<string | null> {
+  try {
+    if (/^https?:/.test(src)) {
+      const res = await fetch(`${src.replace(/\/$/, "")}/${name}`, { cache: "no-store" });
+      return res.ok ? await res.text() : null;
+    }
+    const path = join(src, name);
+    return existsSync(path) ? readFileSync(path, "utf8") : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { zip: null, out: join(REPO, "web/public/schedule"), days: 9 };
+  const args: Args = { zip: null, out: join(REPO, "web/public/schedule"), days: 9, previous: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const v = argv[i + 1];
@@ -70,6 +110,9 @@ function parseArgs(argv: string[]): Args {
       i++;
     } else if (a === "--days" && v !== undefined) {
       args.days = Math.max(0, Math.floor(Number(v)));
+      i++;
+    } else if (a === "--previous" && v !== undefined) {
+      args.previous = v;
       i++;
     } else {
       throw new Error(`unknown argument ${a}`);
@@ -142,6 +185,13 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const t0 = performance.now();
   const { bytes, url } = await loadZip(args.zip);
+  const feedSha = sha256(bytes);
+  // The previous build, if any: its network seeds this one, its past dates carry over.
+  const prevNetworkText = args.previous ? await previousFile(args.previous, "network.json") : null;
+  const prevManifestText = args.previous ? await previousFile(args.previous, "manifest.json") : null;
+  const prevNetwork = prevNetworkText ? (JSON.parse(prevNetworkText) as PreviousNetwork) : null;
+  const prevManifest = prevManifestText ? (JSON.parse(prevManifestText) as PreviousManifest) : null;
+  if (args.previous) console.log(`previous build: ${prevNetwork ? `${prevNetwork.stops.length} stations` : "none"}, ${prevManifest ? Object.keys(prevManifest.days).length : 0} dates`);
   const files = unzipSync(bytes, { filter: (f) => NEEDED.includes(f.name) });
   const decoder = new TextDecoder("utf-8");
   const text = (name: string): string => {
@@ -336,11 +386,21 @@ async function main() {
 
   // --- network: routes, stations, shapes, headsigns -------------------------
   const kindRank: Record<Kind, number> = { trax: 0, sline: 1, frontrunner: 2, ski: 3 };
-  const outRoutes = [...kindOf.entries()]
+  const liveRoutes = [...kindOf.entries()]
     .sort((a, b) => kindRank[a[1]] - kindRank[b[1]] || routes[a[0]]!.short.localeCompare(routes[b[0]]!.short))
     .map(([i, kind]) => ({ i, kind }));
+  // Append-only: a route keeps the index it had; one the feed dropped stays
+  // as it was, so archived days still name it.
+  type OutRoute = { i: number; kind: Kind } | { ghost: PreviousNetwork["routes"][number] };
+  const outRoutes: OutRoute[] = (prevNetwork?.routes ?? []).map((pr) => {
+    const live = liveRoutes.find((r) => routes[r.i]!.id === pr.id);
+    return live ?? { ghost: pr };
+  });
+  for (const r of liveRoutes) if (!outRoutes.some((o) => "i" in o && o.i === r.i)) outRoutes.push(r);
   const outRouteIndex = new Map<number, number>();
-  outRoutes.forEach((r, k) => outRouteIndex.set(r.i, k));
+  outRoutes.forEach((r, k) => {
+    if ("i" in r) outRouteIndex.set(r.i, k);
+  });
 
   // Stations: every stop a rail trip uses, plus the ski buses' first stops.
   // UTA's platforms have no parent_station, so same-named stops within 400 m
@@ -361,6 +421,10 @@ async function main() {
       .replace(/\s+/g, " ")
       .replace(/\s*station$/, "")
       .trim();
+  // Append-only: the previous build's stations keep their indices.
+  for (const st of prevNetwork?.stops ?? []) {
+    stations.push({ id: st.id, ids: [...st.ids], name: st.name, lat: st.lat, lon: st.lon, key: normalize(st.name) });
+  }
   const addStation = (stop: number): number => {
     const known = stationOf.get(stop);
     if (known !== undefined) return known;
@@ -385,8 +449,8 @@ async function main() {
     return found;
   };
 
-  const headsigns: string[] = [];
-  const headsignIndex = new Map<string, number>();
+  const headsigns: string[] = [...(prevNetwork?.headsigns ?? [])];
+  const headsignIndex = new Map<string, number>(headsigns.map((h, k) => [h, k]));
   const headsignOf = (t: number): number => {
     const h = tripHeadsign[t]!;
     let k = headsignIndex.get(h);
@@ -461,6 +525,10 @@ async function main() {
     const simplified = simplify(best, SIMPLIFY_M).map(([lat, lon]) => [round5(lat), round5(lon)] as [number, number]);
     outShapes.push({ r: outRouteIndex.get(r)!, d, pts: simplified });
   }
+  // A route the feed dropped keeps its previous shapes.
+  outRoutes.forEach((r, k) => {
+    if ("ghost" in r) for (const sh of prevNetwork?.shapes ?? []) if (sh.r === k) outShapes.push(sh);
+  });
   outShapes.sort((a, b) => a.r - b.r || a.d - b.d);
 
   // --- dates and their service sets -----------------------------------------
@@ -471,7 +539,7 @@ async function main() {
   const keyServices = new Map<string, string[]>();
   for (const date of dates) {
     const services = activeServices(date, calendar, exceptions);
-    const key = sha256(services.join(",")).slice(0, 10);
+    const key = sha256(`${feedSha}:${services.join(",")}`).slice(0, 10);
     dayKey.set(date, key);
     keyServices.set(key, services);
   }
@@ -562,9 +630,10 @@ async function main() {
   // --- network and manifest ---------------------------------------------------
   const network = {
     version: 1,
-    routes: outRoutes.map(({ i, kind }) => {
-      const r = routes[i]!;
-      return { id: r.id, short: r.short, name: r.name, type: r.type, kind, color: r.color, text: r.text };
+    routes: outRoutes.map((o) => {
+      if ("ghost" in o) return o.ghost;
+      const r = routes[o.i]!;
+      return { id: r.id, short: r.short, name: r.name, type: r.type, kind: o.kind, color: r.color, text: r.text };
     }),
     stops: stations.map((s) => ({ id: s.id, ids: s.ids, name: s.name, lat: round5(s.lat), lon: round5(s.lon) })),
     shapes: outShapes,
@@ -574,6 +643,23 @@ async function main() {
 
   const days: Record<string, string> = {};
   const t0s: Record<string, number> = {};
+  // The archive: every earlier date the previous build had, up to a limit,
+  // with its day file brought along.
+  const oldest = addDays(today, -ARCHIVE_DAYS);
+  let archived = 0;
+  for (const [date, key] of Object.entries(prevManifest?.days ?? {})) {
+    if (date >= dates[0]! || date < oldest) continue;
+    const file = `day-${key}.json`;
+    if (!existsSync(join(args.out, file))) {
+      const body = args.previous ? await previousFile(args.previous, file) : null;
+      if (!body) continue;
+      writeFileSync(join(args.out, file), body);
+    }
+    days[date] = key;
+    t0s[date] = prevManifest?.t0[date] ?? serviceDayT0(date);
+    written.push({ file, bytes: statSync(join(args.out, file)).size });
+    archived++;
+  }
   for (const date of dates) {
     days[date] = dayKey.get(date)!;
     t0s[date] = serviceDayT0(date);
@@ -582,17 +668,20 @@ async function main() {
     version: 1,
     generated: new Date().toISOString(),
     timezone: TIMEZONE,
-    source: { url, sha256: sha256(bytes), bytes: bytes.length, feedStart, feedEnd },
-    days,
-    t0: t0s,
+    source: { url, sha256: feedSha, bytes: bytes.length, feedStart, feedEnd },
+    days: Object.fromEntries(Object.entries(days).sort()),
+    t0: Object.fromEntries(Object.entries(t0s).sort()),
+    // Sealed skies are added by tools/archive/sky.ts, which carries its own.
+    sky: {},
   };
   written.push({ file: "manifest.json", bytes: writeJson(join(args.out, "manifest.json"), manifest) });
 
   // Remove day files no date refers to any more.
-  const keep = new Set(written.map((w) => w.file));
+  const keep = new Set([...written.map((w) => w.file), ...Object.values(days).map((k) => `day-${k}.json`)]);
   for (const f of readdirSync(args.out)) {
     if (/^day-[0-9a-f]+\.json$/.test(f) && !keep.has(f)) unlinkSync(join(args.out, f));
   }
+  if (args.previous) console.log(`archive: ${archived} earlier dates carried over`);
 
   // --- summary ------------------------------------------------------------------
   const ms = Math.round(performance.now() - t0);

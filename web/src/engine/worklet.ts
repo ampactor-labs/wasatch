@@ -100,3 +100,45 @@ class WasatchProcessor extends AudioWorkletProcessor {
 }
 
 registerProcessor("wasatch", WasatchProcessor);
+
+/**
+ * Tune to the room: record two inputs side by side, sample-aligned (they
+ * come in the same render quanta), then post them. Input 0 is what this
+ * phone plays, input 1 the microphone.
+ */
+class CaptureProcessor extends AudioWorkletProcessor {
+  private readonly ref: Float32Array;
+  private readonly mic: Float32Array;
+  private at = 0;
+  private done = false;
+
+  constructor(options?: { processorOptions?: { frames?: number } }) {
+    super();
+    const frames = Math.max(128, options?.processorOptions?.frames ?? 48_000);
+    this.ref = new Float32Array(frames);
+    this.mic = new Float32Array(frames);
+  }
+
+  process(inputs: Float32Array[][]): boolean {
+    if (this.done) return false;
+    const ref = inputs[0] ?? [];
+    const mic = inputs[1] ?? [];
+    const n = ref[0]?.length ?? mic[0]?.length ?? 128;
+    const take = Math.min(n, this.ref.length - this.at);
+    for (let i = 0; i < take; i++) {
+      let r = 0;
+      for (const ch of ref) r += ch[i] ?? 0;
+      this.ref[this.at + i] = ref.length ? r / ref.length : 0;
+      this.mic[this.at + i] = mic[0]?.[i] ?? 0;
+    }
+    this.at += take;
+    if (this.at >= this.ref.length) {
+      this.done = true;
+      this.port.postMessage({ ref: this.ref, mic: this.mic }, [this.ref.buffer, this.mic.buffer]);
+      return false;
+    }
+    return true;
+  }
+}
+
+registerProcessor("wasatch-capture", CaptureProcessor);

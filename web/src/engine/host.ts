@@ -5,7 +5,7 @@
 import DecodeWorker from "./decode-worker.ts?worker";
 import workletUrl from "./worklet.ts?worker&url";
 import { utcAt } from "./clock.ts";
-import { Kind, PIANO_FIRST, PIANO_SAMPLES, PIANO_SECONDS, encodeSample, encodeU32 } from "./protocol.ts";
+import { EngineHandle, Kind, PIANO_FIRST, PIANO_SAMPLES, PIANO_SECONDS, encodeSample, encodeU32 } from "./protocol.ts";
 
 /** A tiny module that uses one SIMD instruction: validates only where SIMD works. */
 const SIMD_PROBE = new Uint8Array([
@@ -84,7 +84,10 @@ type Listener = (e: Heard<EngineEvent>) => void;
 export class Host {
   readonly ctx: AudioContext;
   private node: AudioWorkletNode | null = null;
+  /** After the engine, before the speakers: ducked while tuning to the room. */
+  private outGain: GainNode | null = null;
   private module: WebAssembly.Module | null = null;
+  private analysis: EngineHandle | null = null;
   private firstContextFrame = -1;
   private listeners: Listener[] = [];
   private keepalive: HTMLAudioElement | null = null;
@@ -124,8 +127,53 @@ export class Host {
       const bytes = await (await fetch(url)).arrayBuffer();
       node.port.postMessage({ type: "module", bytes }, [bytes]);
     }
-    node.connect(ctx.destination);
+    host.outGain = ctx.createGain();
+    node.connect(host.outGain);
+    host.outGain.connect(ctx.destination);
     return host;
+  }
+
+  /** Bring this phone's own output down to `level` (or back to 1) over `ms`. */
+  duck(level: number, ms = 120): void {
+    const g = this.outGain?.gain;
+    if (!g) return;
+    const now = this.ctx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setTargetAtTime(level, now, ms / 3000);
+  }
+
+  /** Record `seconds` of `ref` (default: what the engine plays) and the
+   * microphone, sample-aligned. */
+  capture(mic: MediaStream, seconds: number, ref?: AudioNode): Promise<{ ref: Float32Array; mic: Float32Array }> {
+    const frames = Math.round(seconds * this.ctx.sampleRate);
+    const cap = new AudioWorkletNode(this.ctx, "wasatch-capture", {
+      numberOfInputs: 2,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+      processorOptions: { frames },
+    });
+    const source = ref ?? this.node;
+    source?.connect(cap, 0, 0);
+    const micNode = this.ctx.createMediaStreamSource(mic);
+    micNode.connect(cap, 0, 1);
+    // An output that's never written is silence; connecting it keeps the
+    // node pulled by the graph.
+    cap.connect(this.ctx.destination);
+    return new Promise((resolve) => {
+      cap.port.onmessage = (e: MessageEvent<{ ref: Float32Array; mic: Float32Array }>) => {
+        source?.disconnect(cap);
+        micNode.disconnect();
+        cap.disconnect();
+        resolve(e.data);
+      };
+    });
+  }
+
+  /** The engine's analysis functions, in an instance of their own on this thread. */
+  async analysisEngine(): Promise<EngineHandle> {
+    if (!this.analysis && this.module) this.analysis = await EngineHandle.fromModule(this.module);
+    if (!this.analysis) throw new Error("the engine isn't loaded");
+    return this.analysis;
   }
 
   /** Decode the piano in a worker: the welcome's notes first. */

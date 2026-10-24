@@ -774,3 +774,20 @@ a {
     transition: none;
   }
 }
+
+.pickday {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font: 700 13px/1.2 var(--font-mono);
+}
+.pickday input {
+  margin-left: 6px;
+  padding: 6px 8px;
+  border: 3px solid var(--ink);
+  border-radius: 10px;
+  font: 700 14px/1 var(--font-mono);
+  background: var(--white);
+}
