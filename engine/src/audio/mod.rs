@@ -1,5 +1,6 @@
 //! The sound: voices, the room and the master bus.
 
+pub mod homes;
 pub mod master;
 pub mod skyline;
 pub mod space;

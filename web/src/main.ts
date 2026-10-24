@@ -164,6 +164,7 @@ async function main(): Promise<void> {
       else if (e.t === "play") s.onPlay(e);
       else if (e.t === "solo") s.onSolo(e);
       else if (e.t === "day") s.onDay(e);
+      else if (e.t === "vantage") s.onVantage(e);
     });
     // Inside the tap's own call: the audio session, the context, the
     // keep-alive element.

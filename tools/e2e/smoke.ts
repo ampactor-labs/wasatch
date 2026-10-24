@@ -132,6 +132,7 @@ try {
       console.log(`  conductor: ${c.windows} windows, ${c.observed} departures seen live, ${c.scheduled} scheduled; live captions: ${live.join(" | ") || "none yet"}`);
       if (c.windows < 2) failures.push(`${view.name}: the conductor's windows didn't arrive`);
     }
+    if (view.name === "phone" && !query) await vantages(page, failures, shots);
     if (view.name === "desktop" && !query) await interactions(page, failures);
     for (const e of real) failures.push(`${view.name}: ${e}`);
     for (const e of errors) console.log(`  ${e}`);
@@ -141,6 +142,36 @@ try {
   await browser.close();
   server?.close();
 }
+/** Tap each place to listen from: the engine answers with what's near and
+ * far, a caption says so, and the map marks the spot. Back to the map last. */
+async function vantages(page: import("puppeteer-core").Page, failures: string[], shots: string | undefined): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  for (const [code, name] of [[1, "downtown"], [2, "canyons"], [3, "lake"], [0, "map"]] as const) {
+    await page.click(`[data-vantage="${code}"]`);
+    await sleep(1500);
+    const seen = await page.evaluate(() => ({
+      caption: document.querySelector(".play__captions .sign--here .sign__line")?.textContent ?? "",
+      marker: document.querySelectorAll(".map-here .here__dot").length,
+      checked: document.querySelector('[data-vantage][aria-checked="true"]')?.getAttribute("data-vantage"),
+      // Nothing drawn outside the map's frame.
+      stray: [...document.querySelectorAll(".map-vehicles > *")].filter((e) => {
+        const r = e.getBoundingClientRect();
+        const m = document.querySelector(".play__map")!.getBoundingClientRect();
+        return r.left < m.left - 1 || r.right > m.right + 1 || r.top < m.top - 1 || r.bottom > m.bottom + 1;
+      }).length,
+    }));
+    console.log(`  from ${name}: "${seen.caption}" · marker ${seen.marker ? "on the map" : "none"}`);
+    if (seen.checked !== String(code)) failures.push(`vantage ${name}: the button didn't stay checked`);
+    if (!seen.caption) failures.push(`vantage ${name}: no caption said what's near and far`);
+    if (code > 0 && seen.marker !== 1) failures.push(`vantage ${name}: no YOU ARE HERE on the map`);
+    if (code === 0 && seen.marker !== 0) failures.push("vantage map: a marker is left on the map");
+    if (seen.stray) failures.push(`vantage ${name}: ${seen.stray} vehicles drawn outside the map`);
+    if (shots && code > 0) await page.screenshot({ path: join(shots, `phone-${name}.png`) });
+  }
+  const kept = await page.evaluate(() => localStorage.getItem("wasatch:vantage"));
+  if (kept !== "0") failures.push(`vantage: the choice wasn't kept (${kept})`);
+}
+
 /** A zig-zag run down Snowbird, as GPX. */
 function gpx(): string {
   const t0 = Date.parse("2026-12-20T17:00:00Z");

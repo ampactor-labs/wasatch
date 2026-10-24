@@ -455,8 +455,10 @@ impl Bass {
 }
 
 /// The lake's pedal: a sine on the key's tonic, low, with its harmonic
-/// shadow (the octave and two octaves up) for phone speakers, gliding when
-/// the key moves and breathing with the lake's slosh.
+/// shadow for phone speakers, gliding when the key moves and breathing with
+/// the lake's slosh. The pedal sits at 41–78 Hz and a phone plays little
+/// under about 500 Hz, so the shadow reaches up to the 6th and 8th partials
+/// (250–620 Hz): enough for the ear to hear the low note that isn't there.
 #[derive(Clone, Debug)]
 pub struct LakePedal {
     s: f32,
@@ -497,8 +499,8 @@ impl LakePedal {
 
     /// Render one sample at `level` (0–1), breathing by `slosh` (0–1).
     ///
-    /// The tone is a rotating phasor and its octave and two-octave partials
-    /// come from double-angle identities, so a sample costs no sines.
+    /// The tone is a rotating phasor and its partials come from double- and
+    /// triple-angle identities, so a sample costs no sines.
     #[inline]
     pub fn tick(&mut self, level: f32, slosh: f32, out: &mut Out) {
         self.counter += 1;
@@ -529,7 +531,10 @@ impl LakePedal {
         let s2 = 2.0 * s * c;
         let c2 = 1.0 - 2.0 * s * s;
         let s4 = 2.0 * s2 * c2;
-        let x = s + 0.3 * s2 + 0.14 * s4;
+        let c4 = 1.0 - 2.0 * s2 * s2;
+        let s6 = s2 * (3.0 - 4.0 * s2 * s2);
+        let s8 = 2.0 * s4 * c4;
+        let x = s + 0.3 * s2 + 0.14 * s4 + 0.06 * s6 + 0.07 * s8;
         let y = x * 0.32 * self.level * self.breath;
         out.l += y * 0.7;
         out.r += y * 0.7;
@@ -1099,6 +1104,34 @@ mod tests {
     use super::*;
 
     const SR: f32 = 48_000.0;
+
+    #[test]
+    fn the_lake_reaches_a_phone() {
+        // The pedal on E1 (41 Hz): its 8th partial, at 330 Hz, is there.
+        let mut lake = LakePedal::new(SR);
+        lake.set_note(28.0);
+        lake.freq = midi_hz(28.0);
+        let mut out = Out::default();
+        let n = SR as usize;
+        let (mut re, mut im, mut all) = (0.0f64, 0.0f64, 0.0f64);
+        let w = 2.0 * core::f64::consts::PI * 8.0 * f64::from(midi_hz(28.0)) / f64::from(SR);
+        for i in 0..2 * n {
+            let before = out.l;
+            lake.tick(1.0, 0.0, &mut out);
+            let y = f64::from(out.l - before);
+            if i >= n {
+                re += y * (w * i as f64).cos();
+                im += y * (w * i as f64).sin();
+                all += y * y;
+            }
+        }
+        let eighth = 2.0 * (re * re + im * im) / n as f64;
+        assert!(
+            eighth / (all / n as f64) > 0.002,
+            "the 8th partial's share {}",
+            eighth / (all / n as f64)
+        );
+    }
 
     #[test]
     fn envelopes_finish() {

@@ -1,15 +1,20 @@
 //! The master bus, mixed like a radio station.
 //!
-//! A slow loudness rider (K-weighted mean square over about three seconds,
-//! ITU-R BS.1770's weighting) moves the gain toward −16 LUFS within ±8 dB,
-//! so 3am and rush hour sit at one level without anyone riding a fader. Then
+//! A slow loudness rider (a weighted mean square over about three seconds)
+//! moves the gain within ±8 dB, so 3am and rush hour sit at one level without
+//! anyone riding a fader. Its weighting is ITU-R BS.1770's high shelf with
+//! the high-pass moved from 38 Hz up to 150 Hz: it rides what a phone's
+//! speaker plays (little under about 500 Hz), so a lake-heavy night or the
+//! view from Saltair isn't turned down for bass a phone never sounds. Then
 //! sonido's multiband compressor, gently, and its true-peak limiter at −1 dBTP.
 
 use sonido_core::{DspKernel, TruePeakLimiter};
 use sonido_effects::kernels::{MultibandCompKernel, MultibandCompParams};
 
-/// The loudness the rider aims for.
-pub const TARGET_LUFS: f32 = -16.0;
+/// The loudness the rider aims for, on its own meter. Leaving out the lows,
+/// it reads about a decibel under BS.1770 for this music, so this lands the
+/// stream at about −16 LUFS integrated (tools/render/check.ts holds it there).
+pub const TARGET_LUFS: f32 = -17.5;
 /// The true-peak ceiling.
 pub const CEILING_DBTP: f32 = -1.0;
 
@@ -89,7 +94,8 @@ impl Master {
     /// A master bus at `sr`, faded out.
     pub fn new(sr: f32) -> Self {
         let shelf = Biquad::high_shelf(sr, 1681.97, 4.0, core::f32::consts::FRAC_1_SQRT_2);
-        let hp = Biquad::high_pass(sr, 38.13, 0.5);
+        // BS.1770's shelf; its high-pass, moved up to where a phone starts.
+        let hp = Biquad::high_pass(sr, 150.0, 0.5);
         Master {
             kw: [[shelf, hp], [shelf, hp]],
             ms: 0.0,
@@ -141,7 +147,8 @@ impl Master {
         self.gain_db
     }
 
-    /// Short-term loudness estimate, LUFS.
+    /// Short-term loudness on the rider's phone-weighted meter, in LUFS-like
+    /// units.
     pub fn loudness(&self) -> f32 {
         -0.691 + 10.0 * libm::log10f(self.ms + 1e-12)
     }
@@ -149,7 +156,7 @@ impl Master {
     /// Process one stereo frame.
     #[inline]
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
-        // Measure the K-weighted loudness of what comes in.
+        // Measure the weighted loudness of what comes in.
         let sl = self.kw[0][0].process(l);
         let kl = self.kw[0][1].process(sl);
         let sr = self.kw[1][0].process(r);

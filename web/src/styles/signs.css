@@ -126,6 +126,18 @@
   outline-offset: -1.5px;
 }
 
+/* Here: your own choice of place, painted like a trail map's YOU ARE HERE
+   board, with a sun-yellow tag. */
+.sign--here {
+  --sign-wood: #8c2f39;
+  --sign-wood-light: #a33a45;
+  --sign-wood-dark: #74252e;
+  --sign-text: #ffe9a8;
+  --sign-line: rgb(255 233 168 / 0.45);
+  --sign-tag-bg: var(--sun, #ffd23f);
+  --sign-tag-text: var(--ink, #1b1f3b);
+}
+
 .sign--small {
   padding: 7px 24px 8px;
   font-size: 13px;

@@ -23,7 +23,7 @@ fn main() {
     room.set(Vantage::Canyons, 0.5);
     let mut x = 0.1f32;
     time("room (ER + lid + canyon + FDN)", || {
-        let (l, r) = room.process(x, x, x * 0.2);
+        let (l, r) = room.process(x, x, x * 0.2, x);
         x = -x * 0.999 + (l + r) * 1e-6;
     });
     let mut master = Master::new(SR);

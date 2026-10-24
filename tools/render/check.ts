@@ -5,8 +5,10 @@
 //   node tools/render/check.ts [YYYY-MM-DD] [--seconds 90]
 //
 // Fails if any rendering is too loud or too quiet, peaks above the ceiling,
-// goes silent, produces a NaN, or differs between two runs; then plays the
-// day before as A Day in Twelve Minutes and holds that to the same rules.
+// goes silent, produces a NaN, or differs between two runs; then listens to
+// the evening from each vantage (each must sound like its place, and none
+// may jump in loudness on a phone's speaker); then plays the day before as
+// A Day in Twelve Minutes and holds that to the same rules.
 import { render, type RenderResult } from "./render.ts";
 
 const SR = 48_000;
@@ -101,6 +103,33 @@ export function longestSilence(left: Float32Array, right: Float32Array): number 
   return longest / SR;
 }
 
+/** A one-pole low-pass (or the high-pass left over), in place of a filter bank. */
+function onePole(x: Float32Array, fc: number, high = false): Float32Array {
+  const a = Math.exp((-2 * Math.PI * fc) / SR);
+  const y = new Float32Array(x.length);
+  let z = 0;
+  for (let i = 0; i < x.length; i++) {
+    z += (x[i]! - z) * (1 - a);
+    y[i] = high ? x[i]! - z : z;
+  }
+  return y;
+}
+
+const energy = (x: Float32Array) => x.reduce((s, v) => s + v * v, 0);
+const dB = (r: number) => 10 * Math.log10(Math.max(r, 1e-20));
+
+/** What a listener would notice of a mix: its highs (above about 4 kHz),
+ * its width, and its level through a phone's speaker (about 500 Hz–6 kHz,
+ * one speaker), each in dB. */
+export function picture(left: Float32Array, right: Float32Array): { highs: number; width: number; phone: number } {
+  const mid = left.map((l, i) => (l + right[i]!) / 2);
+  const side = left.map((l, i) => (l - right[i]!) / 2);
+  const all = energy(mid);
+  const highs = energy(onePole(onePole(mid, 4000, true), 4000, true));
+  const phone = onePole(onePole(onePole(onePole(mid, 500, true), 500, true), 6000), 6000);
+  return { highs: dB(highs / all), width: dB(energy(side) / all), phone: dB(energy(phone) / mid.length) };
+}
+
 function finite(x: Float32Array): boolean {
   for (const v of x) if (!Number.isFinite(v)) return false;
   return true;
@@ -134,12 +163,42 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       `${day} ${time}: ${lufs.toFixed(1)} LUFS, ${tp.toFixed(2)} dBTP, longest quiet ${silence.toFixed(2)} s, ${features} captions, ${(r.seconds / r.elapsed).toFixed(1)}x realtime`,
     );
     if (!ok) failures.push(`${time}: NaN or infinity in the output`);
-    if (!(lufs > -21 && lufs < -12)) failures.push(`${time}: loudness ${lufs.toFixed(1)} LUFS is outside −21…−12`);
+    if (!(lufs > -17.5 && lufs < -14.5)) failures.push(`${time}: loudness ${lufs.toFixed(1)} LUFS is outside −17.5…−14.5`);
     if (tp > -0.5) failures.push(`${time}: true peak ${tp.toFixed(2)} dBTP is above −0.5`);
     if (silence > 2.5) failures.push(`${time}: ${silence.toFixed(2)} s of near-silence`);
     if (!same) failures.push(`${time}: two identical renders differ`);
     if (features < Math.floor((seconds - settle) / 40)) failures.push(`${time}: only ${features} captions in ${seconds} s`);
   }
+  // The vantages: the same evening from each place.
+  const places = ["everywhere", "downtown", "the canyons", "the lake"];
+  const heard: { lufs: number; tp: number; highs: number; width: number; phone: number; hash: string; apart: number }[] = [];
+  let map: RenderResult | null = null;
+  for (const [v, place] of places.entries()) {
+    const r = await render(day, "17:40", 60, { vantage: v });
+    const l = r.left.subarray(settle * SR);
+    const rr = r.right.subarray(settle * SR);
+    map ??= r;
+    // How far this mix is from the map's: the energy of the difference.
+    const ml = map.left.subarray(settle * SR);
+    const apart = v === 0 ? -Infinity : dB(energy(l.map((x, i) => x - ml[i]!)) / energy(ml));
+    const h = { lufs: loudness(l, rr), tp: Math.max(truePeak(l), truePeak(rr)), ...picture(l, rr), hash: r.hash, apart };
+    heard.push(h);
+    console.log(
+      `from ${place}: ${h.lufs.toFixed(1)} LUFS, ${h.tp.toFixed(2)} dBTP, highs ${h.highs.toFixed(1)} dB, width ${h.width.toFixed(1)} dB, on a phone ${h.phone.toFixed(1)} dB${v ? `, ${h.apart.toFixed(1)} dB from the map's mix` : ""}`,
+    );
+    if (!(h.lufs > -17.5 && h.lufs < -14.5)) failures.push(`from ${place}: loudness ${h.lufs.toFixed(1)} LUFS`);
+    if (h.tp > -0.5) failures.push(`from ${place}: true peak ${h.tp.toFixed(2)} dBTP`);
+  }
+  const [everywhere, downtown, canyons, lake] = heard as [(typeof heard)[0], (typeof heard)[0], (typeof heard)[0], (typeof heard)[0]];
+  if (new Set(heard.map((h) => h.hash)).size !== 4) failures.push("vantages: two of them render the same");
+  for (const [i, h] of heard.entries()) {
+    if (i > 0 && h.apart < -8) failures.push(`from ${places[i]}: only ${h.apart.toFixed(1)} dB from the map's mix`);
+    if (Math.abs(h.phone - everywhere.phone) > 4) failures.push(`from ${places[i]}: ${(h.phone - everywhere.phone).toFixed(1)} dB on a phone against the map`);
+  }
+  if (lake.highs > everywhere.highs - 4) failures.push(`from the lake: highs ${lake.highs.toFixed(1)} dB, not darker than the map's ${everywhere.highs.toFixed(1)}`);
+  if (canyons.width < everywhere.width + 1.5) failures.push(`from the canyons: width ${canyons.width.toFixed(1)} dB, no wider than the map's ${everywhere.width.toFixed(1)}`);
+  void downtown;
+
   // A Day in Twelve Minutes: the day before, start to finish, then live.
   const days = Object.keys(manifest.days).sort();
   const yesterday = days[days.indexOf(day) - 1] ?? day;
@@ -162,7 +221,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   );
   if (dayBars < 295) failures.push(`twelve: only ${dayBars} bars of the day`);
   if (!backLive) failures.push("twelve: never came back to live");
-  if (minutes.some((l) => !(l > -21 && l < -12))) failures.push(`twelve: a minute outside −21…−12 LUFS (${minutes.map((l) => l.toFixed(1)).join(" ")})`);
+  if (minutes.some((l) => !(l > -17.5 && l < -14.5))) failures.push(`twelve: a minute outside −17.5…−14.5 LUFS (${minutes.map((l) => l.toFixed(1)).join(" ")})`);
   if (tp > -0.5) failures.push(`twelve: true peak ${tp.toFixed(2)} dBTP`);
   if (quiet > 2.5) failures.push(`twelve: ${quiet.toFixed(2)} s of near-silence`);
   for (const [m, name] of [[2, "the night's last train"], [3, "sunrise"], [4, "sunset"]] as const) {

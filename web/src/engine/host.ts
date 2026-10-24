@@ -56,6 +56,21 @@ export interface PulseEvent {
   lat: number;
   lon: number;
   m: number;
+  /** How loud it is from where you're listening, 0–1 (1 on the map). */
+  g?: number;
+}
+/** The listener moved: where to, and how near each family is from there. */
+export interface VantageEvent {
+  t: "vantage";
+  v: number;
+  lat: number | null;
+  lon: number | null;
+  face: number | null;
+  /** Each family's level from here (0–1): the mountains, the city, the
+   * lake, the rivers, the ridges, the snow, the air. */
+  near: number[];
+  /** How near the rail stations are (0–1). */
+  rail: number;
 }
 export interface ThemeEvent {
   t: "theme";
@@ -79,7 +94,7 @@ export interface DayEvent {
   ok: boolean;
   anchor?: number;
 }
-export type EngineEvent = (BarEvent | FeatureEvent | PulseEvent | ThemeEvent | PlayEvent | SoloEvent | DayEvent) & { f: number };
+export type EngineEvent = (BarEvent | FeatureEvent | PulseEvent | ThemeEvent | PlayEvent | SoloEvent | DayEvent | VantageEvent) & { f: number };
 export type Heard<E> = E & { /** performance.now() when it's heard */ at: number };
 
 type Listener = (e: Heard<EngineEvent>) => void;

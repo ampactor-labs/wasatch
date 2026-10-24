@@ -2,7 +2,7 @@
 // saying where it came from. The first time a family sounds, its caption says
 // what the family is; after that, captions are short.
 
-import type { BarEvent, FeatureEvent, Heard } from "../engine/host.ts";
+import type { BarEvent, FeatureEvent, Heard, VantageEvent } from "../engine/host.ts";
 import type { Receipt } from "../data/feeds.ts";
 import { changedNote, keyName, type Key } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
@@ -11,7 +11,8 @@ export interface Caption {
   text: string;
   /** Said once, the first time this family sounds. */
   intro?: string;
-  receipt: Receipt;
+  /** Where it came from; "here" is the listener's own choice of vantage. */
+  receipt: Receipt | "here";
   /** When the source observed it (UTC ms), for "live 5:42 PM". */
   observed?: number;
   /** When it's heard, performance.now(). */
@@ -31,7 +32,8 @@ export type Family =
   | "wind"
   | "snow"
   | "sky"
-  | "harmony";
+  | "harmony"
+  | "vantage";
 
 const FEATURE_FAMILY: Family[] = ["trax", "frontrunner", "skibus", "bike", "quake", "theme", "lake", "ground", "wind", "snow", "sky", "harmony"];
 
@@ -47,6 +49,7 @@ const INTROS: Partial<Record<Family, string>> = {
   wind: "The harp is the wind on the ridges.",
   snow: "The sparkle is snow falling in the mountains.",
   harmony: "Every few minutes the harmony moves one note, and this line says why.",
+  vantage: "Where you listen changes the mix, never the music: what's near is close, bright and dry, what's far is quiet, dark and echoing. Friends listening elsewhere are still in the same bar.",
 };
 
 /** Formatting in Mountain time, whatever the listener's zone. */
@@ -72,6 +75,7 @@ export function mountainHour(ms: number): number {
 
 export function receiptText(c: Pick<Caption, "receipt" | "observed">): string {
   if (c.receipt === "scheduled") return "scheduled";
+  if (c.receipt === "here") return "you are here";
   return c.observed ? `${c.receipt} ${mountainTime(c.observed)}` : c.receipt;
 }
 
@@ -214,3 +218,34 @@ function skyCaption(base: { at: number; intro?: string }, valley: ValleyNow, key
 }
 
 export { fmt1 };
+
+/** The places, as the engine has them (engine/src/audio/space.rs). */
+export const PLACES: Record<number, { lat: number; lon: number; face: number; name: string }> = {
+  1: { lat: 40.7647, lon: -111.891, face: 90, name: "The Gallivan Center, downtown" },
+  2: { lat: 40.5714, lon: -111.7027, face: 75, name: "Tanners Flat, up Little Cottonwood" },
+  3: { lat: 40.7651, lon: -112.1745, face: 90, name: "Saltair, on the lake" },
+};
+
+/** The families in a vantage event's order, as a listener would name them. */
+const NEAR_NAMES = ["the mountains", "the city's groove", "the lake", "the river", "the wind", "the snow"];
+/** Which to name first: what a listener notices most. */
+const PROMINENCE = ["the trains", "the city's groove", "the mountains", "the lake", "the wind", "the river", "the snow"];
+
+function list(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : (names[0] ?? "");
+}
+
+/** What a move sounds like: "From Saltair on the lake's shore: the lake's
+ * drone up close; the city's groove and the trains far off." */
+export function vantageCaption(e: Heard<VantageEvent>): Caption {
+  const place = PLACES[e.v];
+  const base = { receipt: "here" as const, at: e.at, family: "vantage" as const, intro: INTROS.vantage };
+  if (!place) return { ...base, text: "The whole valley, as a map: west on your left, east on your right" };
+  const heard = [...NEAR_NAMES.map((name, i) => ({ name, g: e.near[i] ?? 1 })), { name: "the trains", g: e.rail }].sort(
+    (a, b) => PROMINENCE.indexOf(a.name) - PROMINENCE.indexOf(b.name),
+  );
+  const near = heard.filter((h) => h.g >= 0.8).slice(0, 2);
+  const far = heard.filter((h) => h.g <= 0.45).slice(0, 2);
+  const parts = [near.length ? `${list(near.map((h) => h.name))} up close` : "", far.length ? `${list(far.map((h) => h.name))} far off` : ""].filter(Boolean);
+  return { ...base, text: `${place.name}${parts.length ? `: ${parts.join("; ")}` : ""}` };
+}

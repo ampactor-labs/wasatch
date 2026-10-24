@@ -22,8 +22,20 @@ import {
   type Vantage,
 } from "../art/index.ts";
 import { esc, n } from "../art/util.ts";
-import type { BarEvent, DayEvent, FeatureEvent, Heard, PlayEvent, PulseEvent, SoloEvent, ThemeEvent } from "../engine/host.ts";
-import { featureCaption, harmonyCaption, mountainDate, mountainDay, mountainHour, mountainTime, receiptText, type Caption, type Family } from "./captions.ts";
+import type { BarEvent, DayEvent, FeatureEvent, Heard, PlayEvent, PulseEvent, SoloEvent, ThemeEvent, VantageEvent } from "../engine/host.ts";
+import {
+  featureCaption,
+  harmonyCaption,
+  mountainDate,
+  mountainDay,
+  mountainHour,
+  mountainTime,
+  PLACES,
+  receiptText,
+  vantageCaption,
+  type Caption,
+  type Family,
+} from "./captions.ts";
 import { midiName } from "./music.ts";
 import { dialLabels, homePos, keyName, noteName, push, type Key } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
@@ -50,6 +62,17 @@ const PULSE_COLOR: Record<number, string> = {
 };
 
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** Where the listener last chose to listen from, kept on this device. */
+const VANTAGE_KEY = "wasatch:vantage";
+function savedVantage(): number {
+  try {
+    const v = Number(localStorage.getItem(VANTAGE_KEY));
+    return v >= 0 && v <= 3 ? v : 0;
+  } catch {
+    return 0;
+  }
+}
 
 export interface ScreenDeps {
   schedule: Schedule;
@@ -119,6 +142,7 @@ export class PlayScreen {
       <section class="play__captions" aria-live="polite" aria-label="What you're hearing"></section>
       <nav class="play__bar">
         <div class="play__vantage" role="radiogroup" aria-label="Where you're listening from">
+          <span class="play__vantage-label" aria-hidden="true">Listen from</span>
           ${VANTAGES.map(
             (v) => `<button type="button" role="radio" class="vantage" data-vantage="${v.code}" aria-checked="${v.code === 0}">
               ${trailIcon(VANTAGE_TRAIL[v.id], { size: 30 })}<span class="vantage__long">${esc(v.name)}</span><span class="vantage__short">${esc(v.short)}</span></button>`,
@@ -157,6 +181,8 @@ export class PlayScreen {
     this.tick();
     this.renderDial();
     this.renderStickers();
+    const saved = savedVantage();
+    if (saved) this.setVantage(saved, false);
   }
 
   setPaused(p: boolean): void {
@@ -169,12 +195,25 @@ export class PlayScreen {
     this.root.querySelector(".play")?.classList.toggle("play--paused", p);
   }
 
-  setVantage(code: number): void {
+  /** Move the listener; the engine answers with what's near and far. */
+  setVantage(code: number, ping = true): void {
     this.vantage = code;
     this.root.querySelectorAll<HTMLButtonElement>("[data-vantage]").forEach((b) => {
       b.setAttribute("aria-checked", String(Number(b.dataset.vantage) === code));
     });
+    try {
+      localStorage.setItem(VANTAGE_KEY, String(code));
+    } catch {
+      // A private window: it's only a convenience.
+    }
+    this.drawHere();
+    const place = PLACES[code];
+    if (ping && place) this.pulse({ t: "pulse", i: -1, lat: place.lat, lon: place.lon, m: 0, at: performance.now() });
     this.deps.onVantage(code);
+  }
+
+  onVantage(e: Heard<VantageEvent>): void {
+    if (e.v === this.vantage) this.caption(vantageCaption(e));
   }
 
   /** Redraw everything sized to the screen. */
@@ -319,8 +358,12 @@ export class PlayScreen {
     // The base map and the lines are static; trains, events and the
     // seismometers move on an overlay, so the map itself never repaints.
     const proj = this.proj;
+    const u = Math.max(0.7, Math.min(1.4, w / 390));
     host.innerHTML = `${mapBase({ bounds, width: w, height: h, labels: w >= 300 })}
-      <svg class="play__overlay" viewBox="0 0 ${w} ${h}" aria-hidden="true"><g class="map-vehicles"></g></svg>
+      <svg class="play__overlay" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+        <clipPath id="overlay-frame"><rect width="${w}" height="${h}" rx="${n(14 * u)}"/></clipPath>
+        <g clip-path="url(#overlay-frame)"><g class="map-here"></g><g class="map-vehicles"></g></g>
+      </svg>
       <div class="play__marks" aria-hidden="true">${STATIONS.map((s, band) => {
         const [x, y] = proj.project(s.lat, s.lon);
         return `<div class="seis" data-band="${band}" style="left:${n(x)}px;top:${n(y)}px"><i class="seis__ring"></i><i class="seis__dot"></i></div>`;
@@ -328,7 +371,42 @@ export class PlayScreen {
     const routes = host.querySelector("svg.map .map-routes");
     if (routes) routes.innerHTML = this.routesSvg();
     this.drawGround();
+    this.drawHere();
     this.drawVehicles();
+  }
+
+  /** Where you're listening from, as a trail map says it: a dot, the way
+   * you're facing, and rings at 5 and 15 km (near, and far). The map view
+   * has no one place, so no marker. */
+  private drawHere(): void {
+    const g = this.root.querySelector(".play__overlay .map-here");
+    const proj = this.proj;
+    if (!g || !proj) return;
+    const place = PLACES[this.vantage];
+    if (!place) {
+      g.innerHTML = "";
+      return;
+    }
+    const [x, y] = proj.project(place.lat, place.lon);
+    const km = proj.scale / 110.57;
+    const near = 5 * km;
+    const far = 15 * km;
+    // The facing, 70° wide, out past the near ring; north is up.
+    const reach = near * 1.6;
+    const at = (deg: number) => [x + reach * Math.sin((deg * Math.PI) / 180), y - reach * Math.cos((deg * Math.PI) / 180)] as const;
+    const [ax, ay] = at(place.face - 35);
+    const [bx, by] = at(place.face + 35);
+    const ring = (r: number, cls: string) => `<circle class="here__ring ${cls}" cx="${n(x)}" cy="${n(y)}" r="${n(r)}"/>`;
+    // The tag goes on whichever side has room.
+    const left = x > proj.width - 130;
+    const tx = left ? x - 12 : x + 12;
+    g.innerHTML = `${ring(far, "here__ring--far")}${ring(near, "")}
+      <path class="here__cone" d="M${n(x)} ${n(y)}L${n(ax)} ${n(ay)}A${n(reach)} ${n(reach)} 0 0 1 ${n(bx)} ${n(by)}Z"/>
+      <circle class="here__dot" cx="${n(x)}" cy="${n(y)}" r="6.5"/>
+      <g class="here__tag" transform="translate(${n(tx)} ${n(y - 22)})">
+        <rect x="${left ? -106 : 0}" width="106" height="20" rx="5"/>
+        <text x="${left ? -53 : 53}" y="14.5" text-anchor="middle" textLength="92" lengthAdjust="spacingAndGlyphs">YOU ARE HERE</text>
+      </g>`;
   }
 
   /** Each seismometer's ring follows its band's level; hidden when it's quiet or offline. */
@@ -386,10 +464,19 @@ export class PlayScreen {
     const proj = this.proj;
     if (!g || !proj) return;
     const trains = this.deps.schedule.trainsAt(this.dayNow());
+    const edge = 9;
     g.innerHTML = trains
       .map((t) => {
         const [x, y] = proj.project(t.lat, t.lon);
         const color = this.deps.schedule.routeColor(t.route);
+        // A train past the map's edge (FrontRunner up to Ogden, down to
+        // Provo) is an arrow on the edge, pointing where it is.
+        const cx = Math.max(edge, Math.min(proj.width - edge, x));
+        const cy = Math.max(edge, Math.min(proj.height - edge, y));
+        if (cx !== x || cy !== y) {
+          const deg = (Math.atan2(y - cy, x - cx) * 180) / Math.PI;
+          return `<path d="M5 0L-4 -4.6L-4 4.6Z" transform="translate(${n(cx)} ${n(cy)}) rotate(${n(deg)})" fill="${color}" stroke="#1B1F3B" stroke-width="1.6" stroke-linejoin="round"/>`;
+        }
         return `<rect x="${n(x - 3.6)}" y="${n(y - 3.6)}" width="7.2" height="7.2" rx="2" fill="${color}" stroke="#1B1F3B" stroke-width="1.8"/>`;
       })
       .join("");
@@ -405,13 +492,15 @@ export class PlayScreen {
     const off = x < edge || y < edge || x > proj.width - edge || y > proj.height - edge;
     x = Math.max(edge, Math.min(proj.width - edge, x));
     y = Math.max(edge, Math.min(proj.height - edge, y));
-    const color = PULSE_COLOR[e.i] ?? "#FF6B35";
-    const big = e.i === 5;
+    const color = e.i < 0 ? "#FFD23F" : (PULSE_COLOR[e.i] ?? "#FF6B35");
+    const big = e.i === 5 || e.i < 0;
     // Plain elements that only scale and fade: the compositor animates them
-    // without repainting the map.
+    // without repainting the map. A far event, quiet from where you're
+    // listening, is a smaller, fainter ring.
     const el = document.createElement("div");
     el.className = `pulse${big ? " pulse--big" : ""}${off ? " pulse--edge" : ""}`;
-    el.style.cssText = `left:${n(x)}px;top:${n(y)}px;--c:${color}`;
+    const loud = Math.sqrt(Math.max(0, Math.min(1, e.g ?? 1)));
+    el.style.cssText = `left:${n(x)}px;top:${n(y)}px;--c:${color};scale:${(0.45 + 0.55 * loud).toFixed(2)};opacity:${(0.35 + 0.65 * loud).toFixed(2)}`;
     el.innerHTML = `<i class="pulse__ring"></i><i class="pulse__dot"></i>`;
     g.appendChild(el);
     window.setTimeout(() => el.remove(), big ? 4000 : 1800);

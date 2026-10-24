@@ -3,8 +3,12 @@
 //! A vantage is a real place with a facing. Each located event is placed
 //! from it: bearing sets the pan, distance sets the level by a compressed law
 //! (gain = (1 + d/3 km)^−1, floored at −24 dB, the exponent halving under an
-//! inversion), a high cut and the reverb share. "Everywhere" is the map view:
-//! west left, east right, no distance.
+//! inversion), a high cut and the reverb share. A sound behind you is a
+//! little quieter (the ear's own shadow), and from inside Little Cottonwood
+//! anything outside the canyon comes over its walls, quieter and darker.
+//! "Everywhere" is the map view: west left, east right, no distance. The
+//! families that live somewhere bigger than a point (the mountains, the
+//! city, the lake) are heard by the same law in homes.rs.
 //!
 //! Until the rooms are recorded with sine sweeps (DESIGN.md "Vantage"), each
 //! vantage's early reflections are modeled from its geometry: flutter between
@@ -25,7 +29,7 @@ pub enum Vantage {
     Everywhere = 0,
     /// The Gallivan Center, facing the mountains.
     Downtown = 1,
-    /// The mouth of Little Cottonwood, facing up-canyon.
+    /// Tanners Flat in Little Cottonwood, facing up-canyon.
     Canyons = 2,
     /// Saltair, facing the city.
     Lake = 3,
@@ -43,19 +47,70 @@ impl Vantage {
     }
 
     /// Latitude, longitude and facing (degrees clockwise from north).
-    fn point(self) -> Option<(f32, f32, f32)> {
+    pub fn point(self) -> Option<(f32, f32, f32)> {
         match self {
             Vantage::Everywhere => None,
             Vantage::Downtown => Some((40.7647, -111.891, 90.0)),
-            Vantage::Canyons => Some((40.5800, -111.796, 100.0)),
+            // Eight kilometers up the canyon, where SR-210 and the creek
+            // run between granite walls, facing up toward Snowbird.
+            Vantage::Canyons => Some((40.5714, -111.7027, 75.0)),
             Vantage::Lake => Some((40.7651, -112.1745, 90.0)),
         }
+    }
+
+    /// `true` where the canyon's walls stand between you and the valley.
+    pub fn walled(self) -> bool {
+        self == Vantage::Canyons
     }
 }
 
 /// `true` for a point inside the Cottonwood canyons.
-fn in_canyons(lat: f32, lon: f32) -> bool {
+pub fn in_canyons(lat: f32, lon: f32) -> bool {
     lon > -111.80 && (40.54..40.66).contains(&lat)
+}
+
+/// A point as seen from a vantage's point: its distance (km), and the sine
+/// and cosine of its bearing against the facing (right is +sine, ahead is
+/// +cosine).
+pub fn relative(from: (f32, f32, f32), lat: f32, lon: f32) -> (f32, f32, f32) {
+    let (lat0, lon0, facing) = from;
+    let dx = (lon - lon0) * libm::cosf(lat0.to_radians()) * 111.32;
+    let dy = (lat - lat0) * 110.57;
+    let d = libm::sqrtf(dx * dx + dy * dy);
+    if d < 1e-3 {
+        return (0.0, 0.0, 1.0);
+    }
+    let (sf, cf) = (
+        libm::sinf(facing.to_radians()),
+        libm::cosf(facing.to_radians()),
+    );
+    let (e, n) = (dx / d, dy / d);
+    (d, e * cf - n * sf, n * cf + e * sf)
+}
+
+/// The distance law's amplitude at `d` km: (1 + d/3)^−1, its exponent
+/// halving under a full inversion.
+pub fn distance_gain(d: f32, inversion: f32) -> f32 {
+    let exponent = 1.0 - 0.5 * inversion.clamp(0.0, 1.0);
+    if exponent >= 0.999 {
+        1.0 / (1.0 + d / 3.0)
+    } else {
+        libm::powf(1.0 + d / 3.0, -exponent)
+    }
+}
+
+/// The ear's shadow: ahead is as it is, behind is 3 dB down.
+pub fn shade(cos_rel: f32) -> f32 {
+    0.85 + 0.15 * cos_rel
+}
+
+/// What a canyon's walls leave of a sound from outside it: its level, and
+/// what's left of its highs.
+pub const WALLS: (f32, f32) = (0.6, 0.6);
+
+/// The distance cut's corner at `d` km, Hz.
+pub fn cut_hz(d: f32) -> f32 {
+    (16_000.0 / (1.0 + d / 4.0)).clamp(1800.0, 20_000.0)
 }
 
 /// Place a sound at `lat`/`lon` (NaN for nowhere in particular) as heard
@@ -75,7 +130,7 @@ pub fn place(
         };
     }
     let canyon = if in_canyons(lat, lon) { 0.35 } else { 0.0 };
-    let Some((lat0, lon0, facing)) = vantage.point() else {
+    let Some(at) = vantage.point() else {
         let (gl, gr) = pan_gains(((lon + 111.89) / 0.16).clamp(-1.0, 1.0));
         return Placement {
             gl,
@@ -85,15 +140,15 @@ pub fn place(
             canyon,
         };
     };
-    let dx = (lon - lon0) * libm::cosf(lat0.to_radians()) * 111.32;
-    let dy = (lat - lat0) * 110.57;
-    let d = libm::sqrtf(dx * dx + dy * dy);
-    let bearing = libm::atan2f(dx, dy).to_degrees();
-    let rel = (bearing - facing).to_radians();
-    let (gl, gr) = pan_gains(libm::sinf(rel) * 0.9);
-    let exponent = 1.0 - 0.5 * inversion.clamp(0.0, 1.0);
-    let gain = libm::powf(1.0 + d / 3.0, -exponent).max(0.063);
-    let fc = (16_000.0 / (1.0 + d / 4.0)).clamp(1800.0, 20_000.0);
+    let (d, side, ahead) = relative(at, lat, lon);
+    let (gl, gr) = pan_gains(side * 0.9);
+    let mut gain = distance_gain(d, inversion) * shade(ahead);
+    let mut fc = cut_hz(d);
+    if vantage.walled() && !in_canyons(lat, lon) {
+        gain *= WALLS.0;
+        fc *= WALLS.1;
+    }
+    let gain = gain.max(0.063);
     let cut = if fc >= 15_000.0 {
         0.0
     } else {
@@ -204,6 +259,42 @@ const CANYON_TAPS: [(f32, f32, f32); 4] = [
     (1.38, 0.06, 0.08),
 ];
 
+/// How loudly a place echoes the music itself: each echo is this times its
+/// tap's gain. The map has no walls; downtown's towers flutter (the first
+/// return about −14 dB); the canyon's granite slaps back at about −12 dB;
+/// the Oquirrhs send one faint return across the lake.
+fn echo_level(v: Vantage) -> f32 {
+    match v {
+        Vantage::Everywhere => 0.0,
+        Vantage::Downtown => 0.45,
+        Vantage::Canyons => 0.8,
+        Vantage::Lake => 1.0,
+    }
+}
+
+/// Echoes longer than a slap land on the nearest sixteenth note, so the
+/// walls answer in time instead of smearing the groove: the geometry picks
+/// among musical delays, as data picks among musical notes.
+const SLAP_S: f32 = 0.12;
+
+/// `taps` with every echo past a slap moved to the sixteenth-note grid.
+fn on_the_grid(
+    taps: &[(f32, f32, f32)],
+    sixteenth_s: f32,
+    out: &mut [(f32, f32, f32); 8],
+) -> usize {
+    let n = taps.len().min(out.len());
+    for (o, &(t, l, r)) in out.iter_mut().zip(&taps[..n]) {
+        let t = if t > SLAP_S && sixteenth_s > 0.0 {
+            libm::roundf(t / sixteenth_s).max(1.0) * sixteenth_s
+        } else {
+            t
+        };
+        *o = (t, l, r);
+    }
+    n
+}
+
 /// A low ceiling: what the lid adds.
 const LID_TAPS: [(f32, f32, f32); 5] = [
     (0.012, 0.3, 0.26),
@@ -214,9 +305,20 @@ const LID_TAPS: [(f32, f32, f32); 5] = [
 ];
 
 /// The room: the vantage's reflections, the lid's, the canyon's own echo
-/// for canyon events, and the shared tail.
+/// for canyon events, the place's echo of the music itself, and the shared
+/// tail.
 pub struct Room {
     er: Reflections,
+    /// The place's echo of the direct sound.
+    echo: Reflections,
+    echo_level: f32,
+    /// The taps fade out, change, and fade back in, so a new place or tempo
+    /// never clicks.
+    fade: f32,
+    fade_target: f32,
+    retap: bool,
+    vantage: Vantage,
+    sixteenth_s: f32,
     lid: Reflections,
     canyon: Reflections,
     reverb: ReverbKernel,
@@ -237,6 +339,13 @@ impl Room {
     pub fn new(sr: f32) -> Self {
         let mut room = Room {
             er: Reflections::new(sr, 1.3),
+            echo: Reflections::new(sr, 1.6),
+            echo_level: 0.0,
+            fade: 1.0,
+            fade_target: 1.0,
+            retap: false,
+            vantage: Vantage::Everywhere,
+            sixteenth_s: 0.15,
             lid: Reflections::new(sr, 0.08),
             canyon: Reflections::new(sr, 1.5),
             reverb: ReverbKernel::new(sr * 0.5),
@@ -251,13 +360,40 @@ impl Room {
         room.canyon.set(&CANYON_TAPS, 3500.0, sr);
         room.lid.set(&LID_TAPS, 2800.0, sr);
         room.set(Vantage::Everywhere, 0.0);
+        room.tap();
         room
+    }
+
+    /// Lay the vantage's taps down: its reflections and its echo on the grid.
+    fn tap(&mut self) {
+        let (taps, cutoff) = vantage_taps(self.vantage);
+        self.er.set(taps, cutoff, self.sr);
+        let mut grid = [(0.0f32, 0.0f32, 0.0f32); 8];
+        let n = on_the_grid(taps, self.sixteenth_s, &mut grid);
+        // Each echo a little darker than the reflections it comes from.
+        self.echo.set(&grid[..n], cutoff * 0.8, self.sr);
+        self.echo_level = echo_level(self.vantage);
+    }
+
+    /// The tempo, for the echoes' grid.
+    pub fn set_tempo(&mut self, bpm: f32) {
+        let sixteenth = 15.0 / bpm.max(20.0);
+        if (sixteenth - self.sixteenth_s).abs() > 0.001 {
+            self.sixteenth_s = sixteenth;
+            if self.echo_level > 0.0 {
+                self.retap = true;
+                self.fade_target = 0.0;
+            }
+        }
     }
 
     /// Tune the room for a vantage and an inversion strength (0–1).
     pub fn set(&mut self, vantage: Vantage, inversion: f32) {
-        let (taps, cutoff) = vantage_taps(vantage);
-        self.er.set(taps, cutoff, self.sr);
+        if vantage != self.vantage {
+            self.vantage = vantage;
+            self.retap = true;
+            self.fade_target = 0.0;
+        }
         let inv = inversion.clamp(0.0, 1.0);
         let (room, decay, damping) = match vantage {
             Vantage::Everywhere => (60.0, 55.0, 42.0),
@@ -276,11 +412,26 @@ impl Room {
         self.lid_level = inv;
     }
 
-    /// Sends in, the room's stereo return out.
+    /// Sends and the direct sound in, the room's stereo return out.
     #[inline]
-    pub fn process(&mut self, send_l: f32, send_r: f32, canyon_send: f32) -> (f32, f32) {
+    pub fn process(&mut self, send_l: f32, send_r: f32, canyon_send: f32, dry: f32) -> (f32, f32) {
+        // Out in about 20 ms, back in about 150 ms.
+        let k = if self.fade_target < self.fade {
+            0.001
+        } else {
+            0.000_14
+        };
+        self.fade += (self.fade_target - self.fade) * k;
+        if self.retap && self.fade < 1e-3 {
+            self.tap();
+            self.retap = false;
+            self.fade_target = 1.0;
+        }
         let mono = 0.5 * (send_l + send_r);
         let (el, er) = self.er.process(mono);
+        let (el, er) = (el * self.fade, er * self.fade);
+        let (xl, xr) = self.echo.process(dry);
+        let echo = self.echo_level * self.fade;
         let (ll, lr) = self.lid.process(mono * self.lid_level);
         let (cl, cr) = self.canyon.process(canyon_send);
         self.acc.0 += send_l + 0.5 * el;
@@ -300,7 +451,10 @@ impl Room {
             )
         };
         self.odd = !self.odd;
-        (rl + el + ll + cl, rr + er + lr + cr)
+        (
+            0.5 * (rl + el + ll + cl) + echo * xl,
+            0.5 * (rr + er + lr + cr) + echo * xr,
+        )
     }
 }
 
@@ -335,20 +489,77 @@ mod tests {
     }
 
     #[test]
+    fn the_canyon_walls_and_the_ears_shadow() {
+        let power = |p: &Placement| p.gl * p.gl + p.gr * p.gr;
+        // From Tanners Flat, a sound just inside the canyon's mouth is in
+        // the canyon with you; one just outside it comes over the walls.
+        let inside = place(Vantage::Canyons, 40.576, -111.795, 0.0, 0.2, 48_000.0);
+        let outside = place(Vantage::Canyons, 40.576, -111.805, 0.0, 0.2, 48_000.0);
+        assert!(power(&inside) > 2.0 * power(&outside));
+        assert!(outside.cut > inside.cut);
+        // Downtown, facing east: the same distance ahead is louder than behind.
+        let ahead = place(Vantage::Downtown, 40.7647, -111.85, 0.0, 0.2, 48_000.0);
+        let behind = place(Vantage::Downtown, 40.7647, -111.932, 0.0, 0.2, 48_000.0);
+        assert!(power(&ahead) > 1.5 * power(&behind));
+    }
+
+    #[test]
+    fn the_canyon_answers_on_the_beat() {
+        // At 100 BPM a sixteenth is 150 ms: the walls' 330 ms echo lands on
+        // the eighth note, a tower's 51 ms flutter stays a flutter.
+        let mut grid = [(0.0, 0.0, 0.0); 8];
+        let n = on_the_grid(&CANYON_TAPS, 0.15, &mut grid);
+        assert_eq!(n, 4);
+        assert!((grid[0].0 - 0.30).abs() < 1e-6);
+        assert!((grid[1].0 - 0.60).abs() < 1e-6);
+        let (downtown, _) = vantage_taps(Vantage::Downtown);
+        let n = on_the_grid(downtown, 0.15, &mut grid);
+        assert!((grid[0].0 - 0.051).abs() < 1e-6);
+        assert!(
+            grid[..n]
+                .iter()
+                .all(|t| t.0 < 0.13 || (t.0 / 0.15 - libm::roundf(t.0 / 0.15)).abs() < 1e-4)
+        );
+    }
+
+    #[test]
+    fn a_place_echoes_the_music_and_the_map_does_not() {
+        let sr = 48_000.0;
+        let echo_energy = |v: Vantage| {
+            let mut room = Room::new(sr);
+            room.set(v, 0.0);
+            // Let the taps change over.
+            for _ in 0..(sr as usize / 2) {
+                room.process(0.0, 0.0, 0.0, 0.0);
+            }
+            let mut e = 0.0f32;
+            for n in 0..(sr as usize * 2) {
+                let x = if n == 0 { 1.0 } else { 0.0 };
+                let (l, r) = room.process(0.0, 0.0, 0.0, x);
+                e += l * l + r * r;
+            }
+            e
+        };
+        assert_eq!(echo_energy(Vantage::Everywhere), 0.0);
+        assert!(echo_energy(Vantage::Canyons) > echo_energy(Vantage::Lake));
+        assert!(echo_energy(Vantage::Downtown) > 0.0);
+    }
+
+    #[test]
     fn the_room_rings_and_settles() {
         let mut room = Room::new(48_000.0);
         room.set(Vantage::Canyons, 0.5);
         let mut energy = 0.0f32;
         for n in 0..48_000 {
             let x = if n == 0 { 1.0 } else { 0.0 };
-            let (l, r) = room.process(x, x, x);
+            let (l, r) = room.process(x, x, x, x);
             assert!(l.is_finite() && r.is_finite());
             energy += l * l + r * r;
         }
         assert!(energy > 0.01);
         let mut tail = 0.0f32;
         for _ in 0..(48_000 * 12) {
-            let (l, r) = room.process(0.0, 0.0, 0.0);
+            let (l, r) = room.process(0.0, 0.0, 0.0, 0.0);
             tail += l * l + r * r;
         }
         assert!(tail < energy, "the room should settle");

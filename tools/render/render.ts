@@ -1,6 +1,6 @@
 // Render the piece offline with the same WebAssembly the phones run.
 //
-//   node tools/render/render.ts [YYYY-MM-DD] [HH:MM] [seconds] [out.wav] [--scalar]
+//   node tools/render/render.ts [YYYY-MM-DD] [HH:MM] [seconds] [out.wav] [--scalar] [--vantage 0-3]
 //
 // Loads the compiled schedule, the network, the skyline and the piano (decoded
 // by the engine's own decoder), starts at that local Mountain time, renders,
@@ -22,6 +22,7 @@ import {
   encodeSkyline,
   encodeSlow,
   encodeTwelve,
+  encodeU32,
   type DayFile,
   type NetworkFile,
 } from "../../web/src/engine/protocol.ts";
@@ -44,7 +45,7 @@ export async function render(
   date: string,
   time: string,
   seconds: number,
-  opts: { scalar?: boolean; sampleRate?: number; twelve?: { date: string; after: number } } = {},
+  opts: { scalar?: boolean; sampleRate?: number; twelve?: { date: string; after: number }; vantage?: number } = {},
 ): Promise<RenderResult> {
   const sr = opts.sampleRate ?? 48_000;
   const wasm = readFileSync(join(pub, "engine", opts.scalar ? "wasatch.wasm" : "wasatch-simd.wasm"));
@@ -78,6 +79,7 @@ export async function render(
   );
   const [h, m] = time.split(":").map(Number);
   engine.post(Kind.CLOCK, encodeClock(0, target + ((h ?? 0) * 60 + (m ?? 0)) * 60_000 + DELAY_MS));
+  if (opts.vantage) engine.post(Kind.VANTAGE, encodeU32(opts.vantage));
   engine.post(Kind.START, new Uint8Array(0));
 
   const frames = Math.round(seconds * sr);
@@ -126,12 +128,16 @@ export function wav(left: Float32Array, right: Float32Array, sr: number): Uint8A
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+  // Positional arguments, leaving out flags and the values of --twelve and --vantage.
+  const argv = process.argv.slice(2);
+  const args = argv.filter((a, i) => !a.startsWith("--") && !["--twelve", "--vantage"].includes(argv[i - 1] ?? ""));
   const scalar = process.argv.includes("--scalar");
   const [date = "2026-10-23", time = "17:40", secs = "60", out] = args;
   const t = process.argv.indexOf("--twelve");
   const twelve = t >= 0 ? { date: process.argv[t + 1] ?? date, after: 5 } : undefined;
-  const r = await render(date, time, Number(secs), { scalar, ...(twelve ? { twelve } : {}) });
+  const vi = process.argv.indexOf("--vantage");
+  const vantage = vi >= 0 ? Number(process.argv[vi + 1]) : 0;
+  const r = await render(date, time, Number(secs), { scalar, vantage, ...(twelve ? { twelve } : {}) });
   const kinds: Record<string, number> = {};
   for (const e of r.events) {
     const t = (JSON.parse(e) as { t: string }).t;

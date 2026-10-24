@@ -25,8 +25,13 @@ the valley is in right now. Then the live piece fades in under it:
 The harmony moves at every section boundary, one note at a time, and a caption
 says why: *"The valley's slowing down → B♭ minor (G♭ for G)."* Every phone
 plays the same bar at the same moment, about 90 seconds behind the valley.
-Pick where you're listening from (the whole valley, downtown, the canyons, the
-lake) and the mix and the room change; the music doesn't.
+Pick where you're listening from (the whole valley, the Gallivan Center
+downtown, Tanners Flat up Little Cottonwood, Saltair on the lake) and you're
+standing there: every family has a home in the valley, so what's near is
+close, bright and dry, what's far is quiet, dark and echoing, and the place
+answers with its own echoes (the towers flutter, the canyon slaps back on
+the beat). The map says YOU ARE HERE and a sign says what's near and far. The
+mix changes; the music doesn't.
 
 Everything else is in the menu, all optional:
 
@@ -54,8 +59,9 @@ sync, and why each choice was made.
   [sonido](https://github.com/ampactor-labs/sonido), compiled to WebAssembly
   and run in an AudioWorklet. It plans the day, composes each bar, voices and
   renders it: a sampled piano, a pad whose waveform is the skyline's spectrum,
-  modal bells and marimbas, a Karplus–Strong harp, a modeled room per vantage
-  and a mastering chain to −16 LUFS. The same `.wasm` renders offline in Node
+  modal bells and marimbas, a Karplus–Strong harp, every family staged from
+  where you're listening and a modeled room per vantage, and a mastering
+  chain to −16 LUFS whose rider listens like a phone's speaker. The same `.wasm` renders offline in Node
   for the tests.
 - **The score** is deterministic. A day's plan is a function of the transit
   schedule, the sun and moon, and sky observations; every random choice comes

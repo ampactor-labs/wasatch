@@ -826,27 +826,85 @@ earns their APIs as backups.
 ## Vantage: where you're listening from
 
 One piece, four listening positions. Each vantage is a real place with a real
-facing, and the mix is computed from where each event is: distance sets level,
-a gentle high cut and the share of reverb; bearing sets pan. The vantage
-changes the mix and the room, never the shared composition, so friends on
-different vantages are still in the same bar.
+facing, and the mix is computed from where each sound is: distance sets level,
+a high cut and the share of reverb; bearing sets pan. The vantage changes the
+mix and the room, never the shared composition, so friends on different
+vantages are still in the same bar.
 
 | Vantage | Where, facing | Its room |
 |---|---|---|
 | Everywhere (default) | No position: the valley as a map, west left, east right, every family at its own level | sonido's FDN hall |
 | Downtown | The Gallivan Center, facing the mountains | Recorded on Main Street between the towers |
-| The Canyons | The mouth of Little Cottonwood, facing up-canyon | Recorded in Little Cottonwood Canyon |
+| The Canyons | Tanners Flat, 8 km up Little Cottonwood, facing up-canyon | Recorded in Little Cottonwood Canyon |
 | The Lake | Saltair on the south shore, facing the city | Recorded at Saltair: open, dry, and whatever comes back from the Oquirrhs |
+
+The canyon vantage sits up the canyon rather than at its mouth: from the
+mouth, Sandy's streets are as near as the granite, and the canyon didn't
+sound like one.
 
 Distance follows a compressed law, gain = (1 + d/3 km)^−1, floored at −24 dB,
 so far families recede without vanishing. Under an inversion the exponent
-halves to −0.5, which brings an event 30 km away about 10 dB closer. The
-result reproduces revision 1's hand-tuned vantage table without a table:
-downtown, the canyon voices are far; at the lake, transit is.
+halves to −0.5, which brings an event 30 km away about 10 dB closer. A sound
+behind you is up to 3 dB quieter (the ear's own shadow), and from inside
+Little Cottonwood anything outside the canyon comes over its walls, 4.4 dB
+quieter and darker, with its reverb left as it was (obstruction, in
+game-audio terms).
+
+**Every family has a home.** Trains, bikes, quakes and the seismometers are
+points. The rest live somewhere bigger, and each home is drawn as an area or
+lines and sampled as points (engine/src/audio/homes.rs):
+
+| Family | Its home |
+|---|---|
+| The skyline pad | The Wasatch, from the bench to the crest |
+| The kit | The valley floor the buses run on |
+| The pedal | The lake's south arm and Farmington Bay |
+| The bass | The Jordan River, Little Cottonwood Creek, City Creek |
+| The harp | The crest, and down Little and Big Cottonwood |
+| The snow grains | Alta, Snowbird, Brighton and Solitude |
+| The air | Wherever you stand: sheltered between towers, open on the shore |
+
+Each point is heard by the event law and their power adds, so the physics
+comes for free: a long range falls off about 3 dB a doubling, not 6, and an
+area you stand in surrounds you. Heard from its home, a family is as played;
+from anywhere else it's as much quieter, darker and wetter as its points are
+together. Its width is the power-weighted spread of its points' pans (the
+range you stand in is wide; the lake from downtown is narrow), and its
+direction fades as it surrounds you. The result, at a glance:
+
+| From | Up close | Far off |
+|---|---|---|
+| Downtown | The trains, the city's groove, City Creek's bass | The lake (−7 dB), the snow (−12 dB) |
+| The canyon | The mountains, the wind, the snow, the creek | The city's groove (−11 dB, over the walls), the lake |
+| The lake | The lake | The mountains (−8 dB), the wind and the snow (−12 dB), the trains |
+
+A move glides there in about a second, so it sounds like walking, not a cut.
+
+**Each place echoes the music.** Downtown's towers flutter (the first return
+about −14 dB); the canyon's granite slaps back at about −12 dB, darker with
+each echo; the Oquirrhs send one faint return across the lake. Echoes longer
+than a slap (120 ms) land on the nearest sixteenth note of the tempo, so the
+walls answer in time instead of smearing the groove: the geometry chooses
+among musical delays, as data chooses among musical notes (principle 1).
+
+**It has to work on a phone.** A phone's speaker plays little below about
+500 Hz or above 6 kHz, and only in mono. So width alone can't carry a
+vantage: what changes is level, the highs in 2–6 kHz, and the echoes, and
+the master's loudness rider is weighted to what a phone plays, so the lake's
+bass doesn't turn the whole view from Saltair down. The render check holds
+it: each vantage differs from the map's mix, the lake is at least 4 dB
+darker, the canyon at least 1.5 dB wider, and none is more than 4 dB louder
+or quieter than the map through a phone's band. Measured on Oct 23 at
+5:40 PM, the four are within 2 dB of each other on a phone.
 
 Events in the canyons (ski buses, avalanche-control booms) also get the
 canyon's own early echoes wherever you listen from, so the canyon always
 sounds like a canyon.
+
+On screen, the four buttons sit under a "Listen from" tab, the map marks the
+place with a trail map's YOU ARE HERE (the facing, and rings at 5 and 15 km),
+a sign says what's near and far from there, and each event's ring on the map
+is as small and faint as it sounds from where you are.
 
 The rooms are recorded with exponential sine sweeps from a portable speaker,
 captured and deconvolved with sonido-analysis's sweep tools, several sweeps
@@ -1191,11 +1249,12 @@ decodes UTA's protobuf.
   (under 500 KB) and the current score page, decoded in a worker while the
   listener reads the status screen. Everything else loads behind it.
 - **Mixed like a radio station.** Family buses, then the vantage mix and the
-  room, then the master: a slow loudness rider (BS.1770 short-term loudness,
-  ten-second time constant, at most ±3 dB) toward the target, a gentle
-  multiband compressor, and the true-peak limiter at −1 dBTP. A station sounds
-  the same at 3am and at rush hour without anyone riding a fader; this one
-  does too.
+  room, then the master: a slow loudness rider (short-term loudness on
+  BS.1770's shelf with its high-pass moved up to 150 Hz, so it rides what a
+  phone's speaker actually plays; ten-second time constant) toward the
+  target, a gentle multiband compressor, and the true-peak limiter at
+  −1 dBTP. A station sounds the same at 3am and at rush hour without anyone
+  riding a fader; this one does too, on a phone as well as on headphones.
 - **Loudness target:** about −16 LUFS integrated, the usual streaming level
   for mobile.
 - **Mono-compatible** mix for phone speakers at a party; full stereo on

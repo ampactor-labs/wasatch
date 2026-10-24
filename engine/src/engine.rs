@@ -7,6 +7,7 @@
 //! keeps them tied with [`Engine::set_clock`].
 
 use crate::audio::Noise;
+use crate::audio::homes::{self, Bus, HOMES, Home, Homes};
 use crate::audio::master::Master;
 use crate::audio::skyline::SkylineTables;
 use crate::audio::space::{Room, Vantage, place};
@@ -125,6 +126,12 @@ pub struct Engine {
     noise: Noise,
     rr: [usize; 9],
     vantage: Vantage,
+    /// Where each family lives, and its bus staged from the vantage.
+    homes: Homes,
+    buses: [Bus; HOMES],
+    /// Which drum voices are sounding something with a place of its own (a
+    /// ski bus's toms), rather than the city's kit.
+    kit_located: [bool; 12],
     room: Room,
     master: Master,
     inversion: f32,
@@ -138,7 +145,7 @@ pub struct Engine {
 impl Engine {
     /// An engine at `sr`.
     pub fn new(sr: f32) -> Self {
-        Engine {
+        let mut engine = Engine {
             sr,
             inputs: Inputs::default(),
             chain: None,
@@ -181,6 +188,9 @@ impl Engine {
             noise: Noise::new(0x5A17),
             rr: [0; 9],
             vantage: Vantage::Everywhere,
+            homes: Homes::new(),
+            buses: core::array::from_fn(|_| Bus::new(sr)),
+            kit_located: [false; 12],
             room: Room::new(sr),
             master: Master::new(sr),
             inversion: 0.0,
@@ -189,7 +199,9 @@ impl Engine {
             wind: (3.0, 5.0),
             out: vec![0.0; 2 * MAX_FRAMES],
             outbox: String::with_capacity(16_384),
-        }
+        };
+        engine.restage(true);
+        engine
     }
 
     /// The sample rate.
@@ -235,10 +247,44 @@ impl Engine {
         self.inputs.quakes = quakes;
     }
 
-    /// Move the listener.
+    /// Move the listener, and say what's near and far from there.
     pub fn set_vantage(&mut self, code: u32) {
         self.vantage = Vantage::from_code(code);
         self.room.set(self.vantage, self.inversion);
+        self.restage(false);
+        let near = homes::ALL.map(|h| self.homes.stage(h, self.vantage, self.inversion).gain);
+        let rail = homes::nearness(
+            self.inputs.network.stops.iter().map(|s| (s.lat, s.lon)),
+            self.vantage,
+        );
+        let at = self.vantage.point().map_or_else(
+            || "null,\"lon\":null,\"face\":null".to_owned(),
+            |(lat, lon, face)| format!("{lat:.4},\"lon\":{lon:.4},\"face\":{face:.0}"),
+        );
+        let _ = writeln!(
+            self.outbox,
+            r#"{{"t":"vantage","f":{:.0},"v":{},"lat":{at},"near":[{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}],"rail":{rail:.2}}}"#,
+            self.frame,
+            self.vantage as u8,
+            near[0],
+            near[1],
+            near[2],
+            near[3],
+            near[4],
+            near[5],
+            near[6],
+        );
+    }
+
+    /// Stage every family's bus from the vantage, gliding there (or at once).
+    fn restage(&mut self, snap: bool) {
+        for h in homes::ALL {
+            let bus = &mut self.buses[h as usize];
+            bus.set(self.homes.stage(h, self.vantage, self.inversion));
+            if snap {
+                bus.snap();
+            }
+        }
     }
 
     /// The skyline profile (elevations, north to south) the pad is made of.
@@ -780,14 +826,14 @@ impl Engine {
                     },
                     place,
                 );
-                self.pulse(frame, &n);
+                self.pulse(frame, &n, &place);
             }
             Inst::Horn => {
                 let place = self.placement(n.lat, n.lon, 0.35);
                 let i = pick(&mut self.rr[2], self.horns.iter().map(|v| v.is_active()));
                 self.horns[i].start(n.midi, n.vel * mix.rail.max(0.5), dur_s, place);
                 if n.variant == 0 {
-                    self.pulse(frame, &n);
+                    self.pulse(frame, &n, &place);
                 }
             }
             Inst::Marimba => {
@@ -805,7 +851,7 @@ impl Engine {
                     },
                     place,
                 );
-                self.pulse(frame, &n);
+                self.pulse(frame, &n, &place);
             }
             Inst::Grain => {
                 let pan = self.noise.sample() * 0.7;
@@ -853,7 +899,7 @@ impl Engine {
                     },
                     place,
                 );
-                self.pulse(frame, &n);
+                self.pulse(frame, &n, &place);
             }
             Inst::Harp => {
                 let pan = ((n.midi - 72.0) / 14.0).clamp(-0.6, 0.6);
@@ -894,19 +940,23 @@ impl Engine {
                 };
                 if n.variant == 1 {
                     place.canyon = 0.45;
-                    self.pulse(frame, &n);
+                    self.pulse(frame, &n, &place);
                 }
                 let i = pick(&mut self.rr[7], self.drums.iter().map(|v| v.is_active()));
                 self.drums[i].start(kind, n.midi, n.vel * mix.kit, place, seed | 1);
+                self.kit_located[i] = n.lat.is_finite();
             }
         }
     }
 
-    fn pulse(&mut self, frame: f64, n: &Note) {
+    /// A sounding event for the map, with how loud it is from here (1 on
+    /// the map view).
+    fn pulse(&mut self, frame: f64, n: &Note, place: &Placement) {
         if n.lat.is_finite() {
+            let g = libm::sqrtf(place.gl * place.gl + place.gr * place.gr).min(1.0);
             let _ = writeln!(
                 self.outbox,
-                r#"{{"t":"pulse","f":{frame:.0},"i":{},"lat":{:.5},"lon":{:.5},"m":{}}}"#,
+                r#"{{"t":"pulse","f":{frame:.0},"i":{},"lat":{:.5},"lon":{:.5},"m":{},"g":{g:.2}}}"#,
                 n.inst as u8, n.lat, n.lon, n.midi
             );
         }
@@ -968,8 +1018,10 @@ impl Engine {
         if (inv - self.inversion).abs() > 0.05 {
             self.inversion = inv;
             self.room.set(self.vantage, inv);
+            self.restage(false);
         }
         self.wind = (hour.ridge_ms, hour.ridge_gust_ms);
+        self.room.set_tempo(sec.bpm);
         self.pad_cutoff = 900.0
             + 3000.0 * sec.brightness
             + if sec.kind == crate::plan::SectionKind::Journey {
@@ -1075,18 +1127,27 @@ impl Engine {
                     v.tick(&self.samples, &mut stream);
                 }
             }
+            // The families that live somewhere bigger than a point play
+            // into their own buses, staged from the vantage below.
+            let mut fam = [Out::default(); HOMES];
             let mut pad = Out::default();
             for v in &mut self.pad {
                 v.tick(&self.tables, self.haze, &mut pad);
             }
-            stream.l += pad.l * self.mix.pad;
-            stream.r += pad.r * self.mix.pad;
-            stream.send += pad.send * self.mix.pad;
-            self.bass.tick(&mut stream);
+            let m = &mut fam[Home::Mountains as usize];
+            m.l += pad.l * self.mix.pad;
+            m.r += pad.r * self.mix.pad;
+            m.send += pad.send * self.mix.pad;
+            self.bass.tick(&mut fam[Home::Rivers as usize]);
             let slosh = (self.inputs.slow.lake_dev_ft.abs() / 0.5).min(1.0);
-            self.lake.tick(self.mix.lake, slosh, &mut stream);
-            for v in &mut self.drums {
-                v.tick(&mut stream);
+            self.lake
+                .tick(self.mix.lake, slosh, &mut fam[Home::Lake as usize]);
+            for (v, &located) in self.drums.iter_mut().zip(&self.kit_located) {
+                if located {
+                    v.tick(&mut stream);
+                } else {
+                    v.tick(&mut fam[Home::City as usize]);
+                }
             }
             for v in &mut self.bells {
                 v.tick(&mut stream);
@@ -1098,7 +1159,7 @@ impl Engine {
                 v.tick(&mut stream);
             }
             for v in &mut self.grains {
-                v.tick(&mut stream);
+                v.tick(&mut fam[Home::Snow as usize]);
             }
             for v in &mut self.quake_bells {
                 v.tick(&mut stream);
@@ -1107,10 +1168,17 @@ impl Engine {
                 v.tick(&mut stream);
             }
             for v in &mut self.harp {
-                v.tick(&mut stream);
+                v.tick(&mut fam[Home::Ridges as usize]);
             }
-            self.air
-                .tick(self.wind.0, self.wind.1, self.mix.harp, &mut stream);
+            self.air.tick(
+                self.wind.0,
+                self.wind.1,
+                self.mix.harp,
+                &mut fam[Home::Air as usize],
+            );
+            for (bus, x) in self.buses.iter_mut().zip(&fam) {
+                bus.process(x, &mut stream);
+            }
             for (b, up) in self.ground.iter_mut().enumerate() {
                 let level = self.inputs.slow.ground[b] * self.mix.ground * 0.07;
                 if level > 0.0 || up.buffered() > 0 {
@@ -1126,8 +1194,10 @@ impl Engine {
             let dry_l = stream.l * fade + welcome.l;
             let dry_r = stream.r * fade + welcome.r;
             let send = stream.send * fade + welcome.send;
-            let (rl, rr) = self.room.process(send, send, stream.canyon * fade);
-            let (ol, or) = self.master.process(dry_l + 0.5 * rl, dry_r + 0.5 * rr);
+            let (rl, rr) =
+                self.room
+                    .process(send, send, stream.canyon * fade, 0.5 * (dry_l + dry_r));
+            let (ol, or) = self.master.process(dry_l + rl, dry_r + rr);
             self.out[i] = ol;
             self.out[frames + i] = or;
         }
