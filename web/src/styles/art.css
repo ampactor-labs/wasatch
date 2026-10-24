@@ -1,0 +1,150 @@
+/* Motion and sizing for the art. Every animation stops under reduced motion.
+   --beat (seconds per beat) lets the app sync the gull's baton to the tempo. */
+
+svg.gull,
+svg.shredder-svg,
+svg.sticker,
+svg.skyline,
+svg.map,
+svg.dial,
+svg.icon,
+svg.trail {
+  display: block;
+  overflow: visible;
+}
+
+/* The gull. Its near wing pivots at the shoulder (118, 124 in its viewBox). */
+.gull-wing {
+  transform-box: view-box;
+  transform-origin: 118px 124px;
+  transform: rotate(var(--wing, 0deg));
+}
+.gull--conduct .gull-wing {
+  animation: gull-baton calc(var(--beat, 0.6s) * 2) ease-in-out infinite;
+}
+@keyframes gull-baton {
+  0%,
+  100% {
+    transform: rotate(calc(var(--wing, 0deg) - 16deg));
+  }
+  50% {
+    transform: rotate(calc(var(--wing, 0deg) + 12deg));
+  }
+}
+/* Only the animated poses get a CSS origin: transform-origin also applies to
+   the SVG transform attribute, which the bow pose uses for its tilt. */
+.gull--idle .gull-bird,
+.gull--conduct .gull-bird {
+  transform-box: view-box;
+  transform-origin: 112px 222px;
+}
+.gull--idle .gull-bird {
+  animation: gull-bob 3.2s ease-in-out infinite;
+}
+.gull--conduct .gull-bird {
+  animation: gull-bob calc(var(--beat, 0.6s) * 4) ease-in-out infinite;
+}
+@keyframes gull-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px) rotate(-1.5deg);
+  }
+}
+/* The shredder. */
+.shredder-rider {
+  animation: shred-bob 0.9s ease-in-out infinite;
+}
+@keyframes shred-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2.5px);
+  }
+}
+.shredder-spray {
+  transform-box: fill-box;
+  transform-origin: 100% 75%;
+  animation: shred-spray 0.45s ease-out infinite;
+}
+@keyframes shred-spray {
+  0% {
+    transform: scale(0.82);
+    opacity: 0.95;
+  }
+  100% {
+    transform: scale(1.12) translateX(-3px);
+    opacity: 0.55;
+  }
+}
+
+/* Stickers: a little wiggle when they're poked, a pop when they land. */
+svg.sticker {
+  transition: transform 0.2s ease;
+  filter: drop-shadow(0 1px 0 rgb(27 31 59 / 0.15));
+}
+svg.sticker:hover {
+  transform: rotate(-2deg) scale(1.04);
+}
+.sticker-pop {
+  animation: sticker-pop 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+@keyframes sticker-pop {
+  from {
+    transform: scale(0.4) rotate(-14deg);
+    opacity: 0;
+  }
+}
+
+/* The skyline's sounding summit waves its pennant. */
+.skyline-flag--active path:last-of-type {
+  transform-box: fill-box;
+  transform-origin: 0% 50%;
+  animation: pennant 0.5s ease-in-out infinite alternate;
+}
+@keyframes pennant {
+  to {
+    transform: skewY(7deg) scaleX(0.9);
+  }
+}
+
+/* The dial's wheel turns slowly while the piece plays. */
+.dial-wheel {
+  transform-box: view-box;
+  transform-origin: 150px 150px;
+}
+.dial--turning .dial-wheel {
+  animation: bullwheel 12s linear infinite;
+}
+@keyframes bullwheel {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Generic bob for map critters. */
+.bob {
+  animation: gull-bob 3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gull-wing,
+  .gull-bird,
+  .shredder-rider,
+  .shredder-spray,
+  .sticker-pop,
+  .skyline-flag--active path:last-of-type,
+  .dial-wheel,
+  .bob {
+    animation: none !important;
+  }
+  svg.sticker,
+  svg.sticker:hover {
+    transition: none;
+    transform: none;
+  }
+}

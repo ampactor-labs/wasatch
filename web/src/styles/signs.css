@@ -1,0 +1,138 @@
+/* Captions as US Forest Service routed-wood trail signs: brown boards with a
+   routed border, cream-yellow letters cut into the wood, two bolt heads.
+   Grain is plain gradients (no SVG filters), cheap on phones.
+
+   <div class="sign sign--live">
+     <p class="sign__line">Red Line · Ballpark · 1 min late</p>
+     <span class="sign__receipt">live 5:42 PM</span>
+   </div>                                                              */
+
+.sign {
+  --sign-wood: var(--wood, #5c3a1e);
+  --sign-wood-light: #6e4826;
+  --sign-wood-dark: #4a2e17;
+  --sign-text: var(--wood-text, #f2d16b);
+  --sign-line: rgb(242 209 107 / 0.55);
+  --sign-tag-bg: var(--sunset, #ff6b35);
+  --sign-tag-text: var(--ink, #1b1f3b);
+  position: relative;
+  display: block;
+  box-sizing: border-box;
+  padding: 11px 30px 12px;
+  border: 3px solid var(--ink, #1b1f3b);
+  border-radius: 11px;
+  color: var(--sign-text);
+  background:
+    repeating-linear-gradient(
+      178deg,
+      rgb(0 0 0 / 0) 0 6px,
+      rgb(0 0 0 / 0.1) 6px 7px,
+      rgb(0 0 0 / 0) 7px 13px,
+      rgb(255 255 255 / 0.05) 13px 14px
+    ),
+    radial-gradient(ellipse 40% 26% at 72% 58%, rgb(0 0 0 / 0.14), rgb(0 0 0 / 0) 70%),
+    linear-gradient(180deg, var(--sign-wood-light), var(--sign-wood) 45%, var(--sign-wood-dark));
+  box-shadow:
+    inset 0 0 0 5px var(--sign-wood),
+    inset 0 0 0 7px var(--sign-line),
+    var(--shadow-hard, 4px 5px 0 rgb(27 31 59 / 0.85));
+  font: 800 15px/1.28 var(--font-body, system-ui, sans-serif);
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  /* Routed letters: a dark top edge and a lit bottom edge. */
+  text-shadow:
+    0 -1px 0 rgb(0 0 0 / 0.6),
+    0 1px 0 rgb(255 236 170 / 0.22);
+  overflow-wrap: anywhere;
+}
+
+/* The two bolt heads. */
+.sign::before,
+.sign::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 32%, #f0f0f0, #9a9a9a 55%, #4b4b4b);
+  box-shadow: 0 0 0 1.5px var(--ink, #1b1f3b);
+}
+.sign::before {
+  left: 11px;
+}
+.sign::after {
+  right: 11px;
+}
+
+.sign__line {
+  margin: 0;
+}
+.sign__line + .sign__line {
+  margin-top: 3px;
+}
+
+/* The receipt: where a reading came from and whether it is fresh. */
+.sign__receipt {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 1px 8px 2px;
+  border-radius: 999px;
+  font: 700 0.74em/1.45 var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.04em;
+  text-transform: none;
+  text-shadow: none;
+  color: var(--sign-tag-text);
+  background: var(--sign-tag-bg);
+  box-shadow: 0 0 0 1.5px var(--ink, #1b1f3b);
+}
+
+/* Live: fresh-oiled wood, an orange tag (orange is for measured values). */
+.sign--live {
+  --sign-wood: #643f1f;
+  --sign-wood-light: #7a4e27;
+  --sign-text: #f7d977;
+}
+
+/* Cached: sun-bleached, weathered gray wood; the tag is outlined, not filled. */
+.sign--cached {
+  --sign-wood: #6b5a4a;
+  --sign-wood-light: #7c6a58;
+  --sign-wood-dark: #574738;
+  --sign-text: #ecd796;
+  --sign-line: rgb(236 215 150 / 0.4);
+  --sign-tag-bg: var(--powder, #f7f4ea);
+}
+.sign--cached .sign__receipt {
+  background: transparent;
+  color: #ecd796;
+  box-shadow: inset 0 0 0 1.5px #ecd796;
+}
+
+/* Scheduled: a timetable board, painted blue-gray, with a dashed tag. */
+.sign--scheduled {
+  --sign-wood: #2f4858;
+  --sign-wood-light: #3b5a6c;
+  --sign-wood-dark: #263b48;
+  --sign-text: #f4e6b8;
+  --sign-line: rgb(244 230 184 / 0.45);
+}
+.sign--scheduled .sign__receipt {
+  background: transparent;
+  color: #f4e6b8;
+  box-shadow: none;
+  outline: 1.5px dashed #f4e6b8;
+  outline-offset: -1.5px;
+}
+
+.sign--small {
+  padding: 7px 24px 8px;
+  font-size: 13px;
+}
+.sign--small::before {
+  left: 8px;
+}
+.sign--small::after {
+  right: 8px;
+}

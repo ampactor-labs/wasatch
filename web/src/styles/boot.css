@@ -1,0 +1,247 @@
+/* The pre-tap screen (art/boot.ts). Sized in container units clamped by the
+   viewport height, so it fits a phone and a laptop without scrolling. */
+
+.boot {
+  container-type: inline-size;
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100svh;
+  padding: max(14px, env(safe-area-inset-top)) 16px 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-body);
+  text-align: center;
+}
+
+/* Clouds, far-off gulls and (at night) stars. */
+.boot__decor {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.boot__stars {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.boot__cloud,
+.boot__farbirds {
+  position: absolute;
+  display: block;
+  height: auto;
+}
+.boot__cloud--a {
+  left: 3%;
+  top: 44%;
+  width: clamp(84px, 26cqw, 190px);
+}
+.boot__cloud--b {
+  right: 3%;
+  top: 60%;
+  width: clamp(66px, 21cqw, 150px);
+}
+.boot__cloud--c {
+  left: -3%;
+  top: 70%;
+  width: clamp(54px, 16cqw, 116px);
+}
+.boot__farbirds {
+  right: 12%;
+  top: 38%;
+  width: clamp(64px, 18cqw, 130px);
+}
+
+.boot__stickers {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+.boot__sticker {
+  position: absolute;
+  width: clamp(70px, 20cqw, 128px);
+}
+.boot__sticker--a {
+  top: max(8px, env(safe-area-inset-top));
+  left: max(6px, 2cqw);
+}
+.boot__sticker--b {
+  top: max(14px, env(safe-area-inset-top));
+  right: max(6px, 2cqw);
+  width: clamp(68px, 19cqw, 122px);
+}
+
+.boot__title {
+  position: relative;
+  z-index: 3;
+  margin: clamp(56px, min(22cqw, 9vh), 104px) 0 12px;
+  font: 400 clamp(38px, min(12.5cqw, 9.5vh), 100px) / 0.92 var(--font-display);
+  letter-spacing: 0.01em;
+  color: var(--powder);
+  -webkit-text-stroke: 3px var(--ink);
+  paint-order: stroke fill;
+  text-shadow: 4px 5px 0 var(--ink);
+  transform: rotate(-4deg);
+}
+.boot__title-a,
+.boot__title-b {
+  display: block;
+}
+.boot__title-b {
+  margin-left: 0.35em;
+  color: var(--sun);
+}
+
+.boot__status {
+  position: relative;
+  z-index: 3;
+  width: min(100%, 36rem);
+  margin: 6px auto 0;
+  font-family: var(--font-mono);
+  font-size: clamp(12px, 3.4cqw, 15px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.boot__status .sign__line:empty {
+  display: none;
+}
+
+/* The stage: the sunburst and the sun sit behind the conductor. */
+.boot__stage {
+  --gull: clamp(132px, min(44cqw, 22vh), 236px);
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 18px;
+}
+.boot__rays {
+  position: absolute;
+  z-index: -2;
+  left: 50%;
+  top: calc(18px + var(--gull) * 0.5);
+  width: 320vmax;
+  height: 320vmax;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 4deg, rgb(255 255 255 / 0.11) 0deg 10deg, rgb(255 255 255 / 0) 10deg 20deg);
+  pointer-events: none;
+}
+.boot__sun {
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  top: calc(18px + var(--gull) * 0.02);
+  width: calc(var(--gull) * 1.04);
+  translate: -50% 0;
+}
+.boot--nocturne .boot__sun,
+.boot--last-trains .boot__sun {
+  left: calc(50% + var(--gull) * 0.42);
+  top: calc(var(--gull) * -0.12);
+  width: calc(var(--gull) * 0.62);
+}
+.boot__sun svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.boot__gull {
+  width: var(--gull);
+  margin-bottom: -10px;
+}
+
+.boot__listen {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  max-width: calc(100cqw - 32px);
+  padding: 14px 22px 16px 18px;
+  white-space: nowrap;
+  border: 4px solid var(--ink);
+  border-radius: 999px;
+  background: var(--sun);
+  color: var(--ink);
+  font: 400 clamp(17px, min(5.2cqw, 3.8vh), 30px) / 1.05 var(--font-display);
+  letter-spacing: 0.01em;
+  box-shadow: 6px 7px 0 var(--ink);
+  cursor: pointer;
+  transform: rotate(-1.5deg);
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.boot__listen:hover {
+  transform: rotate(-1.5deg) translate(-1px, -2px);
+  box-shadow: 8px 9px 0 var(--ink);
+}
+.boot__listen:active {
+  transform: rotate(-1.5deg) translate(4px, 5px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.boot__listen:focus-visible {
+  outline: 4px solid var(--pink);
+  outline-offset: 5px;
+}
+.boot__listen:disabled {
+  cursor: progress;
+  filter: saturate(0.6);
+}
+.boot__play {
+  flex: none;
+  width: 22px;
+  height: 25px;
+  background: var(--pink);
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+
+.boot__skyline {
+  position: relative;
+  z-index: 4;
+  width: calc(100% + 32px);
+  margin: 16px -16px 0;
+  line-height: 0;
+}
+.boot__skyline svg {
+  width: 100%;
+  height: auto;
+}
+
+/* Night dayparts: the white line of the title goes pale blue. */
+.boot--nocturne .boot__title-a,
+.boot--last-trains .boot__title-a {
+  color: #dfe9ff;
+}
+
+@container (min-width: 900px) {
+  .boot__sticker--a {
+    left: 6cqw;
+    top: 26px;
+  }
+  .boot__sticker--b {
+    right: 6cqw;
+    top: 36px;
+  }
+  .boot__cloud--a {
+    left: 7%;
+    top: 40%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot__listen,
+  .boot__listen:hover,
+  .boot__listen:active {
+    transition: none;
+  }
+}

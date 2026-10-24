@@ -1,0 +1,38 @@
+/* The Wasatch palette and type. art/palette.ts holds the same values for SVG. */
+:root {
+  --ink: #1b1f3b; /* outlines and text */
+  --powder: #f7f4ea; /* snow, paper */
+  --sky: #4fa3d9; /* Alta bluebird */
+  --sky-deep: #1e5aa8;
+  --sunset: #ff6b35; /* measured values only */
+  --sun: #ffd23f;
+  --pink: #ff4f9a; /* neon one-piece */
+  --jello: #7ac74f; /* green Jell-O */
+  --lake: #2ec4b6;
+  --lake-deep: #0e7c7b;
+  --granite: #8d99ae;
+  --wood: #5c3a1e;
+  --wood-text: #f2d16b;
+  --night: #0b1026;
+  --haze: #c9b79c;
+  --sand: #f1e6cf;
+  --mudflat: #e6d7b5;
+  --white: #ffffff;
+  --ink-soft: #5a6378;
+
+  /* Trail-map colors. */
+  --trail-green: #2e9d4f;
+  --trail-blue: #1e5aa8;
+  --trail-black: #1b1f3b;
+
+  /* Type. */
+  --font-display: "Shrikhand", "Bowlby One", "Arial Black", system-ui, sans-serif;
+  --font-body: "Rubik", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Space Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Shape. */
+  --stroke: 3px;
+  --radius: 14px;
+  --shadow-hard: 4px 5px 0 rgb(27 31 59 / 0.85);
+  --shadow-soft: 0 6px 18px rgb(11 16 38 / 0.25);
+}

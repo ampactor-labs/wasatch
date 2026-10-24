@@ -1,0 +1,11 @@
+node_modules/
+dist/
+engine/target/
+web/public/schedule/
+web/public/engine/
+*.log
+.DS_Store
+.vite/
+
+# Local path patches for developing against a sonido checkout.
+engine/.cargo/

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+  <linearGradient id="appicon-sky" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" stop-color="#1E5AA8"/><stop offset="1" stop-color="#4FA3D9"/>
+  </linearGradient>
+  <clipPath id="appicon-clip"><rect x="0" y="0" width="64" height="64" rx="14"/></clipPath>
+  </defs>
+  <g clip-path="url(#appicon-clip)">
+  <rect x="0" y="0" width="64" height="64" fill="url(#appicon-sky)"/>
+  <circle cx="45" cy="19" r="8.5" fill="#FFD23F" stroke="#1B1F3B" stroke-width="2.6"/>
+  <path d="M13 13.5 Q16 10.5 19 13 Q22 10.5 25 13.2" fill="none" stroke="#1B1F3B" stroke-width="2" stroke-linecap="round"/>
+  <path d="M18.2 13.4 L20.4 13.9 L18.2 14.5 Z" fill="#F6C425"/>
+  <path d="M-2 66 L-2 50 L22 24 L31 35 L40 26 L66 52 L66 66 Z" fill="#8D99AE" stroke="#1B1F3B" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M22 24 L27.6 30.4 L25 30 L22.6 32.6 L20 30.2 L17.4 31 Z" fill="#FFFFFF" stroke="#1B1F3B" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M40 26 L44.6 30.6 L42.6 30.4 L40.4 32.4 L38.4 30.6 L35.8 31.2 Z" fill="#FFFFFF" stroke="#1B1F3B" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M-2 56 Q16 51 32 55 T66 54 L66 66 L-2 66 Z" fill="#F7F4EA" stroke="#1B1F3B" stroke-width="2.6" stroke-linejoin="round"/>
+  </g>
+  <rect x="1.5" y="1.5" width="61" height="61" rx="13" fill="none" stroke="#1B1F3B" stroke-width="3"/>
+  </svg>

@@ -1,0 +1,32 @@
+{
+  "name": "wasatch",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Wasatch Symphony: the Salt Lake valley plays a symphony, live.",
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite --config web/vite.config.ts",
+    "build": "npm run engine && npm run gtfs && vite build --config web/vite.config.ts",
+    "preview": "vite preview --config web/vite.config.ts",
+    "engine": "node tools/build-engine.ts",
+    "gtfs": "node tools/gtfs/compile.ts",
+    "theme": "node tools/theme/build.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config web/vite.config.ts && node --test 'tools/**/*.test.ts'",
+    "render": "node tools/render/render.ts",
+    "check": "node tools/render/check.ts",
+    "smoke": "node tools/e2e/smoke.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "fflate": "^0.8.3",
+    "puppeteer-core": "^25.16.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

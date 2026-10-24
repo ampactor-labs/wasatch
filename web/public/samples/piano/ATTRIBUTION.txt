@@ -1,0 +1,8 @@
+Salamander Grand Piano, by Alexander Holm.
+Licensed under Creative Commons Attribution 3.0 (CC BY 3.0):
+https://creativecommons.org/licenses/by/3.0/
+
+These are 18 of its notes (A2 to C7, every minor third) as MP3s, from the
+Tone.js samples mirror (https://tonejs.github.io/audio/salamander/). The page
+decodes them with the engine's own decoder and keeps the first seven seconds
+of each.
