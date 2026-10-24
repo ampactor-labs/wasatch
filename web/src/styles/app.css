@@ -466,6 +466,16 @@ a {
     display: none;
   }
 }
+/* Wide but short (a laptop with its devtools open): no room for the dial
+   and the podium both, so the gull goes back to the bar. */
+@media (min-width: 1200px) and (max-height: 819px) {
+  .play__podium {
+    display: none;
+  }
+  .play__bar .play__gull {
+    display: block;
+  }
+}
 
 /* --- The menu sheet --------------------------------------------------------- */
 
@@ -937,7 +947,7 @@ a {
     transform 1s ease;
   /* The level sizes the ring once a second; the breath itself has fixed
      keyframes, which the compositor can run alone. */
-  transform: scale(calc(0.6 + var(--level) * 1.6));
+  transform: scale(calc((0.6 + var(--level) * 1.6) * var(--map-u, 1)));
 }
 .seis--live {
   opacity: 1;

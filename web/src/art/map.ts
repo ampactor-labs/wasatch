@@ -155,6 +155,13 @@ export interface MapBaseOpts {
 }
 
 /** The basemap SVG. Empty `.map-routes`, `.map-vehicles`, `.map-events` groups on top. */
+/** The map's unit: 1 on a phone-sized map, growing with a big one so its
+ * lines, labels and marks keep their weight; held back by the height, so a
+ * short, wide window doesn't get giant labels. */
+export function mapUnit(width: number, height: number): number {
+  return Math.max(0.7, Math.min(2.2, width / 390, Math.max(1, height / 350)));
+}
+
 export function mapBase(opts: MapBaseOpts = {}): string {
   const bounds = opts.bounds ?? DEFAULT_MAP_BOUNDS;
   const width = opts.width ?? 390;
@@ -164,7 +171,7 @@ export function mapBase(opts: MapBaseOpts = {}): string {
   const poly = (lls: readonly LonLat[]) => linePath(lls.map(P), true);
   const smoothPoly = (lls: readonly LonLat[]) => smoothPath(lls.map(P), true, 0.6);
   const id = uid("map");
-  const u = Math.max(0.7, Math.min(1.4, width / 390));
+  const u = mapUnit(width, height);
   const labels = opts.labels ?? true;
 
   // The crest, smoothed so it reads as a line, and the mountain band west of it.

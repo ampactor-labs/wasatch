@@ -23,6 +23,7 @@ export {
   CANYON_MOUTHS,
   DEFAULT_MAP_BOUNDS,
   mapBase,
+  mapUnit,
   type MapBaseOpts,
   type MapBounds,
   mapHeightFor,

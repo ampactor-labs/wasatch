@@ -53,7 +53,9 @@ Everything else is in the menu, all optional:
 Anything on screen that comes from the valley explains itself: tap a word
 in the status lines, a card in the feed, the key, a sticker, the dial or
 the map, and a toast says what it is and what the music does with it; tap
-the toast for the lowdown.
+the toast for the lowdown. On a desktop, Space plays and pauses and 1 to 4
+pick where you listen from; media keys and the system's media controls work
+too.
 
 [DESIGN.md](DESIGN.md) is the whole design: the music theory, the data, the
 sync, and why each choice was made.

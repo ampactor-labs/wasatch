@@ -229,7 +229,7 @@ export function skyline(data: SkylineData, opts: SkylineOpts): string {
 
   if (opts.flags ?? true) {
     const flagH = 15 * unit;
-    const fontSize = 7.5 * unit;
+    const fontSize = 9 * unit;
     const lineH = fontSize + 3.5 * unit;
     // Each label starts just above its pennant and climbs a line at a time
     // until it clears every label already placed.

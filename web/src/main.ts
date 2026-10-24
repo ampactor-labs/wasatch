@@ -55,7 +55,7 @@ function bootStickers(valley: Valley | null): [StickerKind, StickerKind] {
 }
 
 /** Lock-screen controls and the "now playing" line. */
-function mediaSession(host: Host, screen: PlayScreen, valley: Valley, toggle: () => void): void {
+function mediaSession(host: Host, screen: PlayScreen, valley: Valley, play: (on: boolean) => void): void {
   if (!("mediaSession" in navigator)) return;
   const ms = navigator.mediaSession;
   const update = () => {
@@ -73,13 +73,20 @@ function mediaSession(host: Host, screen: PlayScreen, valley: Valley, toggle: ()
   host.onEvent((e) => {
     if (e.t === "bar" && e.bar === 0) update();
   });
-  for (const action of ["play", "pause", "stop"] as const) {
+  // Each action does what it says: a "play" from a media key or the
+  // desktop's controls while it's already playing must not pause it.
+  for (const [action, on] of [
+    ["play", true],
+    ["pause", false],
+    ["stop", false],
+  ] as const) {
     try {
-      ms.setActionHandler(action, toggle);
+      ms.setActionHandler(action, () => play(on));
     } catch {
       // Not every browser knows every action.
     }
   }
+  ms.playbackState = "playing";
 }
 
 async function main(): Promise<void> {
@@ -138,14 +145,17 @@ async function main(): Promise<void> {
 
   // --- The tap.
   let paused = false;
-  const toggle = async () => {
+  /** Play or pause, whatever the state was: the button toggles, media keys
+   * and the system's controls say which. */
+  const setPlaying = async (on: boolean) => {
     if (!screen || !host) return;
-    paused = !paused;
-    if (paused) await host.suspend();
-    else await host.resume();
+    paused = !on;
     screen.setPaused(paused);
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = paused ? "paused" : "playing";
+    if (paused) await host.suspend();
+    else await host.resume();
   };
+  const toggle = () => setPlaying(paused || host?.ctx.state !== "running");
   const start = () => {
     if (!listen.enabled || screen || !host || !valley) return;
     const h = host;
@@ -176,7 +186,38 @@ async function main(): Promise<void> {
     // keep-alive element.
     void h.start(`${BASE}audio/keepalive.mp3`).catch((err) => console.error(err));
     s.mount();
-    mediaSession(h, s, v, () => void toggle());
+    mediaSession(h, s, v, (on) => void setPlaying(on));
+    // If the browser or the system suspends the sound on its own (another
+    // app takes the output, a device changes, a call comes in), say so: the
+    // button shows play, and one tap brings it back.
+    // (It may already be running: Firefox resumes before this is attached.)
+    let started = h.ctx.state === "running";
+    h.ctx.addEventListener("statechange", () => {
+      const running = h.ctx.state === "running";
+      if (running) started = true;
+      if (!started) return;
+      s.setPaused(paused || !running);
+      if ("mediaSession" in navigator) navigator.mediaSession.playbackState = paused || !running ? "paused" : "playing";
+    });
+    // A context that doesn't start within a few seconds of the tap (a
+    // browser that blocked it): show play, so the next tap starts it.
+    window.setTimeout(() => {
+      started = true;
+      if (h.ctx.state !== "running") s.setPaused(true);
+    }, 3000);
+    // The keyboard, on a desktop: Space plays and pauses, 1 to 4 pick where
+    // you're listening from. Not while typing, nor while a sheet is open.
+    document.addEventListener("keydown", (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.closest("input, textarea, select, [contenteditable], .sheet:not([hidden])")) return;
+      if (e.key === " " && !el?.closest("button, [data-topic], [role=slider]")) {
+        e.preventDefault();
+        void toggle();
+      } else if (/^[1-4]$/.test(e.key)) {
+        s.setVantage(Number(e.key) - 1);
+      }
+    });
     if (new URLSearchParams(location.search).has("debug")) void import("./app/debug.ts").then((d) => d.mountDebug(h, conductor));
     // A shared link to a day: play it in twelve minutes after the welcome.
     const asked = new URLSearchParams(location.search).get("day");

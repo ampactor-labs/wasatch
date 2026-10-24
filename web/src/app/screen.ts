@@ -8,6 +8,7 @@ import {
   harmonyDial,
   mapBase,
   mapProjection,
+  mapUnit,
   shredder,
   skyGradient,
   skyline,
@@ -98,6 +99,8 @@ export class PlayScreen {
   private introduced = new Set<Family>();
   private geo: SkylineGeometry | null = null;
   private proj: MapProjection | null = null;
+  /** The map's unit (art/map.ts): its marks scale with it. */
+  private u = 1;
   private riderT = 0.02;
   private riderAnim = 0;
   /** Theme hops win over the slow carve until this time. */
@@ -361,7 +364,9 @@ export class PlayScreen {
     // The base map and the lines are static; trains, events and the
     // seismometers move on an overlay, so the map itself never repaints.
     const proj = this.proj;
-    const u = Math.max(0.7, Math.min(1.4, w / 390));
+    const u = mapUnit(w, h);
+    this.u = u;
+    host.parentElement?.style.setProperty("--map-u", u.toFixed(3));
     host.innerHTML = `${mapBase({ bounds, width: w, height: h, labels: w >= 300 })}
       <svg class="play__overlay" viewBox="0 0 ${w} ${h}" aria-hidden="true">
         <clipPath id="overlay-frame"><rect width="${w}" height="${h}" rx="${n(14 * u)}"/></clipPath>
@@ -401,12 +406,11 @@ export class PlayScreen {
     const [bx, by] = at(place.face + 35);
     const ring = (r: number, cls: string) => `<circle class="here__ring ${cls}" cx="${n(x)}" cy="${n(y)}" r="${n(r)}"/>`;
     // The tag goes on whichever side has room.
-    const left = x > proj.width - 130;
-    const tx = left ? x - 12 : x + 12;
+    const left = x > proj.width - 130 * this.u;
     g.innerHTML = `${ring(far, "here__ring--far")}${ring(near, "")}
       <path class="here__cone" d="M${n(x)} ${n(y)}L${n(ax)} ${n(ay)}A${n(reach)} ${n(reach)} 0 0 1 ${n(bx)} ${n(by)}Z"/>
-      <circle class="here__dot" cx="${n(x)}" cy="${n(y)}" r="6.5"/>
-      <g class="here__tag" transform="translate(${n(tx)} ${n(y - 22)})">
+      <circle class="here__dot" cx="${n(x)}" cy="${n(y)}" r="${n(6.5 * this.u)}"/>
+      <g class="here__tag" transform="translate(${n(left ? x - 12 * this.u : x + 12 * this.u)} ${n(y - 22 * this.u)}) scale(${n(this.u)})">
         <rect x="${left ? -106 : 0}" width="106" height="20" rx="5"/>
         <text x="${left ? -53 : 53}" y="14.5" text-anchor="middle" textLength="92" lengthAdjust="spacingAndGlyphs">YOU ARE HERE</text>
       </g>`;
@@ -441,15 +445,16 @@ export class PlayScreen {
         .join("");
       const color = net.routes[shape.r]?.color ?? "#1B1F3B";
       const fr = net.routes[shape.r]?.kind === "frontrunner";
-      casing.push(`<path d="${d}" stroke="#1B1F3B" stroke-width="${fr ? 5 : 6.5}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`);
+      const u = this.u;
+      casing.push(`<path d="${d}" stroke="#1B1F3B" stroke-width="${n((fr ? 5 : 6.5) * u)}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`);
       lines.push(
-        `<path d="${d}" stroke="${color}" stroke-width="${fr ? 2.4 : 3.6}" stroke-linecap="round" stroke-linejoin="round" fill="none"${fr ? ' stroke-dasharray="7 4"' : ""}/>`,
+        `<path d="${d}" stroke="${color}" stroke-width="${n((fr ? 2.4 : 3.6) * u)}" stroke-linecap="round" stroke-linejoin="round" fill="none"${fr ? ` stroke-dasharray="${n(7 * u)} ${n(4 * u)}"` : ""}/>`,
       );
     }
     const stations = net.stops
       .map((s) => {
         const [x, y] = proj.project(s.lat, s.lon);
-        return `<circle cx="${n(x)}" cy="${n(y)}" r="2.6" fill="#FFFFFF" stroke="#1B1F3B" stroke-width="1.6"/>`;
+        return `<circle cx="${n(x)}" cy="${n(y)}" r="${n(2.6 * this.u)}" fill="#FFFFFF" stroke="#1B1F3B" stroke-width="${n(1.6 * this.u)}"/>`;
       })
       .join("");
     return `${casing.join("")}${lines.join("")}<g class="map-stations">${stations}</g>`;
@@ -471,7 +476,8 @@ export class PlayScreen {
     const fleet = this.day ? null : this.deps.valley.liveFleet();
     const trains = fleet ? fleet.trains.map(([route, , lat, lon]) => ({ route, lat, lon })) : this.deps.schedule.trainsAt(this.dayNow());
     this.root.querySelector(".play__map")?.classList.toggle("play__map--live", !!fleet);
-    const edge = 9;
+    const u = this.u;
+    const edge = 9 * u;
     g.innerHTML = trains
       .map((t) => {
         const [x, y] = proj.project(t.lat, t.lon);
@@ -482,9 +488,10 @@ export class PlayScreen {
         const cy = Math.max(edge, Math.min(proj.height - edge, y));
         if (cx !== x || cy !== y) {
           const deg = (Math.atan2(y - cy, x - cx) * 180) / Math.PI;
-          return `<path d="M5 0L-4 -4.6L-4 4.6Z" transform="translate(${n(cx)} ${n(cy)}) rotate(${n(deg)})" fill="${color}" stroke="#1B1F3B" stroke-width="1.6" stroke-linejoin="round"/>`;
+          return `<path d="M5 0L-4 -4.6L-4 4.6Z" transform="translate(${n(cx)} ${n(cy)}) rotate(${n(deg)}) scale(${n(u)})" fill="${color}" stroke="#1B1F3B" stroke-width="1.6" stroke-linejoin="round"/>`;
         }
-        return `<rect x="${n(x - 3.6)}" y="${n(y - 3.6)}" width="7.2" height="7.2" rx="2" fill="${color}" stroke="#1B1F3B" stroke-width="1.8"/>`;
+        const s = 3.6 * u;
+        return `<rect x="${n(x - s)}" y="${n(y - s)}" width="${n(2 * s)}" height="${n(2 * s)}" rx="${n(2 * u)}" fill="${color}" stroke="#1B1F3B" stroke-width="${n(1.8 * u)}"/>`;
       })
       .join("");
   }
@@ -507,7 +514,7 @@ export class PlayScreen {
     const el = document.createElement("div");
     el.className = `pulse${big ? " pulse--big" : ""}${off ? " pulse--edge" : ""}`;
     const loud = Math.sqrt(Math.max(0, Math.min(1, e.g ?? 1)));
-    el.style.cssText = `left:${n(x)}px;top:${n(y)}px;--c:${color};scale:${(0.45 + 0.55 * loud).toFixed(2)};opacity:${(0.35 + 0.65 * loud).toFixed(2)}`;
+    el.style.cssText = `left:${n(x)}px;top:${n(y)}px;--c:${color};scale:${((0.45 + 0.55 * loud) * this.u).toFixed(2)};opacity:${(0.35 + 0.65 * loud).toFixed(2)}`;
     el.innerHTML = `<i class="pulse__ring"></i><i class="pulse__dot"></i>`;
     g.appendChild(el);
     window.setTimeout(() => el.remove(), big ? 4000 : 1800);
@@ -723,7 +730,8 @@ export class PlayScreen {
     const intro = this.introduced.has(c.family) ? undefined : c.intro;
     this.introduced.add(c.family);
     this.captions.unshift({ ...c, intro });
-    this.captions.length = Math.min(this.captions.length, 3);
+    // Three on a phone; on a desktop the feed has a column, so it keeps more.
+    this.captions.length = Math.min(this.captions.length, window.matchMedia("(min-width: 900px)").matches ? 7 : 3);
     const host = this.root.querySelector(".play__captions");
     if (!host) return;
     host.innerHTML = this.captions
