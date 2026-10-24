@@ -61,7 +61,13 @@ a {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-.play__status span + span::before {
+.play__status-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.play__status-line + .play__status-line::before,
+.play__status-line [data-slot] + [data-slot]::before {
   content: "·";
   margin: 0 10px;
   color: var(--granite);
@@ -69,11 +75,18 @@ a {
 .play__status [data-slot="key"] {
   color: var(--sun);
 }
-.play__status [data-slot="key"]::before {
-  color: var(--granite);
-}
-.play__status span:empty {
+.play__status [data-slot]:empty {
   display: none;
+}
+/* Phones: the time on one line, the music on the next. */
+@media (max-width: 560px) {
+  .play__status {
+    flex-direction: column;
+    align-items: center;
+  }
+  .play__status-line + .play__status-line::before {
+    content: none;
+  }
 }
 
 .play__valley {
@@ -171,6 +184,12 @@ a {
   min-width: 0;
   margin: 0;
 }
+/* Short phones: two signs, and a smaller map, so the bar stays in view. */
+@media (max-width: 899px) and (max-height: 720px) {
+  .play__valley {
+    min-height: 210px;
+  }
+}
 /* Phones: a fixed caption area, so the map doesn't jump with each sign. */
 @media (max-width: 899px) {
   .play__captions {
@@ -216,6 +235,9 @@ a {
 }
 
 .play__bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -790,4 +812,49 @@ a {
   border-radius: 10px;
   font: 700 14px/1 var(--font-mono);
   background: var(--white);
+}
+
+/* The seismometers: a ring per station, breathing with its band's level. */
+.map-seis {
+  --level: 0;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.map-seis--live {
+  opacity: 1;
+}
+.map-seis__dot {
+  fill: var(--ink);
+}
+.map-seis__ring {
+  fill: none;
+  stroke: var(--pink);
+  stroke-width: 2.2;
+  transform-box: fill-box;
+  transform-origin: center;
+  scale: calc(0.6 + var(--level) * 1.6);
+  animation: seis-breathe calc(3.2s - var(--level) * 2s) ease-in-out infinite;
+}
+@keyframes seis-breathe {
+  50% {
+    opacity: 0.35;
+    stroke-width: 3.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-seis__ring {
+    animation: none;
+  }
+}
+
+/* The narrowest phones: vantage icons only (the names stay for screen readers). */
+@media (max-width: 359px) {
+  .vantage span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }

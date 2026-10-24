@@ -30,6 +30,7 @@ import { dialLabels, homePos, keyName, noteName, push, type Key } from "./music.
 import type { Schedule } from "./schedule.ts";
 import { DAYPART_NAMES, type Valley } from "./valley.ts";
 import { season } from "../data/feeds.ts";
+import { STATIONS } from "../data/ground.ts";
 
 export const SECTION_NAMES = ["The theme", "Groove", "Atmosphere", "Journey", "The lake"];
 const MODE_SHORT = ["LYDIAN", "MAJOR", "MIXO", "DORIAN", "MINOR"];
@@ -76,6 +77,8 @@ export class PlayScreen {
   private proj: MapProjection | null = null;
   private riderT = 0.02;
   private riderAnim = 0;
+  /** Theme hops win over the slow carve until this time. */
+  private hopUntil = 0;
   private vantage = 0;
   private stickers: [StickerKind, StickerKind] = ["801", "LISTEN LOCAL"];
   private haze = 0;
@@ -101,7 +104,7 @@ export class PlayScreen {
       <header class="play__sky">
         <div class="play__skyline"></div>
       </header>
-      <div class="play__status" role="status"><span data-slot="clock"></span><span data-slot="key"></span><span data-slot="section"></span><button type="button" class="play__live" data-action="share" hidden>Share this day</button><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
+      <div class="play__status" role="status"><span class="play__status-line"><span data-slot="clock"></span></span><span class="play__status-line"><span data-slot="key"></span><span data-slot="section"></span></span><button type="button" class="play__live" data-action="share" hidden>Share this day</button><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
       <div class="play__note" aria-hidden="true"></div>
       <section class="play__valley">
         <div class="play__mapwrap">
@@ -227,9 +230,33 @@ export class PlayScreen {
     this.hopToT(summit.i / (data.elevFt.length - 1));
   }
 
+  /** Between theme statements the rider carves along the ridge, north to
+   * south over a section, a bar at a time: the skyline as a playhead. */
+  private carve(bar: Heard<BarEvent>): void {
+    if (this.riderAnim && performance.now() < this.hopUntil) return;
+    const target = Math.min(1, (bar.bar + 1) / Math.max(1, bar.bars));
+    if (bar.bar === 0 && this.riderT > 0.5) this.riderT = 0;
+    const from = this.riderT;
+    this.riderT = target;
+    if (reducedMotion()) {
+      this.placeRider(target, 0);
+      return;
+    }
+    const ms = (240_000 / bar.bpm) * 0.95;
+    const t0 = performance.now();
+    cancelAnimationFrame(this.riderAnim);
+    const step = (now: number) => {
+      const u = Math.min(1, (now - t0) / ms);
+      this.placeRider(from + (target - from) * u, 0);
+      if (u < 1) this.riderAnim = requestAnimationFrame(step);
+    };
+    this.riderAnim = requestAnimationFrame(step);
+  }
+
   /** Hop along the ridge to `target` (0 Ben Lomond … 1 Mount Nebo). */
   private hopToT(target: number): void {
     cancelAnimationFrame(this.riderAnim);
+    this.hopUntil = performance.now() + 2500;
     const from = this.riderT;
     this.riderT = target;
     if (reducedMotion()) {
@@ -275,7 +302,27 @@ export class PlayScreen {
     host.innerHTML = mapBase({ bounds, width: w, height: h, labels: w >= 300 });
     const routes = host.querySelector(".map-routes");
     if (routes) routes.innerHTML = this.routesSvg();
+    // The seismometers: rings that breathe with the ground.
+    const proj = this.proj;
+    routes?.insertAdjacentHTML(
+      "afterend",
+      `<g class="map-ground">${STATIONS.map((s, band) => {
+        const [x, y] = proj.project(s.lat, s.lon);
+        return `<g class="map-seis" data-band="${band}" transform="translate(${n(x)} ${n(y)})"><title>${esc(s.name)}</title><circle class="map-seis__ring" r="9"/><circle class="map-seis__dot" r="2.6"/></g>`;
+      }).join("")}</g>`,
+    );
+    this.drawGround();
     this.drawVehicles();
+  }
+
+  /** Each seismometer's ring follows its band's level; hidden when it's quiet or offline. */
+  private drawGround(): void {
+    const levels = this.deps.valley.ground?.levels;
+    this.root.querySelectorAll<SVGGElement>(".map-seis").forEach((g) => {
+      const level = levels?.[Number(g.dataset.band)] ?? 0;
+      g.classList.toggle("map-seis--live", !!levels);
+      g.style.setProperty("--level", level.toFixed(2));
+    });
   }
 
   private routesSvg(): string {
@@ -405,6 +452,7 @@ export class PlayScreen {
     const v = this.deps.valley;
     const t = v.now();
     const clock = this.root.querySelector('[data-slot="clock"]');
+    this.drawGround();
     if (this.day) {
       this.dayTick();
     } else {
@@ -475,6 +523,7 @@ export class PlayScreen {
     if (keyEl) keyEl.textContent = keyName(this.key);
     const secEl = this.root.querySelector('[data-slot="section"]');
     if (secEl) secEl.textContent = `${SECTION_NAMES[e.kind] ?? ""} · ${Math.round(e.bpm)} BPM`;
+    if (e.kind !== 0) this.carve(e);
     if (Math.abs(e.haze - this.haze) > 0.08) {
       this.haze = e.haze;
       this.renderSky();

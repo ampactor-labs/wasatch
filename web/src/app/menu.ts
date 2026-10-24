@@ -95,7 +95,24 @@ export class Menu {
       if ((e.target as HTMLElement).closest("[data-close]")) this.close();
     });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !this.sheet.hidden) this.close();
+      if (this.sheet.hidden) return;
+      if (e.key === "Escape") this.close();
+      // A modal dialog: Tab cycles inside it.
+      if (e.key === "Tab") {
+        const focusable = [...this.sheet.querySelectorAll<HTMLElement>("button, [href], input, [tabindex]:not([tabindex='-1'])")].filter(
+          (el) => !el.hasAttribute("disabled") && el.offsetParent !== null,
+        );
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (!first || !last) return;
+        if (e.shiftKey && document.activeElement === first) {
+          last.focus();
+          e.preventDefault();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          first.focus();
+          e.preventDefault();
+        }
+      }
     });
   }
 
