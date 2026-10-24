@@ -102,7 +102,8 @@ fn main() {
                 ("trax", _) => RouteKind::Trax(2),
                 ("sline", _) => RouteKind::SLine,
                 ("frontrunner", _) => RouteKind::FrontRunner,
-                ("ski", _) => RouteKind::Ski,
+                ("ski", n) if n.contains("BRIGHT") || n.contains("SOL") => RouteKind::Ski(1),
+                ("ski", _) => RouteKind::Ski(0),
                 _ => RouteKind::Other,
             }
         })

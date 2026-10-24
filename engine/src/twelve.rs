@@ -539,13 +539,14 @@ pub fn compose_day(
         }
     }
 
-    // Ski buses: a tom in the canyon's echo, at the mouth of Little
-    // Cottonwood.
-    if !valley.schedule.ski_between(d0, d1).is_empty() {
+    // Ski buses: a tom in the canyon's echo, up the canyon the slice's first
+    // one climbs.
+    if let Some(ev) = valley.schedule.ski_between(d0, d1).first() {
+        let (lat, lon) = valley.network.kind(ev.route).canyon_point();
         out.notes.push(Note {
             variant: 1,
-            lat: 40.5800,
-            lon: -111.796,
+            lat,
+            lon,
             ..note(start + 8.0 * step_ms, Inst::Tom, 45, 0.5, 400.0)
         });
     }
@@ -678,7 +679,7 @@ mod tests {
                 RouteKind::Trax(2),
                 RouteKind::SLine,
                 RouteKind::FrontRunner,
-                RouteKind::Ski,
+                RouteKind::Ski(0),
             ],
             stops: (0..8)
                 .map(|i| Stop {

@@ -123,7 +123,8 @@ export function encodeDay(date: string, t0Ms: number, day: DayFile): Uint8Array 
   return w.bytes();
 }
 
-/** Route kind codes: 0–2 TRAX Blue/Red/Green, 3 S-Line, 4 FrontRunner, 5 ski. */
+/** Route kind codes: 0–2 TRAX Blue/Red/Green, 3 S-Line, 4 FrontRunner, 5 a
+ * ski bus up Little Cottonwood, 6 one up Big Cottonwood. */
 export function routeCode(route: NetworkFile["routes"][number]): number {
   if (route.kind === "trax") {
     if (/blue/i.test(route.name)) return 0;
@@ -132,9 +133,13 @@ export function routeCode(route: NetworkFile["routes"][number]): number {
   }
   if (route.kind === "sline") return 3;
   if (route.kind === "frontrunner") return 4;
-  if (route.kind === "ski") return 5;
+  if (route.kind === "ski") return BIG_COTTONWOOD.test(`${route.short} ${route.name}`) ? 6 : 5;
   return 255;
 }
+
+/** Brighton and Solitude's buses: the 972 and Canyon Service 3 (UTA writes
+ * "SOL BRIGHTN"). */
+const BIG_COTTONWOOD = /\b972\b|\bCS3\b|bright|solitude|\bsol\b|big cottonwood/i;
 
 export function centralIndex(network: NetworkFile): number {
   return network.stops.findIndex((s) => /salt lake central/i.test(s.name));

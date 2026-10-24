@@ -855,11 +855,13 @@ pub fn compose(
                     value: 0.0,
                 });
                 let f = (out.features.len() - 1) as u16;
+                // Up the canyon it climbs.
+                let (lat, lon) = valley.network.kind(ev.route).canyon_point();
                 for (i, m) in [52, 50, 47, 45].iter().enumerate() {
                     out.notes.push(Note {
                         variant: 1,
-                        lat: 40.57,
-                        lon: -111.75,
+                        lat,
+                        lon,
                         feature: if i == 0 { f } else { NO_FEATURE },
                         ..note(
                             start + f64::from(step + i as u32) * step_ms,

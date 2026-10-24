@@ -45,6 +45,12 @@ describe("the engine's messages", () => {
       headsigns: [],
     };
     expect(net.routes.map(routeCode)).toEqual([0, 1, 2, 3, 4, 5]);
+    // Each ski bus up its own canyon: Big Cottonwood's are 6.
+    const ski = (short: string, name: string) => routeCode({ id: short, short, name, type: 3, kind: "ski", color: "", text: "" });
+    expect(ski("994", "90TH SO TRAX/SNWBRD/ALTA")).toBe(5);
+    expect(ski("972", "BINGHM JNCT/SOL BRIGHTN")).toBe(6);
+    expect(ski("CS1", "Canyon Service")).toBe(5);
+    expect(ski("CS3", "Canyon Service")).toBe(6);
     expect(centralIndex(net)).toBe(1);
     const v = view(encodeNetwork(net));
     expect(v.getUint32(0, true)).toBe(6);

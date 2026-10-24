@@ -16,22 +16,31 @@ pub enum RouteKind {
     SLine,
     /// FrontRunner commuter rail.
     FrontRunner,
-    /// A canyon ski bus.
-    Ski,
+    /// A canyon ski bus: 0 up Little Cottonwood, 1 up Big Cottonwood.
+    Ski(u8),
     /// Anything else (ignored).
     Other,
 }
 
 impl RouteKind {
     /// Decode the host's route-kind code: 0–2 TRAX lines, 3 S-Line,
-    /// 4 FrontRunner, 5 ski bus.
+    /// 4 FrontRunner, 5 ski bus up Little Cottonwood, 6 up Big Cottonwood.
     pub fn from_code(code: u32) -> RouteKind {
         match code {
             0..=2 => RouteKind::Trax(code as u8),
             3 => RouteKind::SLine,
             4 => RouteKind::FrontRunner,
-            5 => RouteKind::Ski,
+            5 => RouteKind::Ski(0),
+            6 => RouteKind::Ski(1),
             _ => RouteKind::Other,
+        }
+    }
+
+    /// Where a ski bus's drums sound: on the road partway up its canyon.
+    pub fn canyon_point(self) -> (f32, f32) {
+        match self {
+            RouteKind::Ski(1) => (40.628, -111.75),
+            _ => (40.573, -111.75),
         }
     }
 }

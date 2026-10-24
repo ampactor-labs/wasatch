@@ -158,7 +158,10 @@ const FALLBACK_COLORS: [RegExp, string][] = [
   [/frontrunner/i, "#C227B9"],
 ];
 
-const SKI_WORDS = /\b(snowbird|alta|solitude|brighton)\b/i;
+const SKI_WORDS = /\b(snowbird|alta|solitude|brighton|canyon service)\b/i;
+/** UTA's ski buses: the 994 (Snowbird, Alta), the 972 (Solitude, Brighton),
+ * and Canyon Service CS1 to CS3, as of the 2025–26 season. */
+const SKI_SHORT = /^(994|972|CS\d)$/i;
 
 /** Growable Int32 column. */
 class Column {
@@ -277,7 +280,7 @@ async function main() {
     const label = `${r.short} ${r.name}`;
     if (r.type === 2) kindOf.set(i, "frontrunner");
     else if (r.type === 0) kindOf.set(i, /s-?line|streetcar/i.test(label) || r.short === "720" ? "sline" : "trax");
-    else if (r.type === 3 && (r.short === "994" || r.short === "972" || SKI_WORDS.test(r.name))) kindOf.set(i, "ski");
+    else if (r.type === 3 && (SKI_SHORT.test(r.short) || SKI_WORDS.test(r.name))) kindOf.set(i, "ski");
   });
   for (let t = 0; t < tripRoute.length; t++) {
     const r = tripRoute[t]!;

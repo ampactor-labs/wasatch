@@ -650,9 +650,14 @@ that stop before it dropped out of the trip update. Lateness is observed minus
 scheduled. Fleet speed comes from consecutive positions along each trip's
 shape. Receipts say so: "live · position 12 s old".
 
-FrontRunner's actual horn model isn't on record anywhere the research could
-reach. One recording of a FrontRunner horn at a crossing, pitch-tracked with
-sonido-analysis, would replace the K5LA voicing with its own (principle 8).
+FrontRunner's horn model isn't on record from UTA, but railfan references
+list its MP36PH-3C locomotives (road numbers 1–21) with the Nathan K5LA,
+the horn the voicing already follows: D♯4 311 Hz, F♯4 370, G♯4 415, B4 494,
+D♯5 622, the B major sixth Nathan made by lowering two bells of the older
+K5H. Individual horns drift from those nominal pitches, so one recording of
+a FrontRunner horn at a crossing, pitch-tracked with sonido-analysis, would
+still replace the voicing with its own (principle 8). No recording with a
+usable license is on Freesound or Wikimedia Commons (searched Oct 24, 2026).
 
 ### Roads and canyons
 

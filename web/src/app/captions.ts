@@ -102,6 +102,9 @@ export interface ValleyNow {
 const SKI_ROUTE: Record<string, string> = {
   "972": "up Big Cottonwood to Solitude and Brighton",
   "994": "up Little Cottonwood to Snowbird and Alta",
+  CS1: "up Little Cottonwood to Snowbird and Alta",
+  CS2: "up Little Cottonwood to Snowbird and Alta",
+  CS3: "up Big Cottonwood to Solitude and Brighton",
 };
 
 const REASON: Record<number, (to: Key) => string> = {
