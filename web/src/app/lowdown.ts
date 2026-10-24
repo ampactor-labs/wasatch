@@ -267,7 +267,7 @@ export const TOPICS: readonly Topic[] = [
     plays: "a deep bell",
     source: { name: "USGS earthquake catalog", href: "https://earthquake.usgs.gov/earthquakes/map/" },
     now: (c) => {
-      const q = c.valley.quakes;
+      const q = c.valley.catalog ?? c.valley.quakes;
       if (!q) return null;
       const last = q.value.at(-1);
       return { value: q.value.length ? `${q.value.length} in 2 days · last M${last?.mag.toFixed(1)}` : "none in 2 days", receipt: receipt(q) };
@@ -466,4 +466,47 @@ export function withTerms(text: string): string {
     rest = rest.slice(best.at + best.len);
   }
   return out + esc(rest);
+}
+
+/** One reading on the play screen's conditions board. */
+export interface Condition {
+  topic: TopicId;
+  label: string;
+  value: string;
+  /** "live 2:01 PM", "scheduled", "cached 1:45 PM", "waiting". */
+  receipt: string;
+}
+
+/** The valley now, every live reading, as a ski area's conditions board
+ * says it: short, in order of what moves fastest. */
+export function conditions(c: LowdownCtx): Condition[] {
+  const v = c.valley;
+  const out: Condition[] = [];
+  const add = (topic: TopicId, label: string, value: string, receipt: string) => out.push({ topic, label, value, receipt });
+  const sky = v.sky;
+  if (sky?.value.alerts.length) add("alerts", "Alert", sky.value.alerts[0]!, receipt(sky));
+  const fleet = v.liveFleet();
+  const counts = fleet?.counts ?? c.schedule.transitAt(v.now());
+  const transitReceipt = fleet ? `live ${mountainTime(fleet.t)}` : "scheduled";
+  add("trains", "Trains", counts.trains.toLocaleString("en-US"), transitReceipt);
+  add("buses", "Buses", counts.buses.toLocaleString("en-US"), transitReceipt);
+  const late = c.conductor?.lateness();
+  if (late && !v.shift) add("trains", "Running", Math.abs(late.medianS) < 60 ? "on time" : `${Math.round(late.medianS / 60)} min ${late.medianS > 0 ? "late" : "early"}`, "live");
+  if (v.lake) add("lake", "Lake", `${v.lake.value.ft.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ft`, receipt(v.lake));
+  if (sky && Number.isFinite(sky.value.pm25)) add("air", "Air", `PM2.5 ${Math.round(sky.value.pm25)}${sky.value.inversionC >= 4 ? " · lid" : ""}`, receipt(sky));
+  if (sky) {
+    const f = Number.isFinite(sky.value.tempC) ? `${Math.round((sky.value.tempC * 9) / 5 + 32)}°F` : "";
+    add("sky", "Sky", [sky.value.description, f].filter(Boolean).join(" ") || "—", receipt(sky));
+  }
+  if (v.snow) add("snow", "Snow", `${Math.round(v.snow.value.newIn)} in new`, receipt(v.snow));
+  if (sky && Number.isFinite(sky.value.ridgeGustMs)) add("wind", "Ridges", `${Math.round(sky.value.ridgeGustMs * 2.237)} mph`, receipt(sky));
+  if (v.river) add("river", "River", `${Math.round(v.river.value.cfs)} cfs`, receipt(v.river));
+  if (v.ground) {
+    const loudest = Math.max(...v.ground.levels);
+    add("ground", "Ground", `${Math.round(loudest * 100)}%`, "live");
+  }
+  const quakes = v.catalog ?? v.quakes;
+  if (quakes) add("quakes", "Quakes", `${quakes.value.length} in 2 days`, receipt(quakes));
+  add("bikes", "Bikes", `${v.bikes.events.length} in 10 min`, v.shift ? "live only" : "live");
+  return out;
 }

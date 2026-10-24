@@ -34,6 +34,8 @@ export class Conductor implements GroundFeed {
   private timers: number[] = [];
   /** Windows read, and the latest one's start: for the mappings view. */
   stats = { windows: 0, latest: 0, observed: 0, scheduled: 0 };
+  /** Departures heard live lately: when, and how late (s). */
+  private lates: { at: number; s: number }[] = [];
   /** Called once if nothing has come from the conductor for three minutes. */
   onLost: (() => void) | null = null;
   private lastHeard = performance.now();
@@ -124,6 +126,9 @@ export class Conductor implements GroundFeed {
     this.stats.latest = Math.max(this.stats.latest, w.start);
     this.stats.observed += w.rail.filter((r) => r[5] === 1).length;
     this.stats.scheduled += w.rail.filter((r) => r[5] === 0).length;
+    for (const r of w.rail) if (r[5] === 1) this.lates.push({ at: r[0], s: (r[0] - r[1]) / 1000 });
+    const cutoff = Math.max(...this.lates.map((l) => l.at)) - 15 * 60_000;
+    this.lates = this.lates.filter((l) => l.at >= cutoff);
     this.host.post(Kind.RAIL, encodeRail(w.start, w.end, w.rail));
     if (w.bikes.length) {
       this.valley.conductorBikes(w.bikes.map(([ms, lat, lon, delta, station]) => ({ ms, lat, lon, delta, station })));
@@ -139,6 +144,14 @@ export class Conductor implements GroundFeed {
       this.levels[g.band] = g.level;
       this.lastGround[g.band] = g.t0 + (g.iq.length / 2) * 100;
     }
+  }
+
+  /** How late the trains heard live in the last quarter hour ran: the
+   * median, seconds, and how many; null with fewer than three. */
+  lateness(): { medianS: number; n: number } | null {
+    if (this.lates.length < 3) return null;
+    const s = this.lates.map((l) => l.s).sort((a, b) => a - b);
+    return { medianS: s[Math.floor(s.length / 2)]!, n: s.length };
   }
 
   // --- The ground, from the windows ------------------------------------------

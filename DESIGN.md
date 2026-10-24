@@ -225,6 +225,13 @@ monospaced face, safety orange only on measured values.
   (the notes in play) and one dot inside the lit arc (home). A move of the
   arc is a key change; a move of the dot is a change of mode. An arrow shows
   where the valley is pushing. Two minutes of watching teaches the rule.
+- **The conditions board**, under the status strip, the way a ski area
+  posts its own: every live reading at once (trains and buses out, how
+  late the trains run, the lake, the air, the sky, new snow, the ridge
+  wind, the river, the ground, quakes, bikes, and any weather alert first),
+  each with its receipt as a dot and explaining itself on a tap. One row to
+  swipe on a phone; all of it on a desktop. A Day in Twelve Minutes hides
+  it, since it plays another day.
 - **The caption line** at the bottom: the last three things you heard, each
   with its receipt ("live 5:42 PM", "cached 4:45 PM", "scheduled"). It's a
   feed with a cadence, set in the score so every phone shows the same cards:

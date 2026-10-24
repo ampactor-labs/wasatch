@@ -50,6 +50,11 @@ Everything else is in the menu, all optional:
 - **Show mappings.** The lowdown: every stream and every musical idea, what
   it plays, its live value, where it came from, and a live spectrogram.
 
+While it plays, a conditions board under the clock shows every live
+reading at once, the way a ski area posts its own: trains and buses out,
+how late the trains run, the lake, the air, the sky, new snow, the ridge
+wind, the river, the ground, quakes and bikes.
+
 Anything on screen that comes from the valley explains itself: tap a word
 in the status lines, a card in the feed, the key, a sticker, the dial or
 the map, and a toast says what it is and what the music does with it; tap

@@ -41,7 +41,7 @@ import { midiName } from "./music.ts";
 import { dialLabels, homePos, keyName, noteName, push, type Key } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
 import { daypartName, type Valley } from "./valley.ts";
-import { FAMILY_TOPIC, STICKER_TOPIC } from "./lowdown.ts";
+import { FAMILY_TOPIC, STICKER_TOPIC, conditions, type LowdownCtx } from "./lowdown.ts";
 import { season } from "../data/feeds.ts";
 import { STATIONS } from "../data/ground.ts";
 
@@ -84,6 +84,8 @@ export interface ScreenDeps {
   onPause(): void;
   /** Leave A Day in Twelve Minutes for the live valley. */
   onLive(): void;
+  /** What the conditions board reads. */
+  lowdown(): LowdownCtx;
 }
 
 /** How much faster than a 24-hour day A Day in Twelve Minutes runs. */
@@ -108,6 +110,7 @@ export class PlayScreen {
   /** The rider's element and its scale, set when the skyline is drawn. */
   private riderBox: { el: HTMLElement; px: number; k: number } | null = null;
   private vantage = 0;
+  private conditionsHtml = "";
   private stickers: [StickerKind, StickerKind] = ["801", "LISTEN LOCAL"];
   private haze = 0;
   private daypart = "";
@@ -135,6 +138,7 @@ export class PlayScreen {
         <div class="play__skyline"></div>
       </header>
       <div class="play__status"><span class="play__status-line"><span data-slot="clock" data-topic="sync" tabindex="0"></span><span data-slot="daypart" data-topic="dayparts" tabindex="0"></span></span><span class="play__status-line"><span data-slot="key" data-topic="key" tabindex="0"></span><span data-slot="section" data-topic="sections" tabindex="0"></span><span data-slot="bpm" data-topic="tempo" tabindex="0"></span></span><button type="button" class="play__live" data-action="share" hidden>Share this day</button><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
+      <div class="play__conditions" role="group" aria-label="The valley now"></div>
       <div class="play__note" aria-hidden="true"></div>
       <section class="play__valley">
         <div class="play__mapwrap">
@@ -582,8 +586,26 @@ export class PlayScreen {
     return [earned[0] ?? "801", earned[1] ?? "LISTEN LOCAL"];
   }
 
+  /** Every live reading, as a ski area's conditions board; rewritten only
+   * when one changes. */
+  private renderConditions(): void {
+    const host = this.root.querySelector(".play__conditions");
+    if (!host) return;
+    const html = conditions(this.deps.lowdown())
+      .map(
+        (c) =>
+          `<button type="button" class="cond" data-topic="${c.topic}" aria-label="${esc(`${c.label}: ${c.value}, ${c.receipt}`)}"><span class="cond__label">${esc(c.label)}</span><span class="cond__value">${esc(c.value)}</span><i class="cond__dot cond__dot--${esc(c.receipt.split(" ")[0] ?? "")}" title="${esc(c.receipt)}"></i></button>`,
+      )
+      .join("");
+    if (html !== this.conditionsHtml) {
+      this.conditionsHtml = html;
+      host.innerHTML = html;
+    }
+  }
+
   /** Once a second: the clock, the trains, the stickers. */
   private tick(): void {
+    this.renderConditions();
     const v = this.deps.valley;
     const t = v.now();
     const clock = this.root.querySelector('[data-slot="clock"]');

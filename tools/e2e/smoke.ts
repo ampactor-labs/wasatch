@@ -139,6 +139,10 @@ try {
       if (!panel.some((r) => /% of a core/.test(r) && !/^engine 0\.0%/.test(r))) failures.push(`${view.name}: ?debug didn't measure the engine`);
     }
     if (view.name === "phone" && !query) await vantages(page, failures, shots);
+    // The conditions board: every live reading, each explaining itself.
+    const board = await page.$$eval(".play__conditions .cond", (c) => c.map((x) => x.textContent ?? ""));
+    console.log(`  conditions: ${board.join(" · ")}`);
+    if (board.length < 8) failures.push(`${view.name}: only ${board.length} readings on the conditions board`);
     if (view.name === "phone" && !query) {
       // While playing, a caption card explains itself too.
       const sign = await page.$(".play__captions .sign[data-topic]");

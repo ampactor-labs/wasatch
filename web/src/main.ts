@@ -169,6 +169,7 @@ async function main(): Promise<void> {
       onMenu: () => menu?.open(),
       onPause: () => void toggle(),
       onLive: () => h.post(Kind.TWELVE, encodeTwelve(null)),
+      lowdown: () => menu!.lowdownCtx(),
     });
     screen = s;
     menu?.setScreen(s);

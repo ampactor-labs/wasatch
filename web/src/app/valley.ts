@@ -102,14 +102,25 @@ export class Valley {
     await Promise.all([
       this.loadDays(),
       this.bikes.init().then(() => (this.bikesReady = true)).catch(() => {}),
-      ...(direct ? [this.refreshSky(), this.refreshSlow(), this.refreshQuakes()] : []),
+      ...(direct ? [this.refreshSky(), this.refreshSlow(), this.refreshQuakes()] : [this.refreshCatalog()]),
     ]);
+  }
+
+  /** The quake catalog, for the screen only. With a conductor the engine
+   * hears quakes from its windows alone, the same on every phone, so
+   * between quakes there'd be nothing to count. */
+  catalog: Reading<Quake[]> | null = null;
+
+  async refreshCatalog(): Promise<void> {
+    const q = await fetchQuakes().catch(() => null);
+    if (q) this.catalog = q;
   }
 
   /** Keep every feed fresh (the schedule only, with a conductor). */
   run(direct = true): void {
     this.timers.push(window.setInterval(() => void this.loadDays().catch(() => {}), 10 * MIN));
     if (direct) this.runFeeds();
+    else this.timers.push(window.setInterval(() => void this.refreshCatalog(), 5 * MIN));
   }
 
   /** Read the feeds directly: from the start, or once a conductor goes quiet. */
