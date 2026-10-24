@@ -5,8 +5,8 @@
 // KSLC's METARs; the same clock.
 
 import type { Host } from "../engine/host.ts";
-import { Kind, encodeRail, type Fleet } from "../engine/protocol.ts";
-import type { Valley } from "../app/valley.ts";
+import { Kind, encodeAlerts, encodePlanes, encodeRail, type Fleet } from "../engine/protocol.ts";
+import type { AlertRow, Grid, PlaneDot, PlaneRow, ServiceAlerts, Valley } from "../app/valley.ts";
 import { DELAY_MS, STATIONS, type Baseband, type GroundFeed } from "./ground.ts";
 import type { Lake, Quake, Reading, River, SkyNow, Snow } from "./feeds.ts";
 import { utcNow } from "../engine/clock.ts";
@@ -21,6 +21,11 @@ interface WindowBody {
   bikes: [number, number, number, number, number][];
   quakes: [number, number, number, number, number, string, string][];
   ground: { band: number; lat: number; lon: number; level: number; t0: number; iq: number[] }[];
+  // Added since: an older window has none of these.
+  planes?: PlaneRow[];
+  alerts?: AlertRow[];
+  alertsActive?: [number, number, number, number];
+  due?: number;
 }
 
 export class Conductor implements GroundFeed {
@@ -66,7 +71,7 @@ export class Conductor implements GroundFeed {
 
   /** The sky, the slow values and the fleet, before the first bar. */
   async prime(): Promise<void> {
-    await Promise.all([this.sky(), this.slow(), this.vehicles()]);
+    await Promise.all([this.sky(), this.slow(), this.vehicles(), this.planes(), this.alerts()]);
   }
 
   start(): void {
@@ -81,6 +86,8 @@ export class Conductor implements GroundFeed {
     every(5 * 60_000, () => this.sky());
     every(15 * 60_000, () => this.slow());
     every(10_000, () => this.vehicles());
+    every(30_000, () => this.planes());
+    every(5 * 60_000, () => this.alerts());
   }
 
   stop(): void {
@@ -101,8 +108,20 @@ export class Conductor implements GroundFeed {
   }
 
   private async slow(): Promise<void> {
-    const s = await this.get<{ lake: Reading<Lake> | null; river: Reading<River> | null; snow: Reading<Snow> | null }>("/slow.json");
-    if (s) this.valley.conductorSlow(s.lake, s.river, s.snow);
+    const s = await this.get<{ lake: Reading<Lake> | null; river: Reading<River> | null; snow: Reading<Snow> | null; grid?: Reading<Grid> | null }>("/slow.json");
+    if (s) this.valley.conductorSlow(s.lake, s.river, s.snow, s.grid ?? null);
+  }
+
+  /** The planes in the air near SLC, for the map, while in the present. */
+  private async planes(): Promise<void> {
+    if (this.valley.shift) return;
+    const p = await this.get<{ t: number; planes: PlaneDot[] }>("/planes.json");
+    if (p) this.valley.conductorPlanes(p);
+  }
+
+  private async alerts(): Promise<void> {
+    const a = await this.get<ServiceAlerts>("/alerts.json");
+    if (a) this.valley.conductorAlerts(a);
   }
 
   /** Every sealed window from just before the listening time to now. */
@@ -129,7 +148,28 @@ export class Conductor implements GroundFeed {
     for (const r of w.rail) if (r[5] === 1) this.lates.push({ at: r[0], s: (r[0] - r[1]) / 1000 });
     const cutoff = Math.max(...this.lates.map((l) => l.at)) - 15 * 60_000;
     this.lates = this.lates.filter((l) => l.at >= cutoff);
-    this.host.post(Kind.RAIL, encodeRail(w.start, w.end, w.rail));
+    this.host.post(Kind.RAIL, encodeRail(w.start, w.end, w.rail, w.due ?? 0));
+    // Every window, even an empty one: a window posted again replaces itself.
+    const planes = w.planes ?? [];
+    const alerts = w.alerts ?? [];
+    this.host.post(
+      Kind.PLANES,
+      encodePlanes(
+        w.start,
+        w.end,
+        planes.map(([ms, lat, lon, kind, size, altFt, airline]) => ({ ms, lat, lon, altFt, arrival: kind === 1, size, airline: airline === 1 })),
+      ),
+    );
+    this.host.post(
+      Kind.ALERTS,
+      encodeAlerts(
+        w.start,
+        w.end,
+        w.alertsActive ?? [0, 0, 0, 0],
+        alerts.map(([ms, kind, severe]) => ({ ms, kind, severe: severe === 1 })),
+      ),
+    );
+    this.valley.conductorEvents(planes, alerts, w.due ?? 0);
     if (w.bikes.length) {
       this.valley.conductorBikes(w.bikes.map(([ms, lat, lon, delta, station]) => ({ ms, lat, lon, delta, station })));
     }

@@ -9,10 +9,24 @@ import { Transit } from "./transit.ts";
 const T0 = Date.parse("2026-10-23T06:00:00Z");
 const at = (s: number) => T0 + s * 1000;
 
-/** A schedule with two trips: T1 (tracked by the feed) and T2 (never). */
+/** A schedule with two trips: T1 (FrontRunner, tracked by the feed,
+ * through Salt Lake Central at stop 12) and T2 (TRAX, never tracked). */
 function schedule(): string {
   const dir = mkdtempSync(join(tmpdir(), "wasatch-transit-"));
   writeFileSync(join(dir, "manifest.json"), JSON.stringify({ days: { "2026-10-23": "k" }, t0: { "2026-10-23": T0 } }));
+  const stop = (i: number) => ({ id: `${i}`, name: i === 12 ? "Salt Lake Central Station" : `Stop ${i}`, lat: 40.7, lon: -111.9 });
+  writeFileSync(
+    join(dir, "network.json"),
+    JSON.stringify({
+      routes: [
+        { id: "a", short: "701", name: "Blue Line", type: 0, kind: "trax", color: "", text: "" },
+        { id: "b", short: "750", name: "FrontRunner", type: 2, kind: "frontrunner", color: "", text: "" },
+      ],
+      stops: Array.from({ length: 22 }, (_, i) => stop(i)),
+      shapes: [],
+      headsigns: [],
+    }),
+  );
   writeFileSync(
     join(dir, "day-k.json"),
     JSON.stringify({
@@ -30,6 +44,7 @@ function feed(s: number, stops: [number, number][]): Feed {
   return {
     timestamp: T0 / 1000 + s,
     vehicles: [],
+    alerts: [],
     trips: [{ tripId: "T1", routeId: "", vehicleId: "", timestamp: 0, stops: stops.map(([seq, pred]) => ({ seq, stopId: "", arrival: 0, departure: T0 / 1000 + pred, skipped: false })) }],
   };
 }
@@ -73,6 +88,19 @@ test("a stop that drops out while far ahead was cancelled, not departed", async 
   assert.deepEqual(t.drain(), []);
 });
 
+test("the next FrontRunner due at Central: its freshest prediction still ahead", async () => {
+  const t = new Transit(schedule());
+  await t.load(at(36_000));
+  assert.equal(t.due(at(36_000)), 0);
+  t.ingest(feed(36_030, [[2, 36_150], [3, 36_270], [4, 36_390]]));
+  assert.equal(t.due(at(36_030)), at(36_270));
+  // Later predictions revise it; once it's left, nothing is due.
+  t.ingest(feed(36_200, [[3, 36_300], [4, 36_420]]));
+  assert.equal(t.due(at(36_200)), at(36_300));
+  t.ingest(feed(36_320, [[4, 36_420]]));
+  assert.equal(t.due(at(36_320)), 0);
+});
+
 test("trains realtime doesn't track keep their schedule", async () => {
   const t = new Transit(schedule());
   await t.load(at(36_000));
@@ -88,10 +116,11 @@ test("the fleet: trains where they are, one per trip, and buses counted", async 
   const t = new Transit(schedule());
   await t.load(at(36_000));
   const now = T0 / 1000 + 36_150;
-  const v = (tripId: string, vehicleId: string, lat: number, age: number) => ({ tripId, vehicleId, lat, lon: -111.9, speed: 10, timestamp: now - age });
+  const v = (tripId: string, vehicleId: string, lat: number, age: number) => ({ tripId, routeId: "", vehicleId, lat, lon: -111.9, bearing: 0, speed: 10, timestamp: now - age });
   const fleet = t.fleet({
     timestamp: now,
     trips: [],
+    alerts: [],
     vehicles: [
       // T1 runs as a two-car consist; the fresher car places it.
       v("T1", "car-a", 40.71, 40),
@@ -109,5 +138,10 @@ test("the fleet: trains where they are, one per trip, and buses counted", async 
   assert.deepEqual(fleet.trains, [
     [0, 1, 40.65, -111.9, 10],
     [1, 0, 40.71235, -111.9, 5],
+  ]);
+  // Every bus out, once, where it is.
+  assert.deepEqual(fleet.buses, [
+    [40.6, -111.9],
+    [40.62, -111.9],
   ]);
 });

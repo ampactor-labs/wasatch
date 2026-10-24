@@ -1,0 +1,114 @@
+// How the buses and trains are moving against the usual for the hour: the
+// fleet's speed (the median of the vehicles moving) against what it usually
+// is then, and the trains' lateness. An hour's flow nudges the tempo after
+// it a few BPM: a valley stuck in traffic slows the music, a clear one lifts
+// it.
+//
+// The usual is learned as the conductor runs, for each hour of a weekday, a
+// Saturday and a Sunday; until an hour has been seen three times, its flow
+// is the lateness alone.
+
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+
+const HOUR = 3_600_000;
+/** A vehicle slower than this is stopped (at a stop, a light, a layover). */
+export const MOVING_MS = 0.5;
+/** Too few out (the small hours) says nothing about traffic. */
+const MIN_MOVING = 10;
+const MIN_SAMPLES = 15;
+/** How fast the usual learns. */
+const ALPHA = 0.3;
+
+interface Usual {
+  speed: number;
+  n: number;
+}
+
+const local = new Intl.DateTimeFormat("en-US", { timeZone: "America/Denver", weekday: "short", hour: "numeric", hourCycle: "h23" });
+
+/** Which usual an hour is compared with: "weekday-8", "sat-8", "sun-8". */
+export function bucket(ms: number): string {
+  const parts = Object.fromEntries(local.formatToParts(new Date(ms)).map((p) => [p.type, p.value]));
+  const day = parts.weekday === "Sat" ? "sat" : parts.weekday === "Sun" ? "sun" : "weekday";
+  return `${day}-${Number(parts.hour)}`;
+}
+
+/** The median of the vehicles moving, m/s; null with too few moving. */
+export function movingMedian(speeds: number[]): number | null {
+  const moving = speeds.filter((s) => Number.isFinite(s) && s > MOVING_MS).sort((a, b) => a - b);
+  return moving.length >= MIN_MOVING ? moving[Math.floor(moving.length / 2)]! : null;
+}
+
+const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+
+/** An hour's flow, −1 (crawling) to 1 (quick), from its speed against the
+ * usual (null while there's no usual yet) and the trains' median lateness. */
+export function flowOf(speed: number, usual: number | null, lateS: number): number {
+  const late = clamp(-(lateS - 60) / 240, -1, 0.25);
+  if (usual === null) return late;
+  const pace = clamp((speed / usual - 1) / 0.12, -1, 1);
+  return clamp(0.65 * pace + 0.35 * late, -1, 1);
+}
+
+export class Flow {
+  private hour = -1;
+  private speeds: number[] = [];
+  private lates: number[] = [];
+  private usual: Record<string, Usual> = {};
+  private readonly path: string | null;
+  stats = { hour: null as number | null, speedMs: null as number | null, usualMs: null as number | null, flow: null as number | null };
+
+  constructor(path: string | null) {
+    this.path = path;
+    if (!path || !existsSync(path)) return;
+    try {
+      this.usual = JSON.parse(readFileSync(path, "utf8")) as Record<string, Usual>;
+    } catch {
+      // Unreadable: learn it again.
+    }
+  }
+
+  /** A look at the fleet at `now`: its vehicles' speeds (m/s) and the
+   * trains' median lateness (s). When it's the first of a new hour, the hour
+   * before closes: returns its flow, for the slot starting now. */
+  sample(speeds: number[], lateS: number, now: number): { slot: number; flow: number } | null {
+    const hour = Math.floor(now / HOUR) * HOUR;
+    let closed: { slot: number; flow: number } | null = null;
+    if (hour !== this.hour) {
+      if (this.hour >= 0 && hour - this.hour === HOUR) closed = this.close(hour);
+      this.hour = hour;
+      this.speeds = [];
+      this.lates = [];
+    }
+    const m = movingMedian(speeds);
+    if (m !== null) {
+      this.speeds.push(m);
+      this.lates.push(lateS);
+    }
+    return closed;
+  }
+
+  private close(slot: number): { slot: number; flow: number } | null {
+    if (this.speeds.length < MIN_SAMPLES) return null;
+    const speed = median(this.speeds);
+    const late = median(this.lates);
+    const key = bucket(this.hour);
+    const u = this.usual[key];
+    const flow = Math.round(flowOf(speed, u && u.n >= 3 ? u.speed : null, late) * 100) / 100;
+    this.usual[key] = u ? { speed: u.speed + ALPHA * (speed - u.speed), n: u.n + 1 } : { speed, n: 1 };
+    this.save();
+    this.stats = { hour: this.hour, speedMs: Math.round(speed * 100) / 100, usualMs: u ? Math.round(u.speed * 100) / 100 : null, flow };
+    return { slot, flow };
+  }
+
+  private save(): void {
+    if (!this.path) return;
+    try {
+      writeFileSync(`${this.path}.tmp`, JSON.stringify(this.usual));
+      renameSync(`${this.path}.tmp`, this.path);
+    } catch {
+      // Kept in memory.
+    }
+  }
+}

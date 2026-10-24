@@ -5,27 +5,39 @@
 //
 // It holds the one connection EarthScope allows us to the seismometers,
 // infers TRAX and FrontRunner departures from UTA's realtime (which a
-// browser can't read), watches GREENbike and the quake catalog, and seals
-// all of it into 30-second windows at immutable URLs. It also serves the
-// sky (from KSLC's METARs, complete where the NWS feed has gaps), the slow
-// values, and an uncached clock.
+// browser can't read), watches UTA's service alerts, the planes at SLC,
+// GREENbike and the quake catalog, and seals all of it into 30-second
+// windows at immutable URLs. It also serves the sky (from KSLC's METARs,
+// complete where the NWS feed has gaps, with the hours it froze: the
+// fleet's flow, the snow forecast at Alta), the slow values, the fleet, and
+// an uncached clock.
 //
 //   GET /time            {"t": UTC ms}, never cached
 //   GET /w/<start>.json  a sealed window (start a multiple of 30 000 ms)
 //   GET /sky.json        the sky's hours, by the phones' slot rules
-//   GET /slow.json       the lake, the river, the snow
-//   GET /vehicles.json   every train where it is, and how many trains and buses are out
+//   GET /slots.json      the frozen hours since ?from= (UTC ms), for the archive
+//   GET /slow.json       the lake, the rivers, the snow, the grid
+//   GET /vehicles.json   every train and bus where it is, and how many are out
+//   GET /planes.json     the planes in the air near SLC, for the map
+//   GET /alerts.json     UTA's service alerts in effect
 //   GET /health          what it's doing
 //
 // Environment: PORT (8080), SCHEDULE (where the compiled schedule is served,
-// https://ampactor.dev/wasatch/schedule), DATA_DIR (keep sealed windows on
-// disk across restarts; optional).
+// https://ampactor.dev/wasatch/schedule), DATA_DIR (keep sealed windows and
+// frozen hours on disk across restarts; optional), ADSB_URL (a receiver's
+// aircraft.json, read every 5 s instead of adsb.lol every 4 min; optional),
+// EIA_KEY (the grid, instead of EIA's shared demo key; optional).
 
 import { chownSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { Alerts, type RouteInfo } from "./alerts.ts";
+import { Flow } from "./flow.ts";
 import { decodeFeed } from "./gtfsrt.ts";
-import { Transit } from "./transit.ts";
+import { fetchAltaSnow, fetchGrid, type Grid } from "./outlook.ts";
+import { KSLC, Planes, RADIUS_NM, type Aircraft } from "./planes.ts";
+import { Slots } from "./slots.ts";
+import { Transit, readSchedule } from "./transit.ts";
 import { WINDOW_MS, Windows } from "./windows.ts";
 import { BikeWatch, fetchLake, fetchQuakes, fetchRiver, fetchSkyRaw, fetchSnow, obsFromMetar, skyFrom, type Metar } from "../../web/src/data/feeds.ts";
 import { GroundSource, STATIONS } from "../../web/src/data/ground.ts";
@@ -33,6 +45,8 @@ import { GroundSource, STATIONS } from "../../web/src/data/ground.ts";
 const PORT = Number(process.env.PORT ?? 8080);
 const SCHEDULE = process.env.SCHEDULE ?? "https://ampactor.dev/wasatch/schedule";
 const UTA = "https://apps.rideuta.com/tms/gtfs";
+const ADSB_URL = process.env.ADSB_URL || null;
+const HOUR = 3_600_000;
 const UA = { "User-Agent": "wasatch-symphony conductor (github.com/ampactor-labs/wasatch)" };
 const started = Date.now();
 
@@ -66,15 +80,23 @@ function dropRoot(dir: string | null): void {
   process.setuid?.(uid);
 }
 
-dropRoot(process.env.DATA_DIR ?? null);
-const windows = new Windows(process.env.DATA_DIR ? `${process.env.DATA_DIR}/w` : null);
+const DATA_DIR = process.env.DATA_DIR || null;
+dropRoot(DATA_DIR);
+const windows = new Windows(DATA_DIR ? `${DATA_DIR}/w` : null);
 windows.onDiskError = (err) => log("windows: the disk failed, keeping them in memory:", err instanceof Error ? err.message : err);
 const transit = new Transit(SCHEDULE);
 const bikes = new BikeWatch();
 const ground = new GroundSource("wasatch-symphony:conductor:0:node");
 const seenQuakes = new Set<string>();
+const alerts = new Alerts();
+const planes = new Planes();
+const flow = new Flow(DATA_DIR ? join(DATA_DIR, "usual.json") : null);
+const slots = new Slots(DATA_DIR ? join(DATA_DIR, "slots.json") : null);
+let skyBase: (ReturnType<typeof skyFrom> & { source: string }) | null = null;
 let sky: string | null = null;
+let slowParts: Record<string, unknown> | null = null;
 let slow: string | null = null;
+let grid: Grid | null = null;
 let vehicles: string | null = null;
 let fleetStats: { t: number; trains: number; buses: number } | null = null;
 const errors: Record<string, string> = {};
@@ -91,12 +113,29 @@ const every = (ms: number, name: string, f: () => Promise<void>) => {
   setInterval(run, ms);
 };
 
-// Untracked trains keep their schedule; each window gets theirs as it seals.
+// Untracked trains keep their schedule; each window gets theirs as it seals,
+// and what's in effect then: the service alerts, and when the next
+// FrontRunner is due at Central.
 windows.onSeal = (w) => {
   for (const row of transit.untracked(w.start, w.end)) w.rail.push(row);
+  w.alertsActive = alerts.counts();
+  w.due = transit.due(Date.now());
 };
 
-every(60 * 60_000, "schedule", () => transit.load(Date.now()));
+/** The sky as served: its hours with what's frozen for them. */
+function publishSky(): void {
+  if (!skyBase) return;
+  sky = JSON.stringify({ ...skyBase, value: { ...skyBase.value, hours: slots.apply(skyBase.value.hours) } });
+}
+
+function publishSlow(): void {
+  if (slowParts) slow = JSON.stringify({ ...slowParts, grid: grid && { value: grid, observed: grid.hour, receipt: "live" } });
+}
+
+every(60 * 60_000, "schedule", async () => {
+  await transit.load(Date.now());
+  alerts.setRoutes((await readSchedule<{ routes: RouteInfo[] }>(SCHEDULE, "routes.json")).routes);
+});
 every(10_000, "transit", async () => {
   const res = await fetch(`${UTA}/TripUpdate`, { headers: UA });
   if (!res.ok) throw new Error(`TripUpdate ${res.status}`);
@@ -107,9 +146,34 @@ every(10_000, "transit", async () => {
 every(15_000, "vehicles", async () => {
   const res = await fetch(`${UTA}/Vehicle`, { headers: UA });
   if (!res.ok) throw new Error(`Vehicle ${res.status}`);
-  const fleet = transit.fleet(decodeFeed(new Uint8Array(await res.arrayBuffer())));
+  const feed = decodeFeed(new Uint8Array(await res.arrayBuffer()));
+  const fleet = transit.fleet(feed);
   vehicles = JSON.stringify(fleet);
   fleetStats = { t: fleet.t, ...fleet.counts };
+  // How the fleet is moving: when an hour closes, its flow is frozen for
+  // the next hour's slot.
+  const fresh = feed.vehicles.filter((v) => feed.timestamp - v.timestamp <= 120);
+  const closed = flow.sample(
+    fresh.map((v) => v.speed),
+    transit.stats.medianLateS,
+    Date.now(),
+  );
+  if (closed && slots.freeze(closed.slot, "flow", closed.flow)) publishSky();
+});
+every(60_000, "alerts", async () => {
+  const res = await fetch(`${UTA}/Alert`, { headers: UA });
+  if (!res.ok) throw new Error(`Alert ${res.status}`);
+  const now = Date.now();
+  for (const row of alerts.ingest(decodeFeed(new Uint8Array(await res.arrayBuffer())).alerts, now)) windows.addAlert(row, now);
+});
+// Planes: a receiver of our own if there is one, adsb.lol's open feed if not
+// (about 360 reads a day, inside what it asks of keyless use).
+every(ADSB_URL ? 5_000 : 240_000, "planes", async () => {
+  const url = ADSB_URL ?? `https://api.adsb.lol/v2/point/${KSLC.lat}/${KSLC.lon}/${RADIUS_NM}`;
+  const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(20_000) });
+  if (!res.ok) throw new Error(`planes ${res.status}`);
+  const j = (await res.json()) as { ac?: Aircraft[]; aircraft?: Aircraft[] };
+  planes.ingest(j.ac ?? j.aircraft ?? [], Date.now());
 });
 every(30_000, "bikes", async () => {
   if (!(await bikes.poll())) return;
@@ -136,11 +200,24 @@ every(5 * 60_000, "sky", async () => {
   const metars = res.ok ? ((await res.json()) as Metar[]) : [];
   const raw = await fetchSkyRaw(Date.now() - 34 * 3_600_000);
   if (metars.length >= 12) raw.obs = metars.map(obsFromMetar).sort((a, b) => b.t - a.t);
-  sky = JSON.stringify({ ...skyFrom(raw), source: metars.length >= 12 ? "metar" : "nws" });
+  skyBase = { ...skyFrom(raw), source: metars.length >= 12 ? "metar" : "nws" };
+  publishSky();
+});
+// The snow forecast at Alta, frozen for each hour the first time it's read
+// in it: it colors bars, so every phone must have the same one.
+every(10 * 60_000, "storm", async () => {
+  const now = Date.now();
+  const mm = await fetchAltaSnow(now);
+  if (mm !== null && slots.freeze(Math.floor(now / HOUR) * HOUR, "stormMm", mm)) publishSky();
 });
 every(15 * 60_000, "slow", async () => {
   const [lake, river, snow] = await Promise.all([fetchLake(), fetchRiver(), fetchSnow()]);
-  slow = JSON.stringify({ lake, river, snow });
+  slowParts = { lake, river, snow };
+  publishSlow();
+});
+every(30 * 60_000, "grid", async () => {
+  grid = await fetchGrid();
+  publishSlow();
 });
 ground.connect(Date.now() - 120_000).catch((err) => log("ground:", err));
 setInterval(() => {
@@ -149,6 +226,8 @@ setInterval(() => {
     const meta = { lat: s.lat, lon: s.lon, level: ground.level(band) };
     for (const p of ground.take(band, now)) windows.addGround(band, meta, p.t, p.i, p.q, now);
   });
+  const plane = planes.release(now);
+  if (plane) windows.addPlane(plane, now);
   windows.seal(now);
 }, 1000);
 
@@ -181,6 +260,12 @@ const server = createServer((req, res) => {
   if (url.pathname === "/sky.json") return sky ? send(res, 200, sky, "public, max-age=60") : send(res, 503, '{"error":"warming up"}', "no-store");
   if (url.pathname === "/slow.json") return slow ? send(res, 200, slow, "public, max-age=300") : send(res, 503, '{"error":"warming up"}', "no-store");
   if (url.pathname === "/vehicles.json") return vehicles ? send(res, 200, vehicles, "public, max-age=5") : send(res, 503, '{"error":"warming up"}', "no-store");
+  if (url.pathname === "/planes.json") return send(res, 200, JSON.stringify(planes.snapshot()), "public, max-age=15");
+  if (url.pathname === "/alerts.json") return send(res, 200, JSON.stringify({ counts: alerts.counts(), alerts: alerts.list().slice(0, 60) }), "public, max-age=60");
+  if (url.pathname === "/slots.json") {
+    const from = Number(url.searchParams.get("from") ?? 0);
+    return send(res, 200, JSON.stringify(slots.since(Number.isFinite(from) ? from : 0)), "public, max-age=300");
+  }
   if (url.pathname === "/health") {
     const body = {
       ok: true,
@@ -190,6 +275,11 @@ const server = createServer((req, res) => {
       windows: { sealed: windows.sealedCount, latest: windows.latestSealed(), kept: windows.persistent ? "on disk" : "in memory" },
       transit: transit.stats,
       fleet: fleetStats && { ...fleetStats, age_s: Math.round((Date.now() - fleetStats.t) / 1000) },
+      flow: flow.stats,
+      alerts: alerts.stats,
+      planes: { ...planes.stats, source: ADSB_URL ? "receiver" : "adsb.lol" },
+      grid,
+      keys: { eia: process.env.EIA_KEY ? "set" : "demo key" },
       ground: STATIONS.map((s, b) => ({ station: s.code, level: Number(ground.level(b).toFixed(2)), fresh: ground.freshAt(b, Date.now() - 30_000) })),
       errors,
     };

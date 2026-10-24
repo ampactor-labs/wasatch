@@ -11,7 +11,7 @@
 // keyed by the feed and the services together, so a new feed that reuses a
 // service id never overwrites an archived day.
 //
-// Writes manifest.json, network.json and one day-<key>.json per distinct set
+// Writes manifest.json, network.json, routes.json and one day-<key>.json per distinct set
 // of running services, for every date from yesterday through --days ahead in
 // America/Denver. Earlier dates since the feed took effect that no build
 // kept are rebuilt from it, since it was the published timetable then, and
@@ -668,6 +668,13 @@ async function main() {
     headsigns,
   };
   written.push({ file: "network.json", bytes: writeJson(join(args.out, "network.json"), network) });
+  // Every route, for naming what a service alert is about. An alert names a
+  // route by its GTFS id.
+  const allRoutes = {
+    version: 1,
+    routes: routes.map((r, i) => ({ id: r.id, short: r.short, name: r.name, type: r.type, kind: kindOf.get(i) ?? (r.type === 3 ? "bus" : "other") })),
+  };
+  written.push({ file: "routes.json", bytes: writeJson(join(args.out, "routes.json"), allRoutes) });
 
   const days: Record<string, string> = {};
   const t0s: Record<string, number> = {};

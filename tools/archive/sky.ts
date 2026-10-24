@@ -11,6 +11,11 @@
 // sky (one the schedule's archive rebuilt, or one no build could reach) is
 // sealed from KSLC's METARs in the Iowa Environmental Mesonet's archive
 // and the models' last 92 days.
+//
+// What only the conductor knows of an hour (the fleet's flow, the snow
+// forecast it froze) comes from its /slots.json, exactly as it served them;
+// a day sealed while the conductor can't be reached goes without, and the
+// phones take those from the live sky instead.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,6 +65,21 @@ async function previousFile(src: string, name: string): Promise<string | null> {
   }
 }
 
+/** The conductor's frozen hours since `from`, by hour; empty if it can't be
+ * reached. */
+async function conductorSlots(from: number): Promise<Map<number, Pick<SkyHour, "flow" | "stormMm">>> {
+  try {
+    const config = JSON.parse(readFileSync(join(REPO, "web/public/config.json"), "utf8")) as { conductor?: string | null };
+    if (!config.conductor) return new Map();
+    const res = await fetch(`${config.conductor.replace(/\/$/, "")}/slots.json?from=${from}`, { signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) return new Map();
+    const body = (await res.json()) as Record<string, { flow?: number; stormMm?: number }>;
+    return new Map(Object.entries(body).map(([at, v]) => [Number(at), v]));
+  } catch {
+    return new Map();
+  }
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const flag = (name: string) => {
@@ -100,6 +120,8 @@ async function main(): Promise<void> {
     .then((res) => (res.ok ? (res.json() as Promise<Metar[]>) : []))
     .catch(() => [] as Metar[]);
   console.log(`METARs: ${metars.length}`);
+  const frozen = await conductorSlots(now - (RESEAL_DAYS + 2) * 86_400_000);
+  console.log(`the conductor's frozen hours: ${frozen.size}`);
 
   // Seal the days that have ended and are still inside the observations' week.
   let sealed = 0;
@@ -147,7 +169,7 @@ async function main(): Promise<void> {
   /** Seal a day's sky if most of its hours were observed. */
   function seal(date: string, t0: number, raw: Parameters<typeof skyFrom>[0], from: SkyFile["from"]): boolean {
     const { value } = skyFrom(raw, t0 + AFTER);
-    const hours = dayHours(value.hours, t0);
+    const hours = dayHours(value.hours, t0).map((h) => ({ ...h, ...frozen.get(h.at) }));
     const observed = hours.filter((h) => Number.isFinite(h.cloud)).length;
     if (observed < 20) return false;
     const file = `sky-${date}.json`;

@@ -472,4 +472,6 @@ export interface Fleet {
   trains: [number, number, number, number, number][];
   /** Trips out now, counted by trip (a three-car train is one). */
   counts: { trains: number; buses: number };
+  /** Every bus out, [lat, lon]. */
+  buses?: [number, number][];
 }

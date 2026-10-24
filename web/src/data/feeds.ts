@@ -109,64 +109,108 @@ export function fetchLake(): Promise<Reading<Lake> | null> {
   });
 }
 
-export interface River {
+export interface Gauge {
+  name: string;
   cfs: number;
-  /** Where today's flow sits in the day-of-year percentiles, 0–1. */
+  /** Where its flow sits in the day-of-year percentiles, 0–1. */
   position: number;
+}
+
+export interface River {
+  /** The Jordan's flow. */
+  cfs: number;
+  /** Where the valley's water sits against the usual for the date, 0–1:
+   * the gauges' mean. */
+  position: number;
+  /** Each gauge: the Jordan at 1700 South, and Little Cottonwood Creek
+   * where it meets it (the canyon's runoff, quick to rise in a storm). */
+  gauges?: Gauge[];
+}
+
+/** The rivers the music reads, by USGS site. */
+export const GAUGES = [
+  { site: "10171000", name: "Jordan River" },
+  { site: "10168000", name: "Little Cottonwood Creek" },
+];
+
+/** A flow's place in a day's percentiles (USGS's normals for the date). */
+export function percentile(cfs: number, vals: number[], pcts: number[]): number {
+  if (cfs > (vals.at(-1) ?? Infinity)) return 0.97;
+  let position = pcts[0] ?? 0.05;
+  for (let i = 0; i < vals.length - 1; i++) {
+    const lo = vals[i] ?? 0;
+    const hi = vals[i + 1] ?? lo;
+    if (cfs >= lo && cfs <= hi) {
+      const t = hi > lo ? (cfs - lo) / (hi - lo) : 0;
+      position = (pcts[i] ?? 0) + t * ((pcts[i + 1] ?? 0) - (pcts[i] ?? 0));
+    }
+  }
+  return position;
+}
+
+async function gauge(site: string, name: string): Promise<(Gauge & { t: number }) | null> {
+  const [series, normals] = await Promise.all([
+    json<{ features: UsgsFeature[] }>(`${USGS}/continuous/items?f=json&monitoring_location_id=USGS-${site}&parameter_code=00060&time=PT6H&limit=100`),
+    json<{
+      features: { properties: { data: { values: { time_of_year: string; values: string[]; percentiles: string[] }[] }[] } }[];
+    }>(
+      `https://api.waterdata.usgs.gov/statistics/v0/observationNormals?monitoring_location_id=USGS-${site}&parameter_code=00060&normal_type=DOY&computation_type=percentile`,
+      undefined,
+      20_000,
+    ).catch(() => null),
+  ]);
+  // The reading as of the top of the hour, so every phone composes from
+  // the same value whenever it last fetched.
+  const f = atHourStart(series.features.map((x) => ({ t: Date.parse(x.properties.time), v: Number(x.properties.value) })));
+  if (!f) return null;
+  const doy = new Date().toISOString().slice(5, 10);
+  const row = normals?.features[0]?.properties.data[0]?.values.find((v) => v.time_of_year === doy);
+  const position = row ? percentile(f.v, row.values.map(Number), row.percentiles.map((p) => Number(p) / 100)) : 0.5;
+  return { name, cfs: f.v, position, t: f.t };
 }
 
 export function fetchRiver(): Promise<Reading<River> | null> {
   return cached("river", async () => {
-    const [series, normals] = await Promise.all([
-      json<{ features: UsgsFeature[] }>(
-        `${USGS}/continuous/items?f=json&monitoring_location_id=USGS-10171000&parameter_code=00060&time=PT6H&limit=100`,
-      ),
-      json<{
-        features: { properties: { data: { values: { time_of_year: string; values: string[]; percentiles: string[] }[] }[] } }[];
-      }>(
-        "https://api.waterdata.usgs.gov/statistics/v0/observationNormals?monitoring_location_id=USGS-10171000&parameter_code=00060&normal_type=DOY&computation_type=percentile",
-        undefined,
-        20_000,
-      ).catch(() => null),
-    ]);
-    // The reading as of the top of the hour, so every phone composes from
-    // the same value whenever it last fetched.
-    const f = atHourStart(series.features.map((x) => ({ t: Date.parse(x.properties.time), v: Number(x.properties.value) })));
-    if (!f) throw new Error("no river data");
-    const cfs = f.v;
-    let position = 0.5;
-    const doy = new Date().toISOString().slice(5, 10);
-    const row = normals?.features[0]?.properties.data[0]?.values.find((v) => v.time_of_year === doy);
-    if (row) {
-      const vals = row.values.map(Number);
-      const pcts = row.percentiles.map((p) => Number(p) / 100);
-      position = pcts[0] ?? 0.05;
-      for (let i = 0; i < vals.length - 1; i++) {
-        const lo = vals[i] ?? 0;
-        const hi = vals[i + 1] ?? lo;
-        if (cfs >= lo && cfs <= hi) {
-          const t = hi > lo ? (cfs - lo) / (hi - lo) : 0;
-          position = (pcts[i] ?? 0) + t * ((pcts[i + 1] ?? 0) - (pcts[i] ?? 0));
-        }
-      }
-      if (cfs > (vals.at(-1) ?? Infinity)) position = 0.97;
-    }
-    return { value: { cfs, position }, observed: f.t };
+    const read = await Promise.all(GAUGES.map((g) => gauge(g.site, g.name).catch(() => null)));
+    const gauges = read.filter((g) => g !== null);
+    const jordan = read[0];
+    if (!jordan || !gauges.length) throw new Error("no river data");
+    const position = gauges.reduce((a, g) => a + g.position, 0) / gauges.length;
+    return {
+      value: { cfs: jordan.cfs, position, gauges: gauges.map(({ name, cfs, position }) => ({ name, cfs, position })) },
+      observed: Math.min(...gauges.map((g) => g.t)),
+    };
   });
 }
 
 // --- Snow (NRCS SNOTEL) --------------------------------------------------
 
 export interface Snow {
-  /** Overnight new snow at Snowbird, inches. */
+  /** Overnight new snow, inches: the most at any of the stations. */
   newIn: number;
-  /** Snowpack water against the median for the date (1 = median). */
+  /** Where that fell ("Brighton"). */
+  newAt?: string;
+  /** Snowpack water against the median for the date (1 = median): the
+   * stations' mean. */
   ratio: number;
   /** New-snow lightness, 0 heavy – 1 light powder. */
   powder: number;
   /** Water in the new snow, percent (NaN when there's none). */
   densityPct: number;
+  /** The air at Snowbird's station (9,170 ft), °F; null unknown. */
+  upHighF?: number | null;
+  /** Each station's overnight snow, inches. */
+  stations?: { name: string; newIn: number }[];
 }
+
+/** The SNOTEL stations the music reads: the Cottonwoods and the Park City
+ * side of the crest. Snowbird's comes first (its air is "up high"). */
+export const SNOTEL = [
+  { id: 766, name: "Snowbird", ft: 9170 },
+  { id: 366, name: "Brighton", ft: 8790 },
+  { id: 814, name: "Thaynes Canyon", ft: 9260 },
+  { id: 628, name: "Mill-D North", ft: 8940 },
+];
 
 /** SNOTEL reports in Pacific Standard Time, UTC−8, whatever the station. */
 function awdbTime(s: string): number {
@@ -178,38 +222,66 @@ function awdbDate(ms: number): string {
   return d.toISOString().slice(0, 16).replace("T", " ");
 }
 
+type AwdbSeries = { stationElement: { elementCode: string }; values: { date: string; value: number; median?: number }[] }[];
+type AwdbStation = { stationTriplet: string; data: AwdbSeries };
+
+/** One station's night: new snow, inches, and the water in it, percent. */
+export function overnight(series: AwdbSeries): { newIn: number; densityPct: number; t: number | null; upHighF: number | null } {
+  const el = (code: string) =>
+    (series.find((d) => d.stationElement.elementCode === code)?.values ?? []).filter((v) => Number.isFinite(v.value)).map((v) => ({ t: awdbTime(v.date), v: v.value }));
+  const depth = el("SNWD");
+  const swe = el("WTEQ");
+  const latest = atHourStart(depth);
+  const air = atHourStart(el("TOBS"));
+  // Overnight: from the lowest depth in the 18 hours before the latest
+  // reading to the latest.
+  const window = depth.filter((d) => latest && d.t >= latest.t - 18 * HOUR && d.t <= latest.t);
+  const low = window.reduce((m, d) => (d.v < m.v ? d : m), window[0] ?? { t: 0, v: 0 });
+  const newIn = latest ? Math.max(0, latest.v - low.v) : 0;
+  let densityPct = Number.NaN;
+  if (newIn >= 2 && swe.length) {
+    const sweAt = (t: number) => swe.reduce((best, s) => (Math.abs(s.t - t) < Math.abs(best.t - t) ? s : best), swe[0]!).v;
+    const dSwe = latest ? sweAt(latest.t) - sweAt(low.t) : 0;
+    if (dSwe > 0) densityPct = (100 * dSwe) / newIn;
+  }
+  return { newIn, densityPct, t: latest?.t ?? null, upHighF: air?.v ?? null };
+}
+
 export function fetchSnow(): Promise<Reading<Snow> | null> {
   return cached("snow", async () => {
     const now = Date.now();
-    const base = "https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/data?stationTriplets=766:UT:SNTL";
-    type Series = { stationElement: { elementCode: string }; values: { date: string; value: number; median?: number }[] }[];
+    const base = `https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/data?stationTriplets=${SNOTEL.map((s) => `${s.id}:UT:SNTL`).join(",")}`;
     const [hourly, daily] = await Promise.all([
-      json<{ data: Series }[]>(
-        `${base}&elements=WTEQ,SNWD&duration=HOURLY&beginDate=${encodeURIComponent(awdbDate(now - 30 * HOUR))}&endDate=${encodeURIComponent(awdbDate(now))}`,
+      json<AwdbStation[]>(
+        `${base}&elements=WTEQ,SNWD,TOBS&duration=HOURLY&beginDate=${encodeURIComponent(awdbDate(now - 30 * HOUR))}&endDate=${encodeURIComponent(awdbDate(now))}`,
       ),
-      json<{ data: Series }[]>(
+      json<AwdbStation[]>(
         `${base}&elements=WTEQ&duration=DAILY&beginDate=${awdbDate(now - 3 * 86_400_000).slice(0, 10)}&endDate=${awdbDate(now).slice(0, 10)}&centralTendencyType=MEDIAN`,
       ).catch(() => null),
     ]);
-    const el = (code: string) => hourly[0]?.data.find((d) => d.stationElement.elementCode === code)?.values ?? [];
-    const depth = el("SNWD").filter((v) => Number.isFinite(v.value)).map((v) => ({ t: awdbTime(v.date), v: v.value }));
-    const swe = el("WTEQ").filter((v) => Number.isFinite(v.value)).map((v) => ({ t: awdbTime(v.date), v: v.value }));
-    const latest = atHourStart(depth);
-    // Overnight: from the lowest depth in the 18 hours before the latest
-    // reading to the latest.
-    const window = depth.filter((d) => latest && d.t >= latest.t - 18 * HOUR && d.t <= latest.t);
-    const low = window.reduce((m, d) => (d.v < m.v ? d : m), window[0] ?? { t: 0, v: 0 });
-    const newIn = latest ? Math.max(0, latest.v - low.v) : 0;
-    let densityPct = Number.NaN;
-    if (newIn >= 2) {
-      const sweAt = (t: number) => swe.reduce((best, s) => (Math.abs(s.t - t) < Math.abs(best.t - t) ? s : best), swe[0] ?? { t, v: 0 }).v;
-      const dSwe = latest ? sweAt(latest.t) - sweAt(low.t) : 0;
-      if (dSwe > 0) densityPct = (100 * dSwe) / newIn;
-    }
-    const powder = Number.isFinite(densityPct) ? Math.min(1, Math.max(0, (12 - densityPct) / 8)) : 0.5;
-    const today = daily?.[0]?.data[0]?.values.at(-1);
-    const ratio = today && today.median && today.median > 0.5 ? today.value / today.median : 1;
-    return { value: { newIn, ratio, powder, densityPct }, observed: latest?.t ?? now };
+    const nights = SNOTEL.map((s) => ({ ...s, ...overnight(hourly.find((h) => h.stationTriplet.startsWith(`${s.id}:`))?.data ?? []) }));
+    const read = nights.filter((n) => n.t !== null);
+    if (!read.length) throw new Error("no snow data");
+    const most = read.reduce((a, b) => (b.newIn > a.newIn ? b : a));
+    const powder = Number.isFinite(most.densityPct) ? Math.min(1, Math.max(0, (12 - most.densityPct) / 8)) : 0.5;
+    // The snowpack against the median, where there's enough of either to say.
+    const ratios = SNOTEL.flatMap((s) => {
+      const today = daily?.find((d) => d.stationTriplet.startsWith(`${s.id}:`))?.data[0]?.values.at(-1);
+      return today && today.median && today.median > 0.5 ? [today.value / today.median] : [];
+    });
+    const ratio = ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 1;
+    return {
+      value: {
+        newIn: most.newIn,
+        newAt: most.newIn > 0 ? most.name : undefined,
+        ratio,
+        powder,
+        densityPct: most.densityPct,
+        upHighF: nights[0]?.upHighF ?? null,
+        stations: read.map((n) => ({ name: n.name, newIn: n.newIn })),
+      },
+      observed: Math.max(...read.map((n) => n.t!)),
+    };
   });
 }
 
@@ -226,6 +298,8 @@ interface NwsObs {
     windSpeed: { value: number | null };
     windGust: { value: number | null };
     precipitationLastHour?: { value: number | null };
+    barometricPressure?: { value: number | null };
+    rawMessage?: string;
     textDescription: string;
   };
 }
@@ -245,6 +319,10 @@ export interface SkyNow {
   ridgeGustMs: number;
   /** Mountain snowfall this hour, cm (model). */
   mtnSnowCm: number;
+  /** The pressure in the latest report, hPa (NaN unknown). */
+  pressureHpa?: number;
+  /** Its change over the three hours to the latest slot, hPa (NaN unknown). */
+  pressureTend?: number;
   alerts: string[];
   hours: SkyHour[];
 }
@@ -286,7 +364,17 @@ export interface Obs {
   gustMs: number | null;
   /** Measured precipitation in the last hour, mm. */
   precipMm: number | null;
+  /** The altimeter setting, hPa (from the report's A group, so the live
+   * sky and the archive's agree to the tenth). */
+  pressureHpa: number | null;
   text: string;
+}
+
+/** The altimeter setting in a METAR ("A3012" inches of mercury), hPa to
+ * the tenth. */
+export function altimeterHpa(raw: string | undefined): number | null {
+  const m = /\bA(\d{4})\b/.exec(raw ?? "");
+  return m ? Math.round(Number(m[1]) * 0.338639 * 10) / 10 : null;
 }
 
 function intensity(s: string): number {
@@ -315,6 +403,8 @@ export function obsFromNws(f: NwsObs): Obs {
     windMs: wind,
     gustMs: p.windGust.value !== null ? p.windGust.value / 3.6 : wind,
     precipMm: p.precipitationLastHour?.value ?? null,
+    pressureHpa:
+      altimeterHpa(p.rawMessage) ?? (p.barometricPressure?.value ? Math.round(p.barometricPressure.value / 10) / 10 : null),
     text: p.textDescription,
   };
 }
@@ -351,6 +441,7 @@ export function obsFromMetar(m: Metar): Obs {
     windMs: m.wspd !== null ? m.wspd * kt : null,
     gustMs: m.wgst !== null ? m.wgst * kt : m.wspd !== null ? m.wspd * kt : null,
     precipMm: m.precip !== null ? m.precip * 25.4 : null,
+    pressureHpa: altimeterHpa(m.rawOb),
     text: m.rawOb,
   };
 }
@@ -444,6 +535,7 @@ export function skyFrom(raw: SkyRaw, now = Date.now()): { value: SkyNow; observe
 
   // What steers the plan: observations, one per slot.
   const chosen = new Map<number, number>();
+  const pressure = new Map<number, number>();
   for (const o of raw.obs) {
     const slot = obsSlot(o.t);
     const routine = slot === null ? 0 : slot - 6 * 60_000;
@@ -457,6 +549,14 @@ export function skyFrom(raw: SkyRaw, now = Date.now()): { value: SkyNow; observe
     if (o.tempC !== null) r.tempC = o.tempC;
     r.windMs = o.windMs ?? 3;
     r.gustMs = o.gustMs ?? r.windMs;
+    if (o.pressureHpa !== null) pressure.set(slot, o.pressureHpa);
+    else pressure.delete(slot);
+  }
+  // Falling pressure is a storm on its way: the change over three hours,
+  // slot to slot, where both were reported.
+  for (const [slot, p] of pressure) {
+    const before = pressure.get(slot - 3 * HOUR);
+    if (before !== undefined) get(slot).pressureTend = Math.round((p - before) * 10) / 10;
   }
   // Issued alerts count from the hour after they're sent, for the same reason.
   const active: string[] = [];
@@ -499,6 +599,8 @@ export function skyFrom(raw: SkyRaw, now = Date.now()): { value: SkyNow; observe
       inversionC: nowHour?.inversionC ?? 0,
       ridgeGustMs: nowHour?.ridgeGustMs ?? Number.NaN,
       mtnSnowCm: nowHour?.mtnSnowCm ?? 0,
+      pressureHpa: raw.obs[0]?.pressureHpa ?? Number.NaN,
+      pressureTend: [...hours].reverse().find((h) => h.pressureTend !== undefined)?.pressureTend ?? Number.NaN,
       alerts: active,
       hours,
     },

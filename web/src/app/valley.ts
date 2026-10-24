@@ -18,7 +18,7 @@ import {
   type Snow,
 } from "../data/feeds.ts";
 import type { Host } from "../engine/host.ts";
-import { Kind, encodeBikes, encodeDay, encodeNetwork, encodeQuakes, encodeSky, encodeSkyline, encodeSlow, type Fleet } from "../engine/protocol.ts";
+import { Kind, encodeBikes, encodeDay, encodeNetwork, encodeQuakes, encodeSky, encodeSkyline, encodeSlow, type Fleet, type SkyHour } from "../engine/protocol.ts";
 import { utcNow } from "../engine/clock.ts";
 import { STATIONS } from "../data/ground.ts";
 import { CREST_ELEV_FT } from "../art/crest-data.ts";
@@ -60,19 +60,65 @@ export interface GroundState {
   observed: number;
 }
 
+/** The grid's demand, as the conductor reads it from EIA. */
+export interface Grid {
+  mw: number;
+  usual: number;
+  energy: number;
+  hour: number;
+}
+
+/** A plane a window carried: [ms, lat, lon, 0 departing / 1 landing, size,
+ * ft, an airline's 0/1, its name]. */
+export type PlaneRow = [number, number, number, number, number, number, number, string];
+/** A plane on the map: [lat, lon, track, kt, ft, ft/min, name or null]. */
+export type PlaneDot = [number, number, number, number, number, number, string | null];
+/** A new service alert a window carried: [ms, kind, severe, routes, headline]. */
+export type AlertRow = [number, number, number, string, string];
+
+export interface ServiceAlerts {
+  /** Headlines in effect: buses, TRAX and the S-Line, FrontRunner, ski buses. */
+  counts: [number, number, number, number];
+  alerts: { kind: number; routes: string; header: string }[];
+}
+
+/** The fields only the conductor knows of an hour: a sealed hour without
+ * them takes them from the live sky (they're frozen there, never revised). */
+const CONDUCTOR_FIELDS = ["flow", "pressureTend", "stormMm"] as const;
+
+export function withConductorFields(sealed: SkyHour, live: SkyHour | undefined): SkyHour {
+  if (!live) return sealed;
+  const out = { ...sealed };
+  for (const k of CONDUCTOR_FIELDS) {
+    const v = live[k];
+    if (!Number.isFinite(out[k] ?? Number.NaN) && v !== undefined && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
 export class Valley {
   lake: Reading<Lake> | null = null;
   river: Reading<River> | null = null;
   snow: Reading<Snow> | null = null;
   sky: Reading<SkyNow> | null = null;
   quakes: Reading<Quake[]> | null = null;
+  grid: Reading<Grid> | null = null;
+  /** Planes and new alerts the windows carried lately, for the captions. */
+  planeRows: PlaneRow[] = [];
+  alertRows: AlertRow[] = [];
+  /** The planes in the air near SLC, for the map. */
+  planesNow: { t: number; planes: PlaneDot[] } | null = null;
+  /** UTA's service alerts in effect. */
+  serviceAlerts: ServiceAlerts | null = null;
+  /** When the next FrontRunner was due at Central, as the latest window had it. */
+  frontRunnerDue = 0;
   readonly bikes = new BikeWatch();
   private bikesReady = false;
   ground: GroundState | null = null;
   private timers: number[] = [];
   private postedDays = new Set<string>();
   /** Hours a sealed day covers: the live fetch never overrides them. */
-  private sealed = new Set<number>();
+  private sealed = new Map<number, SkyHour>();
   private listeners: (() => void)[] = [];
   /** Rewind offset, ms: the valley is read as of now + shift. */
   shift = 0;
@@ -154,16 +200,56 @@ export class Valley {
 
   conductorSky(sky: Reading<SkyNow>): void {
     this.sky = sky;
-    this.host.post(Kind.SKY, encodeSky(sky.value.hours.filter((h) => !this.sealed.has(h.at))));
+    this.postSky(sky.value.hours);
     this.changed();
   }
 
-  conductorSlow(lake: Reading<Lake> | null, river: Reading<River> | null, snow: Reading<Snow> | null): void {
+  /** The live sky's hours to the engine: the ones no sealed day covers, and
+   * the sealed ones the conductor knows more of. */
+  private postSky(live: SkyHour[]): void {
+    const hours: SkyHour[] = [];
+    for (const h of live) {
+      const sealed = this.sealed.get(h.at);
+      if (!sealed) hours.push(h);
+      else {
+        const merged = withConductorFields(sealed, h);
+        if (CONDUCTOR_FIELDS.some((k) => !Object.is(merged[k], sealed[k]))) hours.push(merged);
+      }
+    }
+    this.host.post(Kind.SKY, encodeSky(hours));
+  }
+
+  conductorSlow(lake: Reading<Lake> | null, river: Reading<River> | null, snow: Reading<Snow> | null, grid: Reading<Grid> | null = null): void {
     if (lake) this.lake = lake;
     if (river) this.river = river;
     if (snow) this.snow = snow;
+    if (grid) this.grid = grid;
     this.postSlow();
     this.changed();
+  }
+
+  /** A window's planes and new alerts, kept an hour for the captions. */
+  conductorEvents(planes: PlaneRow[], alerts: AlertRow[], due: number): void {
+    const cutoff = this.now() - 60 * MIN;
+    const keep = <T extends [number, ...unknown[]]>(old: T[], add: T[]) =>
+      [...old.filter((r) => r[0] >= cutoff && !add.some((a) => a[0] === r[0])), ...add].sort((a, b) => a[0] - b[0]);
+    this.planeRows = keep(this.planeRows, planes);
+    this.alertRows = keep(this.alertRows, alerts);
+    if (due) this.frontRunnerDue = due;
+  }
+
+  conductorPlanes(snapshot: { t: number; planes: PlaneDot[] }): void {
+    this.planesNow = snapshot;
+  }
+
+  conductorAlerts(alerts: ServiceAlerts): void {
+    this.serviceAlerts = alerts;
+  }
+
+  /** The planes on the map, if they're fresh and the listener is in the present. */
+  livePlanes(): { t: number; planes: PlaneDot[] } | null {
+    const p = this.planesNow;
+    return p && !this.shift && utcNow() - p.t < 6 * MIN ? p : null;
   }
 
   /** Bike changes from a window: the last ten minutes go to the engine. */
@@ -199,11 +285,13 @@ export class Valley {
       if (!d || this.postedDays.has(date)) continue;
       this.host.post(Kind.DAY, encodeDay(date, d.t0, d.day));
       this.postedDays.add(date);
-      // A sealed sky is the same for everyone, so it outranks the live one.
+      // A sealed sky is the same for everyone, so it outranks the live one
+      // (but for what only the conductor knows, if the seal lacks it).
       const hours = await this.schedule.sealedSky(date);
       if (hours?.length) {
-        for (const h of hours) this.sealed.add(h.at);
-        this.host.post(Kind.SKY, encodeSky(hours));
+        const live = new Map((this.sky?.value.hours ?? []).map((h) => [h.at, h]));
+        for (const h of hours) this.sealed.set(h.at, h);
+        this.host.post(Kind.SKY, encodeSky(hours.map((h) => withConductorFields(h, live.get(h.at)))));
       }
     }
   }
@@ -223,7 +311,7 @@ export class Valley {
     const sky = await fetchSky(this.skyFrom());
     if (!sky) return;
     this.sky = sky;
-    this.host.post(Kind.SKY, encodeSky(sky.value.hours.filter((h) => !this.sealed.has(h.at))));
+    this.postSky(sky.value.hours);
     this.changed();
   }
 
@@ -248,6 +336,7 @@ export class Valley {
         powder: this.snow?.value.powder ?? 0.5,
         season: season(this.now()),
         ground: this.ground?.levels ?? [0, 0, 0, 0],
+        energy: this.grid?.value.energy ?? 0,
       }),
     );
   }

@@ -5,6 +5,8 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AlertCounts, AlertRow } from "./alerts.ts";
+import type { PlaneRow } from "./planes.ts";
 
 export const WINDOW_MS = 30_000;
 /** A window opens at `start` and is sealed at `start + SEAL_MS`. */
@@ -38,6 +40,15 @@ export interface WindowBody {
   bikes: BikeRow[];
   quakes: QuakeRow[];
   ground: GroundBand[];
+  /** Planes taking off and landing. */
+  planes: PlaneRow[];
+  /** New service alerts. */
+  alerts: AlertRow[];
+  /** The service alerts in effect as it sealed, by kind. */
+  alertsActive: AlertCounts;
+  /** When the next FrontRunner was due to leave Salt Lake Central as it
+   * sealed, UTC ms (0 none). */
+  due: number;
 }
 
 interface Open {
@@ -109,7 +120,7 @@ export class Windows {
     let w = this.open.get(start);
     if (!w) {
       w = {
-        body: { v: 1, start, end: start + WINDOW_MS, rail: [], bikes: [], quakes: [], ground: [] },
+        body: { v: 1, start, end: start + WINDOW_MS, rail: [], bikes: [], quakes: [], ground: [], planes: [], alerts: [], alertsActive: [0, 0, 0, 0], due: 0 },
         ground: new Map(),
         groundMeta: new Map(),
       };
@@ -140,6 +151,16 @@ export class Windows {
   addQuake(row: QuakeRow, now: number): void {
     const w = this.home(row[0], now);
     w.body.quakes.push([Math.max(row[0], w.body.start), ...row.slice(1)] as QuakeRow);
+  }
+
+  addPlane(row: PlaneRow, now: number): void {
+    const w = this.home(row[0], now);
+    w.body.planes.push([Math.max(row[0], w.body.start), ...row.slice(1)] as PlaneRow);
+  }
+
+  addAlert(row: AlertRow, now: number): void {
+    const w = this.home(row[0], now);
+    w.body.alerts.push([Math.max(row[0], w.body.start), ...row.slice(1)] as AlertRow);
   }
 
   addGround(band: number, meta: { lat: number; lon: number; level: number }, t: number, i: number, q: number, now: number): void {
@@ -176,6 +197,8 @@ export class Windows {
       w.body.rail.sort((a, b) => a[0] - b[0]);
       w.body.bikes.sort((a, b) => a[0] - b[0]);
       w.body.quakes.sort((a, b) => a[0] - b[0]);
+      w.body.planes.sort((a, b) => a[0] - b[0]);
+      w.body.alerts.sort((a, b) => a[0] - b[0]);
       const text = JSON.stringify(w.body);
       this.sealed.set(start, text);
       this.open.delete(start);

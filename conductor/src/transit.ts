@@ -8,7 +8,7 @@
 
 import type { Feed } from "./gtfsrt.ts";
 import type { RailRow } from "./windows.ts";
-import type { Fleet } from "../../web/src/engine/protocol.ts";
+import { centralIndex, type Fleet, type NetworkFile } from "../../web/src/engine/protocol.ts";
 
 interface DayFile {
   rail: { r: number; d: number; s: number[]; t: number[] }[];
@@ -47,12 +47,25 @@ type FleetTrain = Fleet["trains"][number];
 const FLEET_FRESH_S = 120;
 
 const round5 = (x: number) => Math.round(x * 1e5) / 1e5;
+const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
 
 /** A prediction more than this far in the past is stale. */
 const CURRENT_MS = 60_000;
 
 /** How long after a trip was last in the feed it still counts as tracked. */
 const TRACKED_MS = 15 * 60_000;
+
+/** Read a file of the compiled schedule, from a URL or a directory. */
+export async function readSchedule<T>(base: string, name: string): Promise<T> {
+  const root = base.replace(/\/$/, "");
+  if (/^https?:/.test(root)) {
+    const res = await fetch(`${root}/${name}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`${res.status} ${name}`);
+    return (await res.json()) as T;
+  }
+  const { readFileSync } = await import("node:fs");
+  return JSON.parse(readFileSync(`${root}/${name}`, "utf8")) as T;
+}
 
 export class Transit {
   private readonly base: string;
@@ -66,20 +79,18 @@ export class Transit {
   private settled: RailRow[] = [];
   stats = { trips: 0, tracked: 0, settled: 0, medianLateS: 0 };
   private recentLate: number[] = [];
+  /** FrontRunner's route index and Salt Lake Central's stop index, from
+   * the network (−1 until it's read). */
+  private frontRunner = -1;
+  private central = -1;
 
   /** `base`: where the compiled schedule lives (a URL or a directory). */
   constructor(base: string) {
     this.base = base.replace(/\/$/, "");
   }
 
-  private async read<T>(name: string): Promise<T> {
-    if (/^https?:/.test(this.base)) {
-      const res = await fetch(`${this.base}/${name}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`${res.status} ${name}`);
-      return (await res.json()) as T;
-    }
-    const { readFileSync } = await import("node:fs");
-    return JSON.parse(readFileSync(`${this.base}/${name}`, "utf8")) as T;
+  private read<T>(name: string): Promise<T> {
+    return readSchedule<T>(this.base, name);
   }
 
   /** Load the service days around `now` (again when the date turns). */
@@ -90,6 +101,9 @@ export class Transit {
       .map(([d]) => d);
     const tag = dates.join(",");
     if (tag === this.loadedFor) return;
+    const network = await this.read<NetworkFile>("network.json");
+    this.frontRunner = network.routes.findIndex((r) => r.kind === "frontrunner");
+    this.central = centralIndex(network);
     const trips = new Map<string, TripRef>();
     for (const date of dates) {
       const key = manifest.days[date];
@@ -195,27 +209,43 @@ export class Transit {
     return this.settled.splice(0);
   }
 
+  /** When the next FrontRunner is predicted to leave Salt Lake Central
+   * after `now` (its horn is that departure), UTC ms; 0 if none is. */
+  due(now: number): number {
+    let best = 0;
+    for (const p of this.pending.values()) {
+      if (!p.fresh || p.pred <= now || p.ref.trip.r !== this.frontRunner || p.ref.trip.s[p.k] !== this.central) continue;
+      if (!best || p.pred < best) best = p.pred;
+    }
+    return best;
+  }
+
   /** The live fleet from a vehicle-position feed: every train where it is
    * (one per trip, however many cars report), and how many trains and
    * buses are out. A position over two minutes old is left out. */
   fleet(feed: Feed): Fleet {
     const feedMs = feed.timestamp * 1000;
     const trains = new Map<string, FleetTrain>();
-    const buses = new Set<string>();
+    const buses = new Map<string, [number, number]>();
     for (const v of feed.vehicles) {
       if (!v.tripId || !Number.isFinite(v.lat) || !Number.isFinite(v.lon) || v.lat === 0) continue;
       const age = Math.max(0, feed.timestamp - v.timestamp);
       if (age > FLEET_FRESH_S) continue;
       const ref = this.refFor(v.tripId, feedMs);
       if (!ref) {
-        buses.add(v.tripId);
+        buses.set(v.tripId, [round4(v.lat), round4(v.lon)]);
         continue;
       }
       // The freshest car of a consist stands for the train.
       const seen = trains.get(v.tripId);
       if (!seen || age < seen[4]) trains.set(v.tripId, [ref.trip.r, ref.trip.d ?? 0, round5(v.lat), round5(v.lon), age]);
     }
-    return { t: feedMs, trains: [...trains.values()].sort((a, b) => a[0] - b[0] || a[2] - b[2]), counts: { trains: trains.size, buses: buses.size } };
+    return {
+      t: feedMs,
+      trains: [...trains.values()].sort((a, b) => a[0] - b[0] || a[2] - b[2]),
+      counts: { trains: trains.size, buses: buses.size },
+      buses: [...buses.values()].sort((a, b) => a[0] - b[0] || a[1] - b[1]),
+    };
   }
 
   /** The schedule's departures from `from` to `to` for trains realtime
