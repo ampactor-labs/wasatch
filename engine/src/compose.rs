@@ -252,6 +252,48 @@ pub struct QuakeEvent {
     pub lon: f32,
 }
 
+/// A plane taking off from or coming in to land at SLC.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PlaneEvent {
+    /// When it sounds, listening-time UTC ms.
+    pub ms: f64,
+    /// Where it was.
+    pub lat: f32,
+    /// Where it was.
+    pub lon: f32,
+    /// Altitude, ft above sea level.
+    pub alt_ft: f32,
+    /// Coming in to land (or else departing).
+    pub arrival: bool,
+    /// Size, 1 (light) to 5 (heavy).
+    pub size: u8,
+    /// An airline's flight: private aircraft go unnamed.
+    pub airline: bool,
+}
+
+/// A new UTA service alert.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AlertEvent {
+    /// When it sounds, listening-time UTC ms.
+    pub ms: f64,
+    /// What it's about: 0 buses, 1 TRAX or the S-Line, 2 FrontRunner, 3 a
+    /// ski bus.
+    pub route_kind: u8,
+    /// A suspension or closure, more than a detour.
+    pub severe: bool,
+}
+
+/// The service alerts in effect when a conductor's window was sealed.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AlertWindow {
+    /// The window's start, listening-time UTC ms.
+    pub from_ms: f64,
+    /// Its end.
+    pub to_ms: f64,
+    /// How many: buses, TRAX and the S-Line, FrontRunner, ski buses.
+    pub active: [u8; 4],
+}
+
 /// Slow values: the valley state that changes over hours.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Slow {
@@ -271,6 +313,9 @@ pub struct Slow {
     pub season: f32,
     /// The ground's four band levels, 0–1.
     pub ground: [f32; 4],
+    /// Electricity demand on PacifiCorp East's grid against the usual for
+    /// the hour; 0 unknown.
+    pub energy: f32,
 }
 
 impl Default for Slow {
@@ -284,6 +329,18 @@ impl Default for Slow {
             powder: 0.5,
             season: 0.0,
             ground: [0.0; 4],
+            energy: 0.0,
+        }
+    }
+}
+
+impl Slow {
+    /// The grid's demand against the usual for the hour, 1 unknown.
+    pub fn energy_or_usual(&self) -> f32 {
+        if self.energy.is_finite() && self.energy > 0.0 {
+            self.energy.clamp(0.5, 1.5)
+        } else {
+            1.0
         }
     }
 }
@@ -302,6 +359,55 @@ pub struct Valley<'a> {
     pub bikes: &'a [BikeEvent],
     /// Quakes, by time.
     pub quakes: &'a [QuakeEvent],
+    /// Planes taking off and landing, by time.
+    pub planes: &'a [PlaneEvent],
+    /// New service alerts, by time.
+    pub alerts: &'a [AlertEvent],
+    /// The service alerts in effect, window by window.
+    pub alert_windows: &'a [AlertWindow],
+}
+
+impl<'a> Valley<'a> {
+    /// A valley with no events in it: the schedule and the weather alone.
+    pub fn quiet(
+        schedule: &'a Schedule,
+        network: &'a Network,
+        sky: &'a Sky,
+        slow: &'a Slow,
+    ) -> Self {
+        Valley {
+            schedule,
+            network,
+            sky,
+            slow,
+            bikes: &[],
+            quakes: &[],
+            planes: &[],
+            alerts: &[],
+            alert_windows: &[],
+        }
+    }
+
+    /// The service alerts in effect at `ms`, from the window covering it.
+    pub fn alerts_in_effect(&self, ms: f64) -> [u8; 4] {
+        let i = self.alert_windows.partition_point(|w| w.from_ms <= ms);
+        match i.checked_sub(1).map(|i| self.alert_windows[i]) {
+            Some(w) if ms < w.to_ms => w.active,
+            _ => [0; 4],
+        }
+    }
+}
+
+/// A fill's crash, owed to the next downbeat.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Fill {
+    /// None owed.
+    #[default]
+    None,
+    /// The kit's fill: a crash with the kit.
+    Kit,
+    /// A soft one: a quiet crash even when the kit is out.
+    Soft,
 }
 
 /// The composer's carried state: the pad's last voicing and a few flags.
@@ -314,8 +420,11 @@ pub struct ComposeState {
     pub(crate) phrase_trains: u8,
     /// A bike captioned this phrase.
     pub(crate) phrase_bike: bool,
-    pub(crate) fill_pending: bool,
-    pub(crate) last_quake_ms: f64,
+    /// The crash a fill owes the next downbeat: carried across a section's
+    /// end, which is where most fills fall.
+    pub(crate) fill: Fill,
+    /// A plane captioned this phrase.
+    pub(crate) phrase_plane: bool,
 }
 
 /// One composed bar.
@@ -512,8 +621,14 @@ pub fn compose(
     let mix = out.mix;
 
     if bar == 0 {
+        // A new section starts clean, but for the crash the last one's fill
+        // owes it (none at a day's first section: nothing came before).
         *state = ComposeState {
-            last_quake_ms: state.last_quake_ms,
+            fill: if sec.index == 0 {
+                Fill::None
+            } else {
+                state.fill
+            },
             ..ComposeState::default()
         };
     }
@@ -521,6 +636,7 @@ pub fn compose(
         state.phrase_featured = false;
         state.phrase_trains = 0;
         state.phrase_bike = false;
+        state.phrase_plane = false;
     }
 
     // A section's first bar is a boundary: caption the harmony's move.
@@ -683,11 +799,7 @@ pub fn compose(
             }
         }
         // A fill into the next phrase when a section ends or a storm warning
-        // is up; a crash on the downbeat after it.
-        if state.fill_pending && bip == 0 {
-            out.notes.push(note(start, Inst::Crash, 49, 0.42, 2400.0));
-            state.fill_pending = false;
-        }
+        // is up; its crash lands on the next downbeat (below).
         let storm = valley.sky.at_or_default(start).alert > 0.3;
         if bip == 7 && (bar + 1 == sec.bars() || storm) && full {
             for (i, s) in [12u32, 13, 14, 15].iter().enumerate() {
@@ -699,8 +811,21 @@ pub fn compose(
                     260.0,
                 ));
             }
-            state.fill_pending = true;
+            state.fill = Fill::Kit;
         }
+    }
+    // The crash a fill owed this downbeat: with the kit if it's playing, a
+    // soft one if the section that follows has no drums.
+    if bip == 0 {
+        match state.fill {
+            Fill::None => {}
+            Fill::Kit if kit_on => out.notes.push(note(start, Inst::Crash, 49, 0.42, 2400.0)),
+            Fill::Kit | Fill::Soft => out.notes.push(Note {
+                variant: 3,
+                ..note(start, Inst::Crash, 49, 0.28, 2400.0)
+            }),
+        }
+        state.fill = Fill::None;
     }
 
     // When the trains run late, the kit lays back with them: 1 ms behind the
@@ -944,12 +1069,19 @@ pub fn compose(
         }
     }
 
-    // Quakes: a chord bell, at most one per 30 s.
+    // Quakes: a chord bell for the first quake in each half minute, so a
+    // swarm rings twice a minute at most. It needs no memory of earlier
+    // bars, so every phone (and one that just joined) agrees.
     let lo = valley.quakes.partition_point(|q| q.ms < start);
-    if let Some(q) = valley.quakes[lo..].iter().find(|q| q.ms < start + bar_ms)
-        && q.ms - state.last_quake_ms > 30_000.0
+    if let Some(q) = valley.quakes[lo..]
+        .iter()
+        .take_while(|q| q.ms < start + bar_ms)
+        .find(|q| {
+            let half = (q.ms / 30_000.0).floor() * 30_000.0;
+            let first = valley.quakes.partition_point(|x| x.ms < half);
+            valley.quakes.get(first).is_some_and(|x| x.ms == q.ms)
+        })
     {
-        state.last_quake_ms = q.ms;
         let step = (((q.ms - start) / step_ms).round() as u32).min(15);
         let at = start + f64::from(step) * step_ms;
         out.features.push(Feature {
@@ -1246,14 +1378,7 @@ mod tests {
         let sky = Sky::default();
         let chain = plan_chain(20261023, t0, t0 + 29.0 * 3_600_000.0, &schedule, &sky);
         let slow = Slow::default();
-        let valley = Valley {
-            schedule: &schedule,
-            network: &network,
-            sky: &sky,
-            slow: &slow,
-            bikes: &[],
-            quakes: &[],
-        };
+        let valley = Valley::quiet(&schedule, &network, &sky, &slow);
         let mut bar = Bar::default();
         let mut bells = 0;
         let mut horns = 0;
@@ -1325,14 +1450,7 @@ mod tests {
         let sky = Sky::default();
         let chain = plan_chain(20261023, t0, t0 + 29.0 * 3_600_000.0, &schedule, &sky);
         let slow = Slow::default();
-        let valley = Valley {
-            schedule: &schedule,
-            network: &network,
-            sky: &sky,
-            slow: &slow,
-            bikes: &[],
-            quakes: &[],
-        };
+        let valley = Valley::quiet(&schedule, &network, &sky, &slow);
         let mut bar = Bar::default();
         let mut kinds = std::collections::BTreeSet::new();
         let mut phrases = 0;
@@ -1377,6 +1495,143 @@ mod tests {
         assert!(kinds.len() >= 5, "{kinds:?}");
     }
 
+    /// The fixture's chain and a quiet valley over it.
+    fn fixture_chain(schedule: &Schedule) -> crate::plan::Chain {
+        let t0 = schedule.days[0].t0_ms;
+        plan_chain(
+            20261023,
+            t0,
+            t0 + 29.0 * 3_600_000.0,
+            schedule,
+            &Sky::default(),
+        )
+    }
+
+    #[test]
+    fn a_fill_that_ends_a_section_crashes_on_the_next_downbeat() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let valley = Valley::quiet(&schedule, &network, &sky, &slow);
+        let mut bar = Bar::default();
+        let (mut with_kit, mut soft) = (0, 0);
+        for pair in chain.sections.windows(2).take(150) {
+            let (a, b) = (&pair[0], &pair[1]);
+            let mut state = ComposeState::default();
+            for i in 0..a.bars() {
+                compose(a, i, &valley, &mut state, &mut bar);
+            }
+            let filled = bar
+                .notes
+                .iter()
+                .any(|n| n.inst == Inst::Tom && n.variant == 0);
+            compose(b, 0, &valley, &mut state, &mut bar);
+            let crash = bar
+                .notes
+                .iter()
+                .find(|n| n.inst == Inst::Crash && (n.at_ms - b.start_ms).abs() < 1e-6);
+            assert_eq!(
+                filled,
+                crash.is_some(),
+                "section {} into {}",
+                a.index,
+                b.index
+            );
+            match crash.map(|n| n.variant) {
+                Some(0) => with_kit += 1,
+                // The kit is out in the section that follows: a soft one.
+                Some(3) => soft += 1,
+                Some(v) => panic!("crash variant {v}"),
+                None => {}
+            }
+            assert_eq!(state.fill, Fill::None, "the crash is paid on the downbeat");
+        }
+        assert!(
+            with_kit > 0 && soft > 0,
+            "{with_kit} with the kit, {soft} soft"
+        );
+    }
+
+    #[test]
+    fn a_phone_that_joins_at_a_boundary_hears_the_same_downbeat() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let valley = Valley::quiet(&schedule, &network, &sky, &slow);
+        let notes = |bar: &Bar| {
+            bar.notes
+                .iter()
+                .map(|n| (n.at_ms.to_bits(), n.midi.to_bits(), n.inst as u8, n.variant))
+                .collect::<Vec<_>>()
+        };
+        let mut checked = 0;
+        for pair in chain.sections.windows(2).take(150) {
+            let (a, b) = (&pair[0], &pair[1]);
+            let mut bar = Bar::default();
+            // Listening all along.
+            let mut along = ComposeState::default();
+            for i in 0..a.bars() {
+                compose(a, i, &valley, &mut along, &mut bar);
+            }
+            compose(b, 0, &valley, &mut along, &mut bar);
+            let heard = notes(&bar);
+            // Joining now: the engine warms up on the last section's last bar.
+            let mut joined = ComposeState::default();
+            compose(a, a.bars() - 1, &valley, &mut joined, &mut bar);
+            compose(b, 0, &valley, &mut joined, &mut bar);
+            assert_eq!(notes(&bar), heard, "section {}", b.index);
+            checked += 1;
+        }
+        assert!(checked > 100);
+    }
+
+    #[test]
+    fn a_swarm_rings_twice_a_minute_at_most() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let sec = &chain.sections[30];
+        // A quake every 10 s for the whole section.
+        let quakes: Vec<QuakeEvent> = (0..)
+            .map(|i| sec.start_ms + 2_000.0 + f64::from(i) * 10_000.0)
+            .take_while(|&ms| ms < sec.end_ms())
+            .map(|ms| QuakeEvent {
+                ms,
+                origin_ms: ms,
+                mag: 2.0,
+                lat: 40.7,
+                lon: -111.9,
+            })
+            .collect();
+        let valley = Valley {
+            quakes: &quakes,
+            ..Valley::quiet(&schedule, &network, &sky, &slow)
+        };
+        let mut bar = Bar::default();
+        let mut state = ComposeState::default();
+        let mut rung = Vec::new();
+        for b in 0..sec.bars() {
+            compose(sec, b, &valley, &mut state, &mut bar);
+            rung.extend(
+                bar.notes
+                    .iter()
+                    .filter(|n| n.inst == Inst::QuakeBell)
+                    .map(|n| n.at_ms),
+            );
+        }
+        let minutes = (sec.end_ms() - sec.start_ms) / 60_000.0;
+        assert!(
+            rung.len() as f64 <= 2.0 * minutes + 1.0,
+            "{} in {minutes:.1} min",
+            rung.len()
+        );
+        assert!(
+            rung.len() as f64 >= 2.0 * minutes - 2.0,
+            "{} in {minutes:.1} min",
+            rung.len()
+        );
+    }
+
     #[test]
     fn composing_is_deterministic() {
         let (schedule, network) = valley_fixture();
@@ -1384,14 +1639,7 @@ mod tests {
         let sky = Sky::default();
         let chain = plan_chain(20261023, t0, t0 + 29.0 * 3_600_000.0, &schedule, &sky);
         let slow = Slow::default();
-        let valley = Valley {
-            schedule: &schedule,
-            network: &network,
-            sky: &sky,
-            slow: &slow,
-            bikes: &[],
-            quakes: &[],
-        };
+        let valley = Valley::quiet(&schedule, &network, &sky, &slow);
         let sec = &chain.sections[40];
         let run = || {
             let mut st = ComposeState::default();

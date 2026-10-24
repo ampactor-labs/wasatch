@@ -122,6 +122,15 @@ pub struct SkyHour {
     pub ridge_gust_ms: f32,
     /// Snowfall in the mountains, cm in the hour.
     pub mtn_snow_cm: f32,
+    /// How the buses and trains are moving against the usual for the hour,
+    /// −1 (crawling) to 1 (quick); NaN unknown. Observed, by the conductor.
+    pub flow: f32,
+    /// The change in pressure over the three hours to this one, hPa; NaN
+    /// unknown. Observed.
+    pub pressure_tend: f32,
+    /// Snow forecast at Alta over the next day, mm; NaN unknown. A forecast,
+    /// frozen for the hour by the conductor: it only colors bars.
+    pub storm_mm: f32,
 }
 
 impl Default for SkyHour {
@@ -139,6 +148,9 @@ impl Default for SkyHour {
             ridge_ms: 4.0,
             ridge_gust_ms: 6.0,
             mtn_snow_cm: 0.0,
+            flow: f32::NAN,
+            pressure_tend: f32::NAN,
+            storm_mm: f32::NAN,
         }
     }
 }
@@ -147,6 +159,34 @@ impl SkyHour {
     /// `true` while rain or snow is falling.
     pub fn wet(&self) -> bool {
         self.precip_mm > 0.2 || self.snow_cm > 0.1
+    }
+
+    /// The flow, or 0 (as usual) unknown.
+    pub fn flow_or_usual(&self) -> f32 {
+        if self.flow.is_finite() {
+            self.flow.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// How fast the pressure is falling, 0 (steady, or rising) to 1 (3.5 hPa
+    /// or more in three hours: a storm on its way).
+    pub fn falling(&self) -> f32 {
+        if self.pressure_tend.is_finite() {
+            ((-self.pressure_tend - 0.5) / 3.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// The snow forecast at Alta, mm (0 unknown).
+    pub fn storm_or_none(&self) -> f32 {
+        if self.storm_mm.is_finite() {
+            self.storm_mm.max(0.0)
+        } else {
+            0.0
+        }
     }
 }
 

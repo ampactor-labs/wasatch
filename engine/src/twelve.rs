@@ -315,10 +315,7 @@ pub fn compose_day(
     out.mix = mix_for(sec, 0);
     let mix = out.mix;
     if bar == 0 {
-        *state = ComposeState {
-            last_quake_ms: state.last_quake_ms,
-            ..ComposeState::default()
-        };
+        *state = ComposeState::default();
         // The phrase's time of day carries the harmony's move.
         out.features.push(Feature {
             at_ms: start,
@@ -782,14 +779,7 @@ mod tests {
             season: 1.0,
             ..Slow::default()
         };
-        let valley = Valley {
-            schedule: &s,
-            network: &n,
-            sky: &sky,
-            slow: &slow,
-            bikes: &[],
-            quakes: &[],
-        };
+        let valley = Valley::quiet(&s, &n, &sky, &slow);
         let run = plan_day(20261023, t0(), 1.0e12, &s, &sky);
         let mut state = ComposeState::default();
         let mut out = Bar::default();

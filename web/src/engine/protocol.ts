@@ -20,6 +20,8 @@ export const Kind = {
   SOLO: 15,
   TWELVE: 16,
   RAIL: 17,
+  PLANES: 18,
+  ALERTS: 19,
 } as const;
 export type KindCode = (typeof Kind)[keyof typeof Kind];
 
@@ -170,17 +172,32 @@ export interface SkyHour {
   ridgeMs: number;
   ridgeGustMs: number;
   mtnSnowCm: number;
+  /** How the buses and trains are moving against the usual for the hour,
+   * −1…1 (the conductor's; absent or NaN unknown). Observed. */
+  flow?: number;
+  /** The change in pressure over the three hours to this one, hPa. Observed. */
+  pressureTend?: number;
+  /** Snow forecast at Alta over the next day, mm, frozen for the hour by
+   * the conductor. A forecast: it only colors bars. */
+  stormMm?: number;
 }
 
+/** The fields added to an hour since the first twelve, in the order the
+ * engine reads them. */
+const SKY_MORE = ["flow", "pressureTend", "stormMm"] as const;
+
+/** SKY: `u32 n`, n hours of `f64 at` and twelve floats, then `u32 k` and k
+ * more floats an hour (an engine older than them reads only the rows). */
 export function encodeSky(hours: SkyHour[]): Uint8Array {
   const w = new Writer();
   w.u32(hours.length);
+  const f = (v: number | undefined) => w.f32(v !== undefined && Number.isFinite(v) ? v : Number.NaN);
   for (const h of hours) {
     w.f64(h.at);
-    for (const v of [h.cloud, h.precipMm, h.snowCm, h.tempC, h.windMs, h.gustMs, h.pm25, h.inversionC, h.alert, h.ridgeMs, h.ridgeGustMs, h.mtnSnowCm]) {
-      w.f32(Number.isFinite(v) ? v : Number.NaN);
-    }
+    for (const v of [h.cloud, h.precipMm, h.snowCm, h.tempC, h.windMs, h.gustMs, h.pm25, h.inversionC, h.alert, h.ridgeMs, h.ridgeGustMs, h.mtnSnowCm]) f(v);
   }
+  w.u32(SKY_MORE.length);
+  for (const h of hours) for (const k of SKY_MORE) f(h[k]);
   return w.bytes();
 }
 
@@ -193,11 +210,14 @@ export interface Slow {
   powder: number;
   season: number;
   ground: [number, number, number, number];
+  /** Electricity demand on PacifiCorp East's grid against the usual for
+   * the hour; 0 or absent unknown. */
+  energy?: number;
 }
 
 export function encodeSlow(s: Slow): Uint8Array {
   const w = new Writer();
-  for (const v of [s.lakeFt, s.lakeDevFt, s.river, s.snowpack, s.newSnowIn, s.powder, s.season, ...s.ground]) {
+  for (const v of [s.lakeFt, s.lakeDevFt, s.river, s.snowpack, s.newSnowIn, s.powder, s.season, ...s.ground, s.energy ?? 0]) {
     w.f32(v);
   }
   return w.bytes();
@@ -286,10 +306,51 @@ export function encodeSolo(notes: SoloNote[]): Uint8Array {
 
 /** A conductor's window of rail departures: [actual ms, scheduled ms,
  * route, dir, stop, observed 0/1] rows. */
-export function encodeRail(from: number, to: number, rows: [number, number, number, number, number, number][]): Uint8Array {
+/** RAIL: a conductor's window of departures, then when the next FrontRunner
+ * was due to leave Salt Lake Central as it was sealed (0 unknown). */
+export function encodeRail(from: number, to: number, rows: [number, number, number, number, number, number][], dueMs = 0): Uint8Array {
   const w = new Writer();
   w.f64(from).f64(to).u32(rows.length);
   for (const [ms, sched, route, dir, stop, observed] of rows) w.f64(ms).f64(sched).u8(route).u8(dir).u16(stop).u8(observed);
+  w.f64(dueMs);
+  return w.bytes();
+}
+
+/** A plane taking off or landing at SLC, as a window carries it. */
+export interface PlaneEvent {
+  ms: number;
+  lat: number;
+  lon: number;
+  altFt: number;
+  arrival: boolean;
+  /** 1 (light) to 5 (heavy); 0 unknown. */
+  size: number;
+  airline: boolean;
+}
+
+export function encodePlanes(from: number, to: number, planes: PlaneEvent[]): Uint8Array {
+  const w = new Writer();
+  w.f64(from).f64(to).u32(planes.length);
+  for (const p of planes) w.f64(p.ms).f32(p.lat).f32(p.lon).f32(p.altFt).u8(p.arrival ? 1 : 0).u8(p.size).u8(p.airline ? 1 : 0).u8(0);
+  return w.bytes();
+}
+
+/** A new UTA service alert: what kind of route (0 buses, 1 TRAX and the
+ * S-Line, 2 FrontRunner, 3 ski buses) and whether it suspends service. */
+export interface AlertEvent {
+  ms: number;
+  kind: number;
+  severe: boolean;
+}
+
+/** ALERTS: a window's new alerts, and how many of each kind were in effect
+ * as it was sealed. */
+export function encodeAlerts(from: number, to: number, active: [number, number, number, number], alerts: AlertEvent[]): Uint8Array {
+  const w = new Writer();
+  w.f64(from).f64(to);
+  for (const n of active) w.u8(Math.min(255, Math.max(0, Math.round(n))));
+  w.u32(alerts.length);
+  for (const a of alerts) w.f64(a.ms).u8(a.kind).u8(a.severe ? 1 : 0).u16(0);
   return w.bytes();
 }
 

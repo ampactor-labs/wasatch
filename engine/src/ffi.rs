@@ -13,7 +13,7 @@
 #![allow(unsafe_code)]
 
 use crate::audio::voices::PianoSample;
-use crate::compose::{BikeEvent, QuakeEvent, Slow};
+use crate::compose::{AlertEvent, BikeEvent, PlaneEvent, QuakeEvent, Slow};
 use crate::engine::Engine;
 use crate::plan::SkyHour;
 use crate::schedule::{Network, RouteKind, ServiceDay, Stop};
@@ -63,6 +63,15 @@ pub mod kind {
     pub const TWELVE: u32 = 16;
     /// A conductor's window of rail departures.
     pub const RAIL: u32 = 17;
+    /// A conductor's window of planes: `f64 from, f64 to, u32 n`, then rows
+    /// of `f64 ms, f32 lat, f32 lon, f32 alt_ft, u8 kind (0 departing, 1
+    /// landing), u8 size 1–5, u8 flags (1 an airline's), u8 0`.
+    pub const PLANES: u32 = 18;
+    /// A conductor's window of service alerts: `f64 from, f64 to, u8
+    /// active[4]` (in effect as it was sealed: buses, TRAX, FrontRunner, ski
+    /// buses), `u32 n`, then rows of `f64 ms, u8 kind 0–3, u8 flags (1
+    /// severe), u16 0`.
+    pub const ALERTS: u32 = 19;
 }
 
 /// A little-endian reader that never panics: short reads return zeros.
@@ -105,6 +114,10 @@ impl<'a> Reader<'a> {
     }
     fn f64(&mut self) -> f64 {
         f64::from_le_bytes(self.take())
+    }
+    /// Bytes left.
+    fn remaining(&self) -> usize {
+        self.b.len().saturating_sub(self.p)
     }
     /// A count, capped by what could possibly fit in the rest of the buffer.
     fn count(&mut self, item_bytes: usize) -> usize {
@@ -193,7 +206,7 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
         }
         kind::SKY => {
             let n = r.count(56);
-            let hours: Vec<(f64, SkyHour)> = (0..n)
+            let mut hours: Vec<(f64, SkyHour)> = (0..n)
                 .map(|_| {
                     let at = r.f64();
                     let h = SkyHour {
@@ -209,10 +222,27 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
                         ridge_ms: r.f32(),
                         ridge_gust_ms: r.f32(),
                         mtn_snow_cm: r.f32(),
+                        ..SkyHour::default()
                     };
                     (at, h)
                 })
                 .collect();
+            // Fields added since: `u32 k`, then k floats an hour, hour by
+            // hour. An older page sends none (they stay unknown); a newer one
+            // may send more than this engine reads.
+            let k = r.u32() as usize;
+            if (1..=64).contains(&k) && r.remaining() >= n * k * 4 {
+                for (_, h) in &mut hours {
+                    let mut more = [f32::NAN; 3];
+                    for i in 0..k {
+                        let v = r.f32();
+                        if let Some(m) = more.get_mut(i) {
+                            *m = v;
+                        }
+                    }
+                    [h.flow, h.pressure_tend, h.storm_mm] = more;
+                }
+            }
             with_engine(|e| {
                 for (at, h) in hours {
                     e.set_sky_hour(at, h);
@@ -229,6 +259,7 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
                 powder: r.f32(),
                 season: r.f32(),
                 ground: [r.f32(), r.f32(), r.f32(), r.f32()],
+                energy: r.f32(),
             };
             with_engine(|e| e.set_slow(slow))
         }
@@ -328,7 +359,56 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
                     }
                 })
                 .collect();
-            with_engine(|e| e.perform(from, to, &events))
+            // Added since: when the next FrontRunner was due at Central.
+            let due = r.f64();
+            with_engine(|e| e.perform(from, to, &events, due))
+        }
+        kind::PLANES => {
+            let from = r.f64();
+            let to = r.f64();
+            let n = r.count(24);
+            let planes = (0..n)
+                .map(|_| {
+                    let ms = r.f64();
+                    let lat = r.f32();
+                    let lon = r.f32();
+                    let alt_ft = r.f32();
+                    let arrival = r.u8() == 1;
+                    let size = r.u8();
+                    let flags = r.u8();
+                    let _ = r.u8();
+                    PlaneEvent {
+                        ms,
+                        lat,
+                        lon,
+                        alt_ft,
+                        arrival,
+                        size: if size == 0 { 3 } else { size.min(5) },
+                        airline: flags & 1 == 1,
+                    }
+                })
+                .collect();
+            with_engine(|e| e.set_planes(from, to, planes))
+        }
+        kind::ALERTS => {
+            let from = r.f64();
+            let to = r.f64();
+            let active = [r.u8(), r.u8(), r.u8(), r.u8()];
+            let n = r.count(12);
+            let alerts = (0..n)
+                .map(|_| {
+                    let ms = r.f64();
+                    let route_kind = r.u8().min(3);
+                    let flags = r.u8();
+                    let _ = r.u16();
+                    AlertEvent {
+                        ms,
+                        route_kind,
+                        severe: flags & 1 == 1,
+                    }
+                })
+                .collect();
+            with_engine(|e| e.set_alerts(from, to, active, alerts))
         }
         kind::TWELVE => {
             let date = r.u32();
@@ -619,5 +699,119 @@ mod tests {
             heard.push_str(&events(()));
         }
         assert_eq!(heard.matches(r#""t":"solo""#).count(), 3, "{heard}");
+    }
+
+    fn f32s(m: &mut Vec<u8>, vs: &[f32]) {
+        for v in vs {
+            m.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn older_and_newer_pages_both_read_right() {
+        wasatch_init(48_000.0);
+        let at = 1_761_199_200_000f64;
+        let sky = |e: &mut Engine| e.inputs.sky.at(at).expect("the hour");
+        // An older page's sky: no fields after the rows.
+        let mut old = 1u32.to_le_bytes().to_vec();
+        old.extend_from_slice(&at.to_le_bytes());
+        f32s(
+            &mut old,
+            &[0.5, 0.0, 0.0, 12.0, 3.0, 5.0, 5.0, 0.0, 0.0, 4.0, 6.0, 0.0],
+        );
+        assert_eq!(post(kind::SKY, &old), 0);
+        let h = with_engine(sky).unwrap();
+        assert_eq!(h.temp_c, 12.0);
+        assert!(h.flow.is_nan() && h.pressure_tend.is_nan() && h.storm_mm.is_nan());
+        // A newer page's: three more an hour.
+        let mut new = old.clone();
+        new.extend_from_slice(&3u32.to_le_bytes());
+        f32s(&mut new, &[0.4, -2.5, 120.0]);
+        assert_eq!(post(kind::SKY, &new), 0);
+        let h = with_engine(sky).unwrap();
+        assert_eq!((h.flow, h.pressure_tend, h.storm_mm), (0.4, -2.5, 120.0));
+        // Cut short: unknown, never zero.
+        assert_eq!(post(kind::SKY, &new[..new.len() - 2]), 0);
+        assert!(with_engine(sky).unwrap().flow.is_nan());
+        // A page newer than this engine: the fields it knows.
+        let mut newer = old.clone();
+        newer.extend_from_slice(&5u32.to_le_bytes());
+        f32s(&mut newer, &[0.4, -2.5, 120.0, 9.0, 9.0]);
+        assert_eq!(post(kind::SKY, &newer), 0);
+        assert_eq!(with_engine(sky).unwrap().storm_mm, 120.0);
+
+        // Slow values without the grid: as usual.
+        let mut slow = Vec::new();
+        f32s(
+            &mut slow,
+            &[4190.0, 0.0, 0.5, 1.0, 0.0, 0.5, 0.2, 0.0, 0.0, 0.0, 0.0],
+        );
+        assert_eq!(post(kind::SLOW, &slow), 0);
+        assert_eq!(with_engine(|e| e.inputs.slow.energy_or_usual()), Some(1.0));
+        f32s(&mut slow, &[1.1]);
+        assert_eq!(post(kind::SLOW, &slow), 0);
+        assert_eq!(with_engine(|e| e.inputs.slow.energy_or_usual()), Some(1.1));
+
+        // A rail window without the FrontRunner due, and with it.
+        let (from, to) = (at, at + 30_000.0);
+        let mut rail = Vec::new();
+        rail.extend_from_slice(&from.to_le_bytes());
+        rail.extend_from_slice(&to.to_le_bytes());
+        rail.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(post(kind::RAIL, &rail), 0);
+        assert_eq!(
+            with_engine(|e| e.inputs.schedule.due_at(at + 1.0)),
+            Some(None)
+        );
+        rail.extend_from_slice(&(at + 200_000.0).to_le_bytes());
+        assert_eq!(post(kind::RAIL, &rail), 0);
+        assert_eq!(
+            with_engine(|e| e.inputs.schedule.due_at(at + 1.0)),
+            Some(Some(at + 200_000.0))
+        );
+
+        // Planes: a window posted again replaces itself.
+        let planes = |rows: &[(f64, u8, u8)]| {
+            let mut m = Vec::new();
+            m.extend_from_slice(&from.to_le_bytes());
+            m.extend_from_slice(&to.to_le_bytes());
+            m.extend_from_slice(&(rows.len() as u32).to_le_bytes());
+            for &(ms, size, flags) in rows {
+                m.extend_from_slice(&ms.to_le_bytes());
+                f32s(&mut m, &[40.8, -111.97, 6300.0]);
+                m.extend_from_slice(&[0, size, flags, 0]);
+            }
+            m
+        };
+        let two = planes(&[(at + 1_000.0, 0, 1), (at + 21_000.0, 5, 0)]);
+        assert_eq!(post(kind::PLANES, &two), 0);
+        let got = with_engine(|e| e.inputs.planes.clone()).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(
+            (got[0].size, got[0].airline),
+            (3, true),
+            "size unknown: medium"
+        );
+        assert_eq!((got[1].size, got[1].airline), (5, false));
+        assert_eq!(post(kind::PLANES, &planes(&[(at + 5_000.0, 2, 1)])), 0);
+        assert_eq!(with_engine(|e| e.inputs.planes.len()), Some(1));
+        assert_eq!(post(kind::PLANES, &two[..30]), 0);
+
+        // Alerts, and what's in effect.
+        let mut alerts = Vec::new();
+        alerts.extend_from_slice(&from.to_le_bytes());
+        alerts.extend_from_slice(&to.to_le_bytes());
+        alerts.extend_from_slice(&[126, 1, 0, 0]);
+        alerts.extend_from_slice(&1u32.to_le_bytes());
+        alerts.extend_from_slice(&(at + 4_000.0).to_le_bytes());
+        alerts.extend_from_slice(&[1, 1, 0, 0]);
+        assert_eq!(post(kind::ALERTS, &alerts), 0);
+        let (events, windows) =
+            with_engine(|e| (e.inputs.alerts.clone(), e.inputs.alert_windows.clone())).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].severe && events[0].route_kind == 1);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].active, [126, 1, 0, 0]);
+        assert_eq!(post(kind::ALERTS, &alerts[..19]), 0);
     }
 }

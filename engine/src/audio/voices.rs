@@ -561,6 +561,8 @@ pub enum DrumKind {
     Tom,
     /// Soft crash.
     Crash,
+    /// A cymbal swell: noise rising to a peak, then a short ring.
+    Swell,
 }
 
 /// One drum hit.
@@ -703,7 +705,21 @@ impl DrumVoice {
                 self.mallet.strike(0.6, 1.0);
                 self.gain *= 0.22;
             }
+            DrumKind::Swell => {
+                // Set by `swell`, which gives the rise its length.
+                self.filter.set_cutoff(6500.0);
+                self.filter.set_resonance(0.7);
+                self.amp_coeff = coeff(0.45, sr);
+                self.gain *= 0.2;
+            }
         }
+    }
+
+    /// A cymbal swell rising for `rise_s`, then ringing briefly: a gesture
+    /// that needs no kit.
+    pub fn swell(&mut self, rise_s: f32, vel: f32, place: Placement, seed: u32) {
+        self.start(DrumKind::Swell, 0.0, vel, place, seed);
+        self.attack = (rise_s.clamp(0.3, 8.0) * self.sr) as u32;
     }
 
     /// Render one sample.
@@ -757,6 +773,19 @@ impl DrumVoice {
                 let (_, hp, _, _) = self.filter.process_all(self.noise.sample());
                 self.amp *= self.amp_coeff;
                 0.5 * hp * self.amp + self.modal.process(self.mallet.next_sample())
+            }
+            DrumKind::Swell => {
+                let (_, hp, _, _) = self.filter.process_all(self.noise.sample());
+                // A squared rise (it grows the way a struck-and-rolled
+                // cymbal does), then the ring decays.
+                let env = if self.t < self.attack {
+                    let u = self.t as f32 / self.attack as f32;
+                    u * u
+                } else {
+                    self.amp *= self.amp_coeff;
+                    self.amp
+                };
+                0.6 * hp * env
             }
         };
         let done = match self.kind {
@@ -1159,6 +1188,7 @@ mod tests {
             DrumKind::Shaker,
             DrumKind::Tom,
             DrumKind::Crash,
+            DrumKind::Swell,
         ]
         .into_iter()
         .enumerate()
@@ -1177,6 +1207,33 @@ mod tests {
             assert!(!d.is_active(), "{kind:?} never finished");
             assert!(peak > 0.005 && peak < 1.5, "{kind:?} peak {peak}");
         }
+    }
+
+    #[test]
+    fn a_cymbal_swell_rises_for_its_length_then_rings_out() {
+        let mut d = DrumVoice::new(SR, 1);
+        d.swell(2.0, 0.8, Placement::default(), 7);
+        // Loudness in 100 ms blocks.
+        let mut blocks = Vec::new();
+        let (mut sum, mut n) = (0.0f32, 0);
+        while d.is_active() && blocks.len() < 100 {
+            let mut o = Out::default();
+            d.tick(&mut o);
+            assert!(o.l.is_finite());
+            sum += o.l * o.l;
+            n += 1;
+            if n == (SR / 10.0) as usize {
+                blocks.push((sum / n as f32).sqrt());
+                (sum, n) = (0.0, 0);
+            }
+        }
+        assert!(!d.is_active(), "it rings out");
+        let loudest = (0..blocks.len()).max_by(|&a, &b| blocks[a].total_cmp(&blocks[b]));
+        assert!(
+            matches!(loudest, Some(18..=21)),
+            "loudest at block {loudest:?}"
+        );
+        assert!(blocks[19] > 8.0 * blocks[4], "it grows");
     }
 
     #[test]

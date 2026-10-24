@@ -16,8 +16,8 @@ use crate::audio::voices::{
     PadVoice, PianoSample, PianoVoice, Placement, bell_partials,
 };
 use crate::compose::{
-    Bar, BikeEvent, ComposeState, Feature, Harmony, Inst, Mix, Note, QuakeEvent, Slow, Valley,
-    compose,
+    AlertEvent, AlertWindow, Bar, BikeEvent, ComposeState, Feature, Harmony, Inst, Mix, Note,
+    PlaneEvent, QuakeEvent, Slow, Valley, compose,
 };
 use crate::listener::{self, SoloNote};
 use crate::music::midi_hz;
@@ -50,6 +50,12 @@ pub struct Inputs {
     pub bikes: Vec<BikeEvent>,
     /// Quakes, by time.
     pub quakes: Vec<QuakeEvent>,
+    /// Planes taking off and landing, by time.
+    pub planes: Vec<PlaneEvent>,
+    /// New service alerts, by time.
+    pub alerts: Vec<AlertEvent>,
+    /// The service alerts in effect, window by window.
+    pub alert_windows: Vec<AlertWindow>,
     version: u64,
 }
 
@@ -62,8 +68,34 @@ impl Inputs {
             slow: &self.slow,
             bikes: &self.bikes,
             quakes: &self.quakes,
+            planes: &self.planes,
+            alerts: &self.alerts,
+            alert_windows: &self.alert_windows,
         }
     }
+}
+
+/// A conductor's window of events into a list: the window's rows replace
+/// whatever it had before (a window posted again replaces itself), and an
+/// hour is kept.
+fn merge_window<T>(
+    list: &mut Vec<T>,
+    from_ms: f64,
+    to_ms: f64,
+    rows: Vec<T>,
+    ms: impl Fn(&T) -> f64,
+) {
+    if to_ms <= from_ms {
+        return;
+    }
+    list.retain(|e| ms(e) < from_ms || ms(e) >= to_ms);
+    list.extend(
+        rows.into_iter()
+            .filter(|e| ms(e) >= from_ms && ms(e) < to_ms),
+    );
+    list.sort_by(|a, b| ms(a).total_cmp(&ms(b)));
+    let horizon = to_ms - 3_600_000.0;
+    list.retain(|e| ms(e) > horizon);
 }
 
 /// Where composition stands.
@@ -247,6 +279,36 @@ impl Engine {
         self.inputs.quakes = quakes;
     }
 
+    /// A conductor's window of planes taking off and landing.
+    pub fn set_planes(&mut self, from_ms: f64, to_ms: f64, planes: Vec<PlaneEvent>) {
+        merge_window(&mut self.inputs.planes, from_ms, to_ms, planes, |p| p.ms);
+    }
+
+    /// A conductor's window of new service alerts, and the alerts in effect
+    /// as it was sealed.
+    pub fn set_alerts(
+        &mut self,
+        from_ms: f64,
+        to_ms: f64,
+        active: [u8; 4],
+        alerts: Vec<AlertEvent>,
+    ) {
+        merge_window(&mut self.inputs.alerts, from_ms, to_ms, alerts, |a| a.ms);
+        if to_ms <= from_ms {
+            return;
+        }
+        let windows = &mut self.inputs.alert_windows;
+        windows.retain(|w| w.to_ms <= from_ms || w.from_ms >= to_ms);
+        windows.push(AlertWindow {
+            from_ms,
+            to_ms,
+            active,
+        });
+        windows.sort_by(|a, b| a.from_ms.total_cmp(&b.from_ms));
+        let horizon = to_ms - 6.0 * 3_600_000.0;
+        windows.retain(|w| w.to_ms > horizon);
+    }
+
     /// Move the listener, and say what's near and far from there.
     pub fn set_vantage(&mut self, code: u32) {
         self.vantage = Vantage::from_code(code);
@@ -301,9 +363,16 @@ impl Engine {
         self.samples.sort_by_key(|s| s.midi);
     }
 
-    /// A conductor's window of rail departures, `from_ms` to `to_ms`.
-    pub fn perform(&mut self, from_ms: f64, to_ms: f64, events: &[crate::schedule::RailEvent]) {
-        self.inputs.schedule.perform(from_ms, to_ms, events);
+    /// A conductor's window of rail departures, `from_ms` to `to_ms`, and
+    /// when the next FrontRunner was due at Salt Lake Central (0 unknown).
+    pub fn perform(
+        &mut self,
+        from_ms: f64,
+        to_ms: f64,
+        events: &[crate::schedule::RailEvent],
+        due_ms: f64,
+    ) {
+        self.inputs.schedule.perform(from_ms, to_ms, events, due_ms);
     }
 
     /// Push baseband samples for a ground band, from a station at `lat`, `lon`.
@@ -627,6 +696,24 @@ impl Engine {
         let bar = (((l - sec.start_ms) / sec.bar_ms()).floor().max(0.0) as u32).min(sec.bars() - 1);
         self.compose_state = ComposeState::default();
         let valley = self.inputs.valley();
+        // The section before's last bar, silently, for the crash its fill
+        // owes this one's downbeat: a phone that joins now hears it too.
+        if self.day.is_none()
+            && let Some(prev) = self
+                .chain
+                .as_ref()
+                .and_then(|c| c.section_at(sec.start_ms - 1.0))
+                .copied()
+            && (prev.end_ms() - sec.start_ms).abs() < 5.0
+        {
+            compose(
+                &prev,
+                prev.bars() - 1,
+                &valley,
+                &mut self.compose_state,
+                &mut self.scratch,
+            );
+        }
         for b in 0..bar {
             match &self.day {
                 Some(run) => twelve::compose_day(
@@ -720,7 +807,8 @@ impl Engine {
             .copied();
         match next {
             Some(sec) if (sec.start_ms - end).abs() < 5.0 => {
-                self.compose_state = ComposeState::default();
+                // The state carries on: a section's first bar resets all of
+                // it but the crash the last section's fill owes it.
                 self.cursor = Some(Cursor {
                     section: sec,
                     bar: 0,
@@ -926,6 +1014,8 @@ impl Engine {
                     Inst::Hat => (DrumKind::Hat, 0.25),
                     Inst::Shaker => (DrumKind::Shaker, -0.3),
                     Inst::Tom => (DrumKind::Tom, -0.1),
+                    // Variant 2: a cymbal swell, rising for the note's length.
+                    _ if n.variant == 2 => (DrumKind::Swell, 0.1),
                     _ => (DrumKind::Crash, 0.15),
                 };
                 let mut place = if n.lat.is_finite() {
@@ -945,7 +1035,18 @@ impl Engine {
                     self.pulse(frame, &n, &place);
                 }
                 let i = pick(&mut self.rr[7], self.drums.iter().map(|v| v.is_active()));
-                self.drums[i].start(kind, n.midi, n.vel * mix.kit, place, seed | 1);
+                // Variants 2 and 3, the soft gestures, sound when the kit is
+                // out too.
+                let level = if n.variant >= 2 {
+                    mix.kit.max(0.7)
+                } else {
+                    mix.kit
+                };
+                if kind == DrumKind::Swell {
+                    self.drums[i].swell(dur_s, n.vel * level, place, seed | 1);
+                } else {
+                    self.drums[i].start(kind, n.midi, n.vel * level, place, seed | 1);
+                }
                 self.kit_located[i] = n.lat.is_finite();
             }
         }

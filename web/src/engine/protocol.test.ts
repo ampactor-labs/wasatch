@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { centralIndex, encodeClock, encodeDay, encodeNetwork, encodeSky, routeCode, type NetworkFile, type SkyHour } from "./protocol.ts";
+import { centralIndex, encodeAlerts, encodeClock, encodeDay, encodeNetwork, encodePlanes, encodeRail, encodeSky, encodeSlow, routeCode, type NetworkFile, type SkyHour } from "./protocol.ts";
 import { encodeGroundPlaced } from "../data/ground.ts";
 
 const view = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength);
@@ -59,7 +59,7 @@ describe("the engine's messages", () => {
     expect(v.getInt32(10 + 4 + 16, true)).toBe(1);
   });
 
-  test("SKY is twelve floats an hour, NaN where unknown", () => {
+  test("SKY is twelve floats an hour, then the three added since, NaN where unknown", () => {
     const h: SkyHour = {
       at: 1792800000000,
       cloud: Number.NaN,
@@ -75,12 +75,37 @@ describe("the engine's messages", () => {
       ridgeGustMs: 12,
       mtnSnowCm: 0.2,
     };
-    const b = encodeSky([h]);
-    expect(b.length).toBe(4 + 8 + 12 * 4);
+    const b = encodeSky([h, { ...h, at: h.at + 3_600_000, flow: -0.4, pressureTend: -2.5, stormMm: 180 }]);
+    expect(b.length).toBe(4 + 2 * (8 + 12 * 4) + 4 + 2 * 3 * 4);
     const v = view(b);
     expect(v.getFloat64(4, true)).toBe(h.at);
     expect(Number.isNaN(v.getFloat32(12, true))).toBe(true);
     expect(v.getFloat32(12 + 11 * 4, true)).toBeCloseTo(0.2, 6);
+    const tail = 4 + 2 * 56;
+    expect(v.getUint32(tail, true)).toBe(3);
+    // The first hour's are unknown; the second's follow in order.
+    expect(Number.isNaN(v.getFloat32(tail + 4, true))).toBe(true);
+    expect([16, 20, 24].map((o) => v.getFloat32(tail + o, true))).toEqual([Math.fround(-0.4), -2.5, 180]);
+  });
+
+  test("SLOW and RAIL carry what was added at the end", () => {
+    const slow = { lakeFt: 4190, lakeDevFt: 0, river: 0.5, snowpack: 1, newSnowIn: 0, powder: 0.5, season: 0, ground: [0, 0, 0, 0] as [number, number, number, number] };
+    expect(encodeSlow(slow).length).toBe(12 * 4);
+    expect(view(encodeSlow({ ...slow, energy: 1.1 })).getFloat32(11 * 4, true)).toBeCloseTo(1.1, 6);
+    const rail = view(encodeRail(0, 30_000, [[1, 1, 4, 0, 21, 1]], 1792800120000));
+    expect(rail.byteLength).toBe(20 + 21 + 8);
+    expect(rail.getFloat64(41, true)).toBe(1792800120000);
+  });
+
+  test("PLANES and ALERTS rows", () => {
+    const p = view(encodePlanes(0, 30_000, [{ ms: 5, lat: 40.8, lon: -111.97, altFt: 6300, arrival: true, size: 4, airline: true }]));
+    expect(p.byteLength).toBe(20 + 24);
+    expect(p.getFloat32(20 + 16, true)).toBe(6300);
+    expect([p.getUint8(40), p.getUint8(41), p.getUint8(42)]).toEqual([1, 4, 1]);
+    const a = view(encodeAlerts(0, 30_000, [126, 1, 0, 300], [{ ms: 9, kind: 2, severe: true }]));
+    expect(a.byteLength).toBe(16 + 4 + 4 + 12);
+    expect([a.getUint8(16), a.getUint8(17), a.getUint8(19)]).toEqual([126, 1, 255]);
+    expect([a.getUint8(32), a.getUint8(33)]).toEqual([2, 1]);
   });
 
   test("CLOCK and GROUND layouts", () => {

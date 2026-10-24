@@ -129,7 +129,7 @@ pub struct Schedule {
     /// Spans the conductor has reported in full: inside them, the observed
     /// departures (and the schedule for trains realtime doesn't track) stand
     /// in for the schedule.
-    covered: Vec<(f64, f64)>,
+    covered: Vec<(f64, f64, f64)>,
     observed: Vec<RailEvent>,
 }
 
@@ -220,9 +220,10 @@ impl Schedule {
     }
 
     /// Record a conductor's window: every departure from `from_ms` to
-    /// `to_ms`, observed or (for untracked trains) scheduled. A window posted
-    /// again replaces itself.
-    pub fn perform(&mut self, from_ms: f64, to_ms: f64, events: &[RailEvent]) {
+    /// `to_ms`, observed or (for untracked trains) scheduled, and when the
+    /// next FrontRunner was due to leave Salt Lake Central as it was sealed
+    /// (0 if none was). A window posted again replaces itself.
+    pub fn perform(&mut self, from_ms: f64, to_ms: f64, events: &[RailEvent], due_ms: f64) {
         if to_ms <= from_ms {
             return;
         }
@@ -230,18 +231,32 @@ impl Schedule {
         self.observed
             .extend(events.iter().filter(|e| e.ms >= from_ms && e.ms < to_ms));
         self.observed.sort_by(|a, b| a.ms.total_cmp(&b.ms));
-        self.covered.retain(|&(a, b)| b <= from_ms || a >= to_ms);
-        self.covered.push((from_ms, to_ms));
+        self.covered.retain(|&(a, b, _)| b <= from_ms || a >= to_ms);
+        self.covered.push((from_ms, to_ms, due_ms));
         self.covered.sort_by(|a, b| a.0.total_cmp(&b.0));
         // Keep six hours.
         let horizon = to_ms - 6.0 * 3_600_000.0;
-        self.covered.retain(|&(_, b)| b > horizon);
+        self.covered.retain(|&(_, b, _)| b > horizon);
         self.observed.retain(|e| e.ms > horizon);
     }
 
+    /// The conductor's window covering `ms`, if one does.
+    fn window(&self, ms: f64) -> Option<(f64, f64, f64)> {
+        let i = self.covered.partition_point(|&(a, _, _)| a <= ms);
+        let w = *self.covered.get(i.checked_sub(1)?)?;
+        (ms < w.1).then_some(w)
+    }
+
     fn is_covered(&self, ms: f64) -> bool {
-        let i = self.covered.partition_point(|&(a, _)| a <= ms);
-        i > 0 && ms < self.covered[i - 1].1
+        self.window(ms).is_some()
+    }
+
+    /// When the next FrontRunner is due to leave Salt Lake Central, as the
+    /// conductor's window covering `ms` had it.
+    pub fn due_at(&self, ms: f64) -> Option<f64> {
+        self.window(ms)
+            .map(|w| w.2)
+            .filter(|&due| due.is_finite() && due > 0.0)
     }
 
     /// The departures to play from `from_ms` to `to_ms`: what the conductor
@@ -405,7 +420,7 @@ mod tests {
             late_s: 30,
             observed: true,
         };
-        s.perform(t0 + 150_000.0, t0 + 250_000.0, &[late]);
+        s.perform(t0 + 150_000.0, t0 + 250_000.0, &[late], 0.0);
         let played = s.performed_between(t0, t0 + 500_000.0);
         let times: Vec<f64> = played.iter().map(|e| (e.ms - t0) / 1000.0).collect();
         assert_eq!(times.len(), 3, "{times:?}");
@@ -414,7 +429,7 @@ mod tests {
         assert!(played[1].observed && played[1].late_s == 30);
         assert!((times[2] - 400.0).abs() < 60.0);
         // Posting the window again replaces it rather than doubling it.
-        s.perform(t0 + 150_000.0, t0 + 250_000.0, &[late]);
+        s.perform(t0 + 150_000.0, t0 + 250_000.0, &[late], 0.0);
         assert_eq!(s.performed_between(t0, t0 + 500_000.0).len(), 3);
         // Too few observations for a system lateness yet.
         assert_eq!(s.system_late_s(t0 + 260_000.0), 0.0);
