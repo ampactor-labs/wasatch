@@ -14,6 +14,7 @@ COPY web/src/data ./web/src/data
 COPY web/src/engine/protocol.ts ./web/src/engine/protocol.ts
 
 ENV NODE_ENV=production
-USER node
+# It starts as root only to hand a mounted volume (root-owned on Railway) to
+# the node user, then drops root before it opens a port (server.ts).
 EXPOSE 8080
 CMD ["node", "conductor/src/server.ts"]

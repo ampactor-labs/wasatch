@@ -132,6 +132,11 @@ try {
       console.log(`  conductor: ${c.windows} windows, ${c.observed} departures seen live, ${c.scheduled} scheduled; live captions: ${live.join(" | ") || "none yet"}`);
       if (c.windows < 2) failures.push(`${view.name}: the conductor's windows didn't arrive`);
     }
+    if (query && /(^|&)debug\b/.test(query)) {
+      const panel = await page.$$eval(".debug__row", (rows) => rows.map((r) => r.textContent ?? ""));
+      for (const row of panel) console.log(`  debug: ${row}`);
+      if (!panel.some((r) => /% of a core/.test(r) && !/^engine 0\.0%/.test(r))) failures.push(`${view.name}: ?debug didn't measure the engine`);
+    }
     if (view.name === "phone" && !query) await vantages(page, failures, shots);
     if (view.name === "desktop" && !query) await interactions(page, failures);
     for (const e of real) failures.push(`${view.name}: ${e}`);

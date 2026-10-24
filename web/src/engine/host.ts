@@ -99,6 +99,26 @@ export type Heard<E> = E & { /** performance.now() when it's heard */ at: number
 
 type Listener = (e: Heard<EngineEvent>) => void;
 
+/** What ?debug shows: how hard the engine works and whether audio drops. */
+export interface DebugStats {
+  /** The engine's share of the audio thread's time, 0–1, over the last second. */
+  load: number;
+  /** The slowest render quantum in that second, and how long one lasts, ms. */
+  worstMs: number;
+  quantumMs: number;
+  /** Quanta that took longer to render than they last, since debugging began. */
+  late: number;
+  /** Whether the worklet's timer is fine-grained (performance) or the ms Date. */
+  fine: boolean;
+  /** Times the audio clock stalled against the wall clock, and for how long. */
+  dropouts: number;
+  droppedMs: number;
+  sampleRate: number;
+  baseLatencyMs: number;
+  outputLatencyMs: number;
+  state: string;
+}
+
 export class Host {
   readonly ctx: AudioContext;
   private node: AudioWorkletNode | null = null;
@@ -118,6 +138,8 @@ export class Host {
   private samplesLoaded = new Set<string>();
   private onSample: ((loaded: number, total: number) => void) | null = null;
   readonly simd: boolean;
+  private debugStats: DebugStats | null = null;
+  private debugTimer: number | undefined;
 
   private constructor(ctx: AudioContext, simd: boolean) {
     this.ctx = ctx;
@@ -294,6 +316,48 @@ export class Host {
     this.keepalive?.play().catch(() => {});
   }
 
+  /** Start measuring for ?debug; returns the live numbers. */
+  debug(): DebugStats {
+    if (this.debugStats) return this.debugStats;
+    const latency = this.ctx as AudioContext & { outputLatency?: number };
+    const s: DebugStats = {
+      load: 0,
+      worstMs: 0,
+      quantumMs: (128 / this.ctx.sampleRate) * 1000,
+      late: 0,
+      fine: true,
+      dropouts: 0,
+      droppedMs: 0,
+      sampleRate: this.ctx.sampleRate,
+      baseLatencyMs: (this.ctx.baseLatency || 0) * 1000,
+      outputLatencyMs: (latency.outputLatency || 0) * 1000,
+      state: this.ctx.state,
+    };
+    this.debugStats = s;
+    this.node?.port.postMessage({ type: "debug", on: true });
+    // A dropout: the audio clock falling behind the wall clock. Each half
+    // second, the context should have advanced as far as performance.now().
+    let last: { c: number; p: number } | null = null;
+    this.debugTimer = window.setInterval(() => {
+      s.state = this.ctx.state;
+      s.outputLatencyMs = (latency.outputLatency || 0) * 1000;
+      const ts = this.ctx.getOutputTimestamp?.();
+      if (this.ctx.state !== "running" || !ts?.contextTime || !ts.performanceTime) {
+        last = null;
+        return;
+      }
+      if (last) {
+        const lost = ts.performanceTime - last.p - (ts.contextTime - last.c) * 1000;
+        if (lost > 12) {
+          s.dropouts++;
+          s.droppedMs += lost;
+        }
+      }
+      last = { c: ts.contextTime, p: ts.performanceTime };
+    }, 500);
+    return s;
+  }
+
   setVantage(code: number): void {
     this.post(Kind.VANTAGE, encodeU32(code));
   }
@@ -345,6 +409,15 @@ export class Host {
     }
     if (msg.type === "error") {
       console.error("engine:", msg.message);
+      return;
+    }
+    if (msg.type === "load" && this.debugStats) {
+      const s = this.debugStats;
+      const frames = msg.frames as number;
+      s.load = (msg.busyMs as number) / ((frames / this.ctx.sampleRate) * 1000);
+      s.worstMs = msg.worstMs as number;
+      s.late += msg.late as number;
+      s.fine = msg.fine as boolean;
       return;
     }
     if (msg.type !== "events" || this.firstContextFrame < 0) return;

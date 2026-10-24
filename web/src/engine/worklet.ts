@@ -20,7 +20,22 @@ declare class AudioWorkletProcessor {
 type Incoming =
   | { type: "module"; module?: WebAssembly.Module; bytes?: ArrayBuffer }
   | { type: "post"; kind: number; bytes: Uint8Array }
-  | { type: "clock"; contextFrame: number; utcMs: number };
+  | { type: "clock"; contextFrame: number; utcMs: number }
+  | { type: "debug"; on: boolean };
+
+/** The best clock the audio thread has: some browsers don't give a worklet
+ * `performance`, and fall back to the millisecond `Date`. */
+const perf = (globalThis as { performance?: { now(): number } }).performance;
+const clock = perf ? () => perf.now() : () => Date.now();
+
+/** How hard the engine works, a second at a time, for ?debug. */
+interface Load {
+  busyMs: number;
+  frames: number;
+  worstMs: number;
+  /** Quanta that took longer to render than they last. */
+  late: number;
+}
 
 class WasatchProcessor extends AudioWorkletProcessor {
   private engine: EngineHandle | null = null;
@@ -29,6 +44,7 @@ class WasatchProcessor extends AudioWorkletProcessor {
   private engineFrame = 0;
   /** The context frame at which the engine rendered its first frame. */
   private firstContextFrame = -1;
+  private load: Load | null = null;
 
   constructor() {
     super();
@@ -47,6 +63,10 @@ class WasatchProcessor extends AudioWorkletProcessor {
       } catch (err) {
         this.port.postMessage({ type: "error", message: String(err) });
       }
+      return;
+    }
+    if (msg.type === "debug") {
+      this.load = msg.on ? { busyMs: 0, frames: 0, worstMs: 0, late: 0 } : null;
       return;
     }
     if (msg.type === "clock") {
@@ -83,7 +103,20 @@ class WasatchProcessor extends AudioWorkletProcessor {
       this.firstContextFrame = currentFrame;
       this.port.postMessage({ type: "started", contextFrame: currentFrame });
     }
+    const t0 = this.load ? clock() : 0;
     const [l, r] = this.engine.render(n);
+    if (this.load) {
+      const ms = clock() - t0;
+      const load = this.load;
+      load.busyMs += ms;
+      load.frames += n;
+      load.worstMs = Math.max(load.worstMs, ms);
+      if (ms > (n / sampleRate) * 1000) load.late++;
+      if (load.frames >= sampleRate) {
+        this.port.postMessage({ type: "load", ...load, sampleRate, fine: !!perf });
+        this.load = { busyMs: 0, frames: 0, worstMs: 0, late: 0 };
+      }
+    }
     left.set(l);
     if (out[1]) out[1].set(r);
     for (let c = 2; c < out.length; c++) out[c]?.set(l);

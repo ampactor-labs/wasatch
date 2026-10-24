@@ -3,7 +3,7 @@
 // its clock and never asks for "latest", so no cache or replica can hand two
 // phones different versions (DESIGN.md, Determinism and sync).
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const WINDOW_MS = 30_000;
@@ -50,23 +50,50 @@ interface Open {
 export class Windows {
   private open = new Map<number, Open>();
   private sealed = new Map<number, string>();
-  private readonly dir: string | null;
+  /** Where sealed windows are kept across restarts; null to keep them in
+   * memory only, from the start or once the disk fails. */
+  private dir: string | null;
   /** Called on each window just before it seals: the last chance to add. */
   onSeal: ((w: WindowBody) => void) | null = null;
+  /** Called once if the disk stops working; the windows carry on in memory. */
+  onDiskError: ((err: unknown) => void) | null = null;
 
-  constructor(dir: string | null = null) {
+  constructor(dir: string | null = null, now = Date.now()) {
     this.dir = dir;
-    if (dir) {
+    this.disk(() => {
+      if (!dir) return;
       mkdirSync(dir, { recursive: true });
-      const now = Date.now();
       for (const f of readdirSync(dir)) {
         const m = /^(\d+)\.json$/.exec(f);
         if (!m) continue;
         const start = Number(m[1]);
         if (now - start > KEEP_MS) continue;
-        this.sealed.set(start, readFileSync(join(dir, f), "utf8"));
+        // A window is written whole or not at all; anything that doesn't
+        // read back is left out rather than served.
+        try {
+          const text = readFileSync(join(dir, f), "utf8");
+          if ((JSON.parse(text) as WindowBody).start === start) this.sealed.set(start, text);
+        } catch {
+          // Unreadable: skip it.
+        }
       }
+    });
+  }
+
+  /** Run a disk operation; on failure, carry on without the disk. */
+  private disk(op: () => void): void {
+    if (!this.dir) return;
+    try {
+      op();
+    } catch (err) {
+      this.dir = null;
+      this.onDiskError?.(err);
     }
+  }
+
+  /** Whether sealed windows are being kept on disk. */
+  get persistent(): boolean {
+    return this.dir !== null;
   }
 
   static startOf(ms: number): number {
@@ -152,14 +179,22 @@ export class Windows {
       const text = JSON.stringify(w.body);
       this.sealed.set(start, text);
       this.open.delete(start);
-      if (this.dir) writeFileSync(join(this.dir, `${start}.json`), text);
+      // Written beside, then renamed: a window on disk is whole or absent.
+      this.disk(() => {
+        const file = join(this.dir!, `${start}.json`);
+        writeFileSync(`${file}.tmp`, text);
+        renameSync(`${file}.tmp`, file);
+      });
       n++;
     }
     // Keep three hours.
     for (const start of this.sealed.keys()) {
       if (now - start > KEEP_MS) {
         this.sealed.delete(start);
-        if (this.dir && existsSync(join(this.dir, `${start}.json`))) unlinkSync(join(this.dir, `${start}.json`));
+        this.disk(() => {
+          const file = join(this.dir!, `${start}.json`);
+          if (existsSync(file)) unlinkSync(file);
+        });
       }
     }
     return n;

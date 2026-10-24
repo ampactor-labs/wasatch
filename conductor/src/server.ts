@@ -20,7 +20,9 @@
 // https://ampactor.dev/wasatch/schedule), DATA_DIR (keep sealed windows on
 // disk across restarts; optional).
 
+import { chownSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
+import { join } from "node:path";
 import { decodeFeed } from "./gtfsrt.ts";
 import { Transit } from "./transit.ts";
 import { WINDOW_MS, Windows } from "./windows.ts";
@@ -33,7 +35,39 @@ const UTA = "https://apps.rideuta.com/tms/gtfs";
 const UA = { "User-Agent": "wasatch-symphony conductor (github.com/ampactor-labs/wasatch)" };
 const started = Date.now();
 
+const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
+
+/** Started as root (a container whose volume is mounted root-owned), hand
+ * the data directory to the `node` user and drop root for good, before
+ * anything is read from the network. */
+function dropRoot(dir: string | null): void {
+  if (process.getuid?.() !== 0) return;
+  const entry = readFileSync("/etc/passwd", "utf8")
+    .split("\n")
+    .map((l) => l.split(":"))
+    .find((f) => f[0] === "node");
+  if (!entry) {
+    log("running as root: there's no node user to become");
+    return;
+  }
+  const [uid, gid] = [Number(entry[2]), Number(entry[3])];
+  if (dir) {
+    try {
+      mkdirSync(join(dir, "w"), { recursive: true });
+      for (const d of [dir, join(dir, "w")]) chownSync(d, uid, gid);
+      for (const f of readdirSync(join(dir, "w"))) chownSync(join(dir, "w", f), uid, gid);
+    } catch (err) {
+      log("data directory:", err instanceof Error ? err.message : err);
+    }
+  }
+  process.setgroups?.([gid]);
+  process.setgid?.(gid);
+  process.setuid?.(uid);
+}
+
+dropRoot(process.env.DATA_DIR ?? null);
 const windows = new Windows(process.env.DATA_DIR ? `${process.env.DATA_DIR}/w` : null);
+windows.onDiskError = (err) => log("windows: the disk failed, keeping them in memory:", err instanceof Error ? err.message : err);
 const transit = new Transit(SCHEDULE);
 const bikes = new BikeWatch();
 const ground = new GroundSource("wasatch-symphony:conductor:0:node");
@@ -41,8 +75,6 @@ const seenQuakes = new Set<string>();
 let sky: string | null = null;
 let slow: string | null = null;
 const errors: Record<string, string> = {};
-
-const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
 const every = (ms: number, name: string, f: () => Promise<void>) => {
   const run = () =>
     f().then(
@@ -142,7 +174,7 @@ const server = createServer((req, res) => {
     const body = {
       ok: true,
       up_s: Math.round((Date.now() - started) / 1000),
-      windows: { sealed: windows.sealedCount, latest: windows.latestSealed() },
+      windows: { sealed: windows.sealedCount, latest: windows.latestSealed(), kept: windows.persistent ? "on disk" : "in memory" },
       transit: transit.stats,
       ground: STATIONS.map((s, b) => ({ station: s.code, level: Number(ground.level(b).toFixed(2)), fresh: ground.freshAt(b, Date.now() - 30_000) })),
       errors,
@@ -154,7 +186,9 @@ const server = createServer((req, res) => {
 });
 
 await bikes.init().catch((err) => log("bikes:", err));
-server.listen(PORT, () => log(`conductor on :${PORT}, schedule from ${SCHEDULE}`));
+server.listen(PORT, () =>
+  log(`conductor on :${PORT} as uid ${process.getuid?.() ?? "?"}, schedule from ${SCHEDULE}, windows ${windows.persistent ? `kept in ${process.env.DATA_DIR}` : "in memory"} (${windows.sealedCount} restored)`),
+);
 
 // A container's PID 1 must stop on its own when told to (sealed windows are
 // already on disk, if DATA_DIR is set).

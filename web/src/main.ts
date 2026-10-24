@@ -171,6 +171,7 @@ async function main(): Promise<void> {
     void h.start(`${BASE}audio/keepalive.mp3`).catch((err) => console.error(err));
     s.mount();
     mediaSession(h, s, v, () => void toggle());
+    if (new URLSearchParams(location.search).has("debug")) void import("./app/debug.ts").then((d) => d.mountDebug(h, conductor));
     // A shared link to a day: play it in twelve minutes after the welcome.
     const asked = new URLSearchParams(location.search).get("day");
     if (asked && /^\d{4}-\d{2}-\d{2}$/.test(asked) && asked in schedule.manifest.days) {

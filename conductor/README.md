@@ -48,7 +48,7 @@ the page's feed, ground and schedule code.
 
 Environment: `PORT` (8080), `SCHEDULE` (where the compiled schedule is
 served; default `https://ampactor.dev/wasatch/schedule`), `DATA_DIR` (keep
-sealed windows on disk across restarts).
+sealed windows on disk across restarts; `/data` on Railway).
 
 ## Deploy it (Railway)
 
@@ -64,5 +64,13 @@ railway up --ci -m "what changed"
 The service's health check is `/health`. Phones read the conductor named in
 `web/public/config.json` (or `?conductor=<url>` for a test); whenever it
 can't be reached they read the feeds themselves, and a span no window covers
-plays from the schedule. Sealed windows live in memory, so a restart starts
-the three-hour store over; set `DATA_DIR` to a volume to keep them.
+plays from the schedule.
+
+Sealed windows are kept on a Railway volume mounted at `/data`
+(`DATA_DIR=/data`), so a restart or a redeploy picks the three-hour store up
+where it left off. Each window is written beside its file and renamed, so
+one on disk is whole or absent, and anything that doesn't read back is left
+out. If the disk ever fails the conductor keeps going in memory and says so
+in `/health` (`"kept": "in memory"`). Railway mounts the volume owned by
+root, so the conductor starts as root only to hand `DATA_DIR` to the `node`
+user, and drops root before it opens a port.

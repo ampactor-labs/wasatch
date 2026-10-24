@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { SEAL_MS, WINDOW_MS, Windows, type WindowBody } from "./windows.ts";
 
@@ -44,4 +47,30 @@ test("the seal hook gets the last word", () => {
   w.addBike([W + 1_000, 40.7, -111.9, 1, 1], W + 2_000);
   w.seal(W + SEAL_MS);
   assert.deepEqual((JSON.parse(w.body(W)!) as WindowBody).rail, [[W + 1_000, W + 1_000, 0, 1, 20, 0]]);
+});
+
+test("sealed windows survive a restart, and a torn file is left out", () => {
+  const dir = mkdtempSync(join(tmpdir(), "windows-"));
+  const a = new Windows(dir, W);
+  a.addRail([W + 5_000, W + 1_000, 1, 0, 11, 1], W + 20_000);
+  a.seal(W + SEAL_MS + 1);
+  assert.ok(a.persistent);
+  assert.notEqual(a.body(W), null);
+  // A window cut off mid-write, as a killed container would leave it.
+  writeFileSync(join(dir, `${W + WINDOW_MS}.json`), '{"v":1,"start":');
+  const b = new Windows(dir, W + SEAL_MS + 1);
+  assert.equal(b.body(W), a.body(W));
+  assert.equal(b.body(W + WINDOW_MS), null);
+  assert.ok(!readdirSync(dir).some((f) => f.endsWith(".tmp")));
+});
+
+test("a disk it can't write to leaves the windows in memory", () => {
+  const dir = mkdtempSync(join(tmpdir(), "windows-"));
+  const blocked = join(dir, "not-a-dir");
+  writeFileSync(blocked, "a file where the directory should be");
+  const w = new Windows(join(blocked, "w"), W);
+  assert.equal(w.persistent, false);
+  w.addRail([W + 5_000, W + 1_000, 1, 0, 11, 1], W + 20_000);
+  assert.doesNotThrow(() => w.seal(W + SEAL_MS + 1));
+  assert.notEqual(w.body(W), null);
 });
