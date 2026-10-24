@@ -1,5 +1,8 @@
 # The conductor
 
+Live at **https://wasatch-production.up.railway.app** (`/health` says what
+it's doing), and the site uses it through `web/public/config.json`.
+
 The site plays without it: every phone reads the valley's open feeds itself
 and the schedule from the site. The conductor is what makes every phone hear
 exactly the same thing, and what the browser can't do on its own:
@@ -49,21 +52,17 @@ sealed windows on disk across restarts).
 
 ## Deploy it (Railway)
 
-`railway.json` at the repository's root has the start command and health
-check. From the repository:
+The repository's `Dockerfile` is the conductor's image: Node 24, the
+conductor's sources and the page code it shares, no build step. Railway
+builds it on its own (the site itself is GitHub Pages and is never built
+there). From the repository's root, with the project linked:
 
 ```sh
-railway login
-railway init            # a new project, e.g. "wasatch-conductor"
-railway up              # build and deploy
-railway domain          # a public URL, e.g. https://wasatch-conductor.up.railway.app
+railway up --ci -m "what changed"
 ```
 
-Then point the site at it in `web/public/config.json`:
-
-```json
-{ "conductor": "https://wasatch-conductor.up.railway.app" }
-```
-
-and push. Phones pick it up on their next load; until then, and whenever it
-can't be reached, they read the feeds themselves.
+The service's health check is `/health`. Phones read the conductor named in
+`web/public/config.json` (or `?conductor=<url>` for a test); whenever it
+can't be reached they read the feeds themselves, and a span no window covers
+plays from the schedule. Sealed windows live in memory, so a restart starts
+the three-hour store over; set `DATA_DIR` to a volume to keep them.

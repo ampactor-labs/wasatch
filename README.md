@@ -72,12 +72,12 @@ sync, and why each choice was made.
   with a shredder riding the theme summit to summit, the valley map with every
   scheduled train, the harmony dial as a ski-lift bullwheel, and captions on
   routed-wood trail signs.
-- **The conductor** ([`conductor/`](conductor/)), optional, is a small Node
-  server that reads what a browser can't (UTA's realtime, KSLC's METARs),
-  holds the one connection to the seismometers, and seals it all into
-  30-second windows every phone reads alike: the bells ring when the trains
-  actually leave, and a late one lays back behind the beat. Without it, the
-  site plays from the schedule and the open feeds.
+- **The conductor** ([`conductor/`](conductor/)), on Railway, is a small
+  Node server that reads what a browser can't (UTA's realtime, KSLC's
+  METARs), holds the one connection to the seismometers, and seals it all
+  into 30-second windows every phone reads alike: the bells ring when the
+  trains actually leave, and a late one lays back behind the beat. If it's
+  ever unreachable, the site plays from the schedule and the open feeds.
 - **The archive.** Each daily build compiles against the deployed site, so
   every earlier day carries forward with its schedule and its sealed sky.
 

@@ -30,7 +30,8 @@ What's live, and where it differs from the rest of this document:
   trip updates; late trains lay back as designed), KSLC's METARs, and the
   seismometers once for everyone, and seals 30-second windows at immutable
   URLs. It runs as a small Node process on the page's own TypeScript, not
-  on the .wasm. Deploying it is a `railway up` away (conductor/README.md).
+  on the .wasm, on Railway at wasatch-production.up.railway.app, and the
+  site reads it (conductor/README.md).
 - **The sky every phone agrees on.** NWS observations come every five
   minutes and have gaps (Oct 22 lost ten hours). The plan reads one slot an
   hour, the report nearest :54 in the quarter hour before the hour, and

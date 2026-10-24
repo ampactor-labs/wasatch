@@ -89,11 +89,15 @@ export class Valley {
 
   /** Keep every feed fresh (the schedule only, with a conductor). */
   run(direct = true): void {
+    this.timers.push(window.setInterval(() => void this.loadDays().catch(() => {}), 10 * MIN));
+    if (direct) this.runFeeds();
+  }
+
+  /** Read the feeds directly: from the start, or once a conductor goes quiet. */
+  runFeeds(): void {
     const every = (ms: number, f: () => Promise<unknown>) => {
       this.timers.push(window.setInterval(() => void f().catch(() => {}), ms));
     };
-    every(10 * MIN, () => this.loadDays());
-    if (!direct) return;
     every(5 * MIN, () => this.refreshSky());
     every(15 * MIN, () => this.refreshSlow());
     every(2 * MIN, () => this.refreshQuakes());

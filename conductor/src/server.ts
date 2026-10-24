@@ -155,3 +155,14 @@ const server = createServer((req, res) => {
 
 await bikes.init().catch((err) => log("bikes:", err));
 server.listen(PORT, () => log(`conductor on :${PORT}, schedule from ${SCHEDULE}`));
+
+// A container's PID 1 must stop on its own when told to (sealed windows are
+// already on disk, if DATA_DIR is set).
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    log(`${signal}: stopping`);
+    ground.stop();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000).unref();
+  });
+}

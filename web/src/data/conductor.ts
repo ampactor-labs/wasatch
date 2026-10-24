@@ -34,6 +34,10 @@ export class Conductor implements GroundFeed {
   private timers: number[] = [];
   /** Windows read, and the latest one's start: for the mappings view. */
   stats = { windows: 0, latest: 0, observed: 0, scheduled: 0 };
+  /** Called once if nothing has come from the conductor for three minutes. */
+  onLost: (() => void) | null = null;
+  private lastHeard = performance.now();
+  private lost = false;
 
   constructor(url: string, host: Host, valley: Valley) {
     this.url = url.replace(/\/$/, "");
@@ -43,11 +47,19 @@ export class Conductor implements GroundFeed {
 
   private async get<T>(path: string): Promise<T | null> {
     try {
-      const res = await fetch(`${this.url}${path}`, { cache: path === "/time" ? "no-store" : "default" });
+      const res = await fetch(`${this.url}${path}`, { cache: path === "/time" ? "no-store" : "default", signal: AbortSignal.timeout(10_000) });
+      // Any answer, even "not sealed yet", means it's there.
+      this.lastHeard = performance.now();
       return res.ok ? ((await res.json()) as T) : null;
     } catch {
       return null;
     }
+  }
+
+  private checkLost(): void {
+    if (this.lost || performance.now() - this.lastHeard < 3 * 60_000) return;
+    this.lost = true;
+    this.onLost?.();
   }
 
   /** The sky and the slow values, before the first bar. */
@@ -60,7 +72,10 @@ export class Conductor implements GroundFeed {
       void f();
       this.timers.push(window.setInterval(() => void f(), ms));
     };
-    every(5_000, () => this.windows());
+    every(5_000, async () => {
+      await this.windows();
+      this.checkLost();
+    });
     every(5 * 60_000, () => this.sky());
     every(15 * 60_000, () => this.slow());
   }

@@ -18,16 +18,30 @@ import { Kind, encodeTwelve } from "./engine/protocol.ts";
 const BASE = import.meta.env.BASE_URL;
 const app = document.getElementById("app")!;
 
-/** The conductor, if one is deployed: ?conductor=<url>, or config.json. */
+/** The conductor, if one is deployed and answering: ?conductor=<url>, or
+ * config.json. One that doesn't answer within four seconds is skipped, and
+ * this phone reads the feeds itself. */
 async function conductorUrl(): Promise<string | null> {
+  let url: string | null = null;
   const asked = new URLSearchParams(location.search).get("conductor");
-  if (asked && /^https?:\/\//.test(asked)) return asked;
-  try {
-    const config = (await fetch(`${BASE}config.json`, { cache: "no-cache" }).then((r) => r.json())) as { conductor?: string | null };
-    return config.conductor ?? null;
-  } catch {
-    return null;
+  if (asked && /^https?:\/\//.test(asked)) url = asked;
+  else {
+    try {
+      const config = (await fetch(`${BASE}config.json`, { cache: "no-cache" }).then((r) => r.json())) as { conductor?: string | null };
+      url = config.conductor ?? null;
+    } catch {
+      return null;
+    }
   }
+  if (!url) return null;
+  try {
+    const res = await fetch(`${url.replace(/\/$/, "")}/health`, { cache: "no-store", signal: AbortSignal.timeout(4000) });
+    if (res.ok) return url;
+  } catch {
+    // Unreachable: fall through.
+  }
+  console.warn(`conductor at ${url} didn't answer; reading the feeds directly`);
+  return null;
 }
 
 function bootStickers(valley: Valley | null): [StickerKind, StickerKind] {
@@ -164,12 +178,29 @@ async function main(): Promise<void> {
     // The ground: the city's seismometers, if the server will have us.
     // With a conductor, the ground comes in its windows; without, straight
     // from EarthScope.
-    if (conductor) {
-      new Ground(h, conductor, (g) => v.setGround(g)).start();
-    } else {
+    const direct = () => {
       const seismometers = new GroundSource();
-      new Ground(h, seismometers, (g) => v.setGround(g)).start();
+      const g = new Ground(h, seismometers, (x) => v.setGround(x));
+      g.start();
       seismometers.connect().catch((err) => console.warn("ground:", err));
+      return g;
+    };
+    if (conductor) {
+      const fromConductor = new Ground(h, conductor, (g) => v.setGround(g));
+      fromConductor.start();
+      // If the conductor goes quiet, this phone reads the valley itself.
+      conductor.onLost = () => {
+        console.warn("the conductor went quiet; reading the feeds directly");
+        conductor.stop();
+        fromConductor.stop();
+        v.runFeeds();
+        void v.refreshSky();
+        void v.refreshSlow();
+        void v.refreshQuakes();
+        direct();
+      };
+    } else {
+      direct();
     }
   };
 
