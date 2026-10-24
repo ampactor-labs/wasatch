@@ -293,6 +293,8 @@ export function encodeTwelve(date: string | null): Uint8Array {
   return new Writer().u32(date ? Number(date.replaceAll("-", "")) : 0).bytes();
 }
 
+const NO_EVENTS = new Uint8Array(0);
+
 /** The engine's exports. */
 interface Exports {
   memory: WebAssembly.Memory;
@@ -338,17 +340,27 @@ export class EngineHandle {
     return this.x.wasatch_post(kind, bytes.length);
   }
 
-  /** Render `frames`; returns views onto left and right (valid until the next call). */
+  private views: { buffer: ArrayBuffer; ptr: number; frames: number; out: [Float32Array, Float32Array] } | null = null;
+
+  /** Render `frames`; returns views onto left and right (valid until the next
+   * call). On the audio thread this runs every few milliseconds, so the views
+   * are made once and reused until memory grows: no garbage per quantum. */
   render(frames: number): [Float32Array, Float32Array] {
     const ptr = this.x.wasatch_render(frames);
-    const all = new Float32Array(this.x.memory.buffer, ptr, frames * 2);
-    return [all.subarray(0, frames), all.subarray(frames)];
+    const buffer = this.x.memory.buffer;
+    const v = this.views;
+    if (v && v.buffer === buffer && v.ptr === ptr && v.frames === frames) return v.out;
+    const all = new Float32Array(buffer, ptr, frames * 2);
+    const out: [Float32Array, Float32Array] = [all.subarray(0, frames), all.subarray(frames)];
+    this.views = { buffer, ptr, frames, out };
+    return out;
   }
 
-  /** The events since the last call, as UTF-8 JSON lines (a copy). */
+  /** The events since the last call, as UTF-8 JSON lines (a copy; the same
+   * empty array when there are none, which is most quanta). */
   outbox(): Uint8Array {
     const n = this.x.wasatch_outbox_len();
-    if (n === 0) return new Uint8Array(0);
+    if (n === 0) return NO_EVENTS;
     return new Uint8Array(this.x.memory.buffer, this.x.wasatch_outbox_ptr(), n).slice();
   }
 

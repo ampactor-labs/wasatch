@@ -8,7 +8,7 @@ import {
   harmonyDial,
   mapBase,
   mapProjection,
-  shredderGroup,
+  shredder,
   skyGradient,
   skyline,
   skylineGeometry,
@@ -79,6 +79,8 @@ export class PlayScreen {
   private riderAnim = 0;
   /** Theme hops win over the slow carve until this time. */
   private hopUntil = 0;
+  /** The rider's element and its scale, set when the skyline is drawn. */
+  private riderBox: { el: HTMLElement; px: number; k: number } | null = null;
   private vantage = 0;
   private stickers: [StickerKind, StickerKind] = ["801", "LISTEN LOCAL"];
   private haze = 0;
@@ -104,7 +106,7 @@ export class PlayScreen {
       <header class="play__sky">
         <div class="play__skyline"></div>
       </header>
-      <div class="play__status" role="status"><span class="play__status-line"><span data-slot="clock"></span></span><span class="play__status-line"><span data-slot="key"></span><span data-slot="section"></span></span><button type="button" class="play__live" data-action="share" hidden>Share this day</button><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
+      <div class="play__status"><span class="play__status-line"><span data-slot="clock"></span></span><span class="play__status-line"><span data-slot="key"></span><span data-slot="section"></span></span><button type="button" class="play__live" data-action="share" hidden>Share this day</button><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
       <div class="play__note" aria-hidden="true"></div>
       <section class="play__valley">
         <div class="play__mapwrap">
@@ -195,9 +197,10 @@ export class PlayScreen {
     const data = defaultSkylineData();
     this.geo = skylineGeometry(data, { width, height });
     const snowLine = this.snowLine();
-    host.innerHTML = skyline(data, { width, height, daypart, haze: this.haze, flags: true, labels: width >= 900, snowLineFt: snowLine });
-    const head = host.querySelector(".skyline-playhead");
-    if (head) head.innerHTML = `<g class="play__rider">${shredderGroup()}</g>`;
+    // The ridge is drawn once; the rider moves on a layer of its own above
+    // it, so a frame repaints the rider and not the range.
+    host.innerHTML = `${skyline(data, { width, height, daypart, haze: this.haze, flags: true, labels: width >= 900, snowLineFt: snowLine })}
+      <div class="play__rider" aria-hidden="true">${shredder()}</div>`;
     this.placeRider(this.riderT, 0);
   }
 
@@ -214,11 +217,26 @@ export class PlayScreen {
     return 0.3 * Math.max(0.65, Math.min(1.4, h / 190));
   }
 
+  /** Put the rider at `t` along the ridge. It's an element of its own,
+   * moved by a CSS transform, so the compositor moves it without repainting
+   * the range. Its drawing's anchor (the board's center) is at (98, 122) in
+   * a 164 × 138 box (art/shredder.ts). */
   private placeRider(t: number, lift: number, spin = 0): void {
-    const g = this.root.querySelector<SVGGElement>(".play__rider");
-    if (!g || !this.geo) return;
+    const el = this.root.querySelector<HTMLElement>(".play__rider");
+    const sky = this.root.querySelector<SVGSVGElement>(".play__skyline svg.skyline");
+    if (!el || !sky || !this.geo) return;
+    if (!this.riderBox || this.riderBox.el !== el) {
+      // Measured once per layout, not per frame: only the transform moves.
+      const px = sky.clientWidth / this.geo.width;
+      const k = this.riderScale() * px;
+      el.style.width = `${n(164 * k, 2)}px`;
+      el.style.height = `${n(138 * k, 2)}px`;
+      el.style.transformOrigin = `${n(98 * k, 2)}px ${n(122 * k, 2)}px`;
+      this.riderBox = { el, px, k };
+    }
+    const { px, k } = this.riderBox;
     const p = this.geo.at(t);
-    g.setAttribute("transform", `translate(${n(p.x)} ${n(p.y - 1 - lift)}) rotate(${n(p.angle + spin)}) scale(${n(this.riderScale(), 3)})`);
+    el.style.transform = `translate(${n(p.x * px - 98 * k, 2)}px, ${n((p.y - 1 - lift) * px - 122 * k, 2)}px) rotate(${n(p.angle + spin)}deg)`;
   }
 
   /** The theme sounded summit `s`: hop there. */
@@ -299,18 +317,17 @@ export class PlayScreen {
     const h = Math.max(200, Math.round(host.clientHeight || w * 1.1));
     const bounds = this.mapBounds(w, h);
     this.proj = mapProjection(bounds, w, h);
-    host.innerHTML = mapBase({ bounds, width: w, height: h, labels: w >= 300 });
-    const routes = host.querySelector(".map-routes");
-    if (routes) routes.innerHTML = this.routesSvg();
-    // The seismometers: rings that breathe with the ground.
+    // The base map and the lines are static; trains, events and the
+    // seismometers move on an overlay, so the map itself never repaints.
     const proj = this.proj;
-    routes?.insertAdjacentHTML(
-      "afterend",
-      `<g class="map-ground">${STATIONS.map((s, band) => {
+    host.innerHTML = `${mapBase({ bounds, width: w, height: h, labels: w >= 300 })}
+      <svg class="play__overlay" viewBox="0 0 ${w} ${h}" aria-hidden="true"><g class="map-vehicles"></g></svg>
+      <div class="play__marks" aria-hidden="true">${STATIONS.map((s, band) => {
         const [x, y] = proj.project(s.lat, s.lon);
-        return `<g class="map-seis" data-band="${band}" transform="translate(${n(x)} ${n(y)})"><title>${esc(s.name)}</title><circle class="map-seis__ring" r="9"/><circle class="map-seis__dot" r="2.6"/></g>`;
-      }).join("")}</g>`,
-    );
+        return `<div class="seis" data-band="${band}" style="left:${n(x)}px;top:${n(y)}px"><i class="seis__ring"></i><i class="seis__dot"></i></div>`;
+      }).join("")}</div>`;
+    const routes = host.querySelector("svg.map .map-routes");
+    if (routes) routes.innerHTML = this.routesSvg();
     this.drawGround();
     this.drawVehicles();
   }
@@ -318,9 +335,9 @@ export class PlayScreen {
   /** Each seismometer's ring follows its band's level; hidden when it's quiet or offline. */
   private drawGround(): void {
     const levels = this.deps.valley.ground?.levels;
-    this.root.querySelectorAll<SVGGElement>(".map-seis").forEach((g) => {
+    this.root.querySelectorAll<HTMLElement>(".seis").forEach((g) => {
       const level = levels?.[Number(g.dataset.band)] ?? 0;
-      g.classList.toggle("map-seis--live", !!levels);
+      g.classList.toggle("seis--live", !!levels);
       g.style.setProperty("--level", level.toFixed(2));
     });
   }
@@ -366,7 +383,7 @@ export class PlayScreen {
   }
 
   private drawVehicles(): void {
-    const g = this.root.querySelector(".map-vehicles");
+    const g = this.root.querySelector(".play__overlay .map-vehicles");
     const proj = this.proj;
     if (!g || !proj) return;
     const trains = this.deps.schedule.trainsAt(this.dayNow());
@@ -380,7 +397,7 @@ export class PlayScreen {
   }
 
   private pulse(e: Heard<PulseEvent>): void {
-    const g = this.root.querySelector(".map-events");
+    const g = this.root.querySelector(".play__marks");
     const proj = this.proj;
     if (!g || !proj) return;
     let [x, y] = proj.project(e.lat, e.lon);
@@ -391,10 +408,12 @@ export class PlayScreen {
     y = Math.max(edge, Math.min(proj.height - edge, y));
     const color = PULSE_COLOR[e.i] ?? "#FF6B35";
     const big = e.i === 5;
-    const el = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    el.setAttribute("class", `map-pulse${big ? " map-pulse--big" : ""}${off ? " map-pulse--edge" : ""}`);
-    el.setAttribute("transform", `translate(${n(x)} ${n(y)})`);
-    el.innerHTML = `<circle class="map-pulse__ring" r="9" fill="none" stroke="${color}" stroke-width="3"/><circle r="${big ? 7 : 5}" fill="${color}" stroke="#1B1F3B" stroke-width="2"/>`;
+    // Plain elements that only scale and fade: the compositor animates them
+    // without repainting the map.
+    const el = document.createElement("div");
+    el.className = `pulse${big ? " pulse--big" : ""}${off ? " pulse--edge" : ""}`;
+    el.style.cssText = `left:${n(x)}px;top:${n(y)}px;--c:${color}`;
+    el.innerHTML = `<i class="pulse__ring"></i><i class="pulse__dot"></i>`;
     g.appendChild(el);
     window.setTimeout(() => el.remove(), big ? 4000 : 1800);
   }
@@ -411,7 +430,13 @@ export class PlayScreen {
       center: `${noteName(homePos(k))} ${MODE_SHORT[k.r] ?? ""}`,
       title: `${keyName(k)}: the notes in play are ${noteName(k.c)} major's`,
     });
-    host.querySelector(".dial")?.classList.toggle("dial--turning", !this.paused);
+    // The bullwheel turns when the key changes, then rests: a still SVG costs
+    // nothing to paint.
+    const dial = host.querySelector(".dial");
+    if (dial && !this.paused && !reducedMotion()) {
+      dial.classList.add("dial--turning");
+      window.setTimeout(() => dial.classList.remove("dial--turning"), 2400);
+    }
   }
 
   private renderStickers(): void {

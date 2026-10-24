@@ -39,14 +39,48 @@ a {
   transition: background 2s ease;
 }
 .play__skyline {
+  position: relative;
   line-height: 0;
+}
+/* Layers that move, over drawings that don't: each its own compositor
+   layer, so a moving rider or a breathing ring never repaints the range or
+   the map beneath it. */
+.play__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  will-change: transform;
+}
+/* The sounding summit's pennant stands raised, without flapping: a flap would
+   repaint the whole range every frame. */
+.play__skyline .skyline-flag--active path:last-of-type {
+  animation: none;
 }
 .play__skyline svg {
   width: 100%;
   height: auto;
 }
+.play__rider {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+.play__rider svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .play__rider .shredder-rider {
   animation-duration: calc(var(--beat) * 2);
+  animation-timing-function: steps(4, jump-none);
+}
+.play__rider .shredder-spray {
+  animation-timing-function: steps(3, jump-none);
 }
 
 .play__status {
@@ -136,41 +170,6 @@ a {
 }
 .play__podium {
   display: none;
-}
-
-/* Events on the map: a ring that blooms and fades where it happened. */
-.map-pulse__ring {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: pulse-ring 1.6s ease-out forwards;
-}
-.map-pulse--big .map-pulse__ring {
-  animation-duration: 3.8s;
-}
-.map-pulse > circle:last-child {
-  animation: pulse-dot 1.8s ease-in forwards;
-}
-.map-pulse--big > circle:last-child {
-  animation-duration: 4s;
-}
-@keyframes pulse-ring {
-  from {
-    transform: scale(0.6);
-    opacity: 1;
-  }
-  to {
-    transform: scale(3.4);
-    opacity: 0;
-  }
-}
-@keyframes pulse-dot {
-  0%,
-  60% {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
 }
 
 .play__captions {
@@ -686,13 +685,8 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .map-pulse__ring,
-  .map-pulse > circle:last-child,
   .caption--new {
     animation: none;
-  }
-  .map-pulse__ring {
-    opacity: 0.5;
   }
   .sheet__card,
   .sheet__scrim,
@@ -814,38 +808,6 @@ a {
   background: var(--white);
 }
 
-/* The seismometers: a ring per station, breathing with its band's level. */
-.map-seis {
-  --level: 0;
-  opacity: 0;
-  transition: opacity 0.6s ease;
-}
-.map-seis--live {
-  opacity: 1;
-}
-.map-seis__dot {
-  fill: var(--ink);
-}
-.map-seis__ring {
-  fill: none;
-  stroke: var(--pink);
-  stroke-width: 2.2;
-  transform-box: fill-box;
-  transform-origin: center;
-  scale: calc(0.6 + var(--level) * 1.6);
-  animation: seis-breathe calc(3.2s - var(--level) * 2s) ease-in-out infinite;
-}
-@keyframes seis-breathe {
-  50% {
-    opacity: 0.35;
-    stroke-width: 3.4;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .map-seis__ring {
-    animation: none;
-  }
-}
 
 /* The narrowest phones: vantage icons only (the names stay for screen readers). */
 @media (max-width: 359px) {
@@ -857,4 +819,135 @@ a {
     clip-path: inset(50%);
     white-space: nowrap;
   }
+}
+
+/* Marks on the map: plain elements over it, animated only by transform and
+   opacity, which the compositor does without repainting anything. */
+.play__marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.play__marks i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+}
+.pulse,
+.seis {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.pulse__ring {
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  box-sizing: border-box;
+  border: 3px solid var(--c);
+  animation: pulse-ring 1.6s ease-out forwards;
+}
+.pulse__dot {
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  box-sizing: border-box;
+  border: 2px solid var(--ink);
+  background: var(--c);
+  animation: pulse-dot 1.8s ease-in forwards;
+}
+.pulse--big .pulse__ring {
+  animation-duration: 3.8s;
+}
+.pulse--big .pulse__dot {
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  animation-duration: 4s;
+}
+@keyframes pulse-ring {
+  from {
+    transform: scale(0.6);
+    opacity: 1;
+  }
+  to {
+    transform: scale(3.4);
+    opacity: 0;
+  }
+}
+@keyframes pulse-dot {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.seis {
+  --level: 0;
+  opacity: 0;
+  transition:
+    opacity 0.6s ease,
+    transform 1s ease;
+  /* The level sizes the ring once a second; the breath itself has fixed
+     keyframes, which the compositor can run alone. */
+  transform: scale(calc(0.6 + var(--level) * 1.6));
+}
+.seis--live {
+  opacity: 1;
+}
+.seis__dot {
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  background: var(--ink);
+}
+.seis__ring {
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  box-sizing: border-box;
+  border: 2px solid var(--pink);
+  animation: seis-breathe 2.4s ease-in-out infinite;
+}
+.seis__dot {
+  transform: scale(calc(1 / (0.6 + var(--level) * 1.6)));
+}
+@keyframes seis-breathe {
+  from,
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.25);
+    opacity: 0.4;
+  }
+}
+/* The gull conducts in stop-motion on the play screen: a cartoon's frames,
+   and a fraction of the painting. */
+.play__gull .gull-wing,
+.play__podium .gull-wing,
+.play__gull .gull-bird,
+.play__podium .gull-bird {
+  animation-timing-function: steps(6, jump-none);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse__ring,
+  .pulse__dot,
+  .seis__ring {
+    animation: none;
+  }
+  .pulse__ring {
+    opacity: 0.5;
+  }
+}
+
+/* The shredder on the dial's home chair rides still: its bob would repaint
+   the whole dial every frame. */
+.play__dial .shredder-rider,
+.play__dial .shredder-spray {
+  animation: none;
 }
