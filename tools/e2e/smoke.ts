@@ -236,8 +236,9 @@ async function interactions(page: import("puppeteer-core").Page, failures: strin
   await page.waitForFunction(() => !(document.querySelector("[data-tune]") as HTMLButtonElement | null)?.disabled, { timeout: 20_000 });
   const tuned = await page.$eval("[data-tuned]", (e) => e.textContent ?? "");
   console.log(`  tune to the room: "${tuned}"`);
-  // The fake microphone can't hear this phone's tick, so the honest answer is a refusal.
-  if (!/couldn't hear its own tick/.test(tuned)) failures.push(`Tune to the room: "${tuned}"`);
+  // The fake microphone can't hear this phone or another, so the honest
+  // answer is a refusal; a shift would be a false reading.
+  if (!/couldn't hear its own tick|couldn't make out another phone/.test(tuned)) failures.push(`Tune to the room: "${tuned}"`);
   await page.click(".sheet__close");
 }
 

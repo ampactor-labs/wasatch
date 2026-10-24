@@ -33,21 +33,30 @@ const MAX_LAG_S = 1.0;
 const TICK_CLEAR = 12;
 const ROOM_CLEAR = 9;
 
-/** A 3 ms windowed noise burst, quiet: the tick. */
+/** The tick: two 120 ms bursts of seeded noise, 400 ms apart, quiet. Long
+ * and broadband, so its correlation peak can't be mistaken for a beep or a
+ * hum in the room. */
 function tick(ctx: AudioContext): AudioBuffer {
-  const n = Math.round(0.003 * ctx.sampleRate);
-  const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+  const sr = ctx.sampleRate;
+  const burst = Math.round(0.12 * sr);
+  const gap = Math.round(0.4 * sr);
+  const buf = ctx.createBuffer(1, gap + burst, sr);
   const d = buf.getChannelData(0);
   let seed = 0x2468ace1;
-  for (let i = 0; i < n; i++) {
-    seed ^= seed << 13;
-    seed ^= seed >>> 17;
-    seed ^= seed << 5;
-    const w = Math.sin((Math.PI * i) / n) ** 2;
-    d[i] = (((seed >>> 0) / 4_294_967_296) * 2 - 1) * w * 0.3;
+  for (const start of [0, gap]) {
+    for (let i = 0; i < burst; i++) {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      const w = Math.sin((Math.PI * i) / burst) ** 2;
+      d[start + i] = (((seed >>> 0) / 4_294_967_296) * 2 - 1) * w * 0.1;
+    }
   }
   return buf;
 }
+
+/** A phone's own round trip, or the gap between two phones, is under this. */
+const PLAUSIBLE_MS = 900;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -73,21 +82,25 @@ export async function tuneToRoom(host: Host, status: (s: string) => void): Promi
     const src = ctx.createBufferSource();
     src.buffer = tick(ctx);
     src.connect(ctx.destination);
-    const own = host.capture(mic, 1.6, src);
+    const own = host.capture(mic, 2.0, src);
     src.start(ctx.currentTime + 0.25);
     const a = await own;
-    const ownLag = engine.delay(a.ref, a.mic, Math.round(MAX_LAG_S * sr), 0.8);
+    const ownLag = engine.delay(a.ref, a.mic, Math.round(MAX_LAG_S * sr), 1.0);
     src.disconnect();
-    if (ownLag.confidence < TICK_CLEAR || ownLag.lag < 0) throw new TuneError("It couldn't hear its own tick. Turn the volume up and try again.");
+    const ownMs = (ownLag.lag / sr) * 1000;
+    if (ownLag.confidence < TICK_CLEAR || ownMs <= 0 || ownMs > PLAUSIBLE_MS) {
+      throw new TuneError("It couldn't hear its own tick. Turn the volume up and try again.");
+    }
 
     // 2. The room: what the other phone plays, against what we would.
     status("Listening to the room for four seconds…");
     const room = await host.capture(mic, 4.0);
     const roomLag = engine.delay(room.ref, room.mic, Math.round(MAX_LAG_S * sr), 0.5);
-    if (roomLag.confidence < ROOM_CLEAR) throw new TuneError("It couldn't make out another phone playing. Get closer, or use the nudge.");
-
     const shiftMs = ((roomLag.lag - ownLag.lag) / sr) * 1000;
-    return { shiftMs, ownMs: (ownLag.lag / sr) * 1000, confidence: roomLag.confidence };
+    if (roomLag.confidence < ROOM_CLEAR || Math.abs(shiftMs) > PLAUSIBLE_MS) {
+      throw new TuneError("It couldn't make out another phone playing. Get closer, or use the nudge.");
+    }
+    return { shiftMs, ownMs, confidence: roomLag.confidence };
   } finally {
     host.duck(1);
     for (const t of mic.getTracks()) t.stop();

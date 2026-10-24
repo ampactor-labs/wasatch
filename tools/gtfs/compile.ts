@@ -234,6 +234,7 @@ async function main() {
   // --- trips ----------------------------------------------------------------
   const tripIndex = new Map<string, number>();
   const tripRoute: number[] = [];
+  const tripIds: string[] = [];
   const tripService: number[] = [];
   const tripDir: number[] = [];
   const tripHeadsign: string[] = [];
@@ -253,6 +254,7 @@ async function main() {
         serviceIndex.set(sid, s);
       }
       tripIndex.set(get("trip_id"), tripRoute.length);
+      tripIds.push(get("trip_id"));
       tripRoute.push(route);
       tripService.push(s);
       tripDir.push(Number(get("direction_id") || 0));
@@ -374,7 +376,7 @@ async function main() {
     const fill = tripStart.slice(0, tripCount);
     for (let i = 0; i < stTrip.length; i++) order[fill[stTrip.data[i]!]!++] = i;
   }
-  const tripStops = (t: number): { stop: number; sec: number }[] => {
+  const tripStops = (t: number): { seq: number; stop: number; sec: number }[] => {
     const rows: { seq: number; stop: number; sec: number }[] = [];
     for (let k = tripStart[t]!; k < tripStart[t + 1]!; k++) {
       const i = order[k]!;
@@ -551,6 +553,9 @@ async function main() {
   for (const [key, services] of keyServices) {
     const running = new Set(services.map((s) => serviceIndex.get(s)).filter((s) => s !== undefined));
     const rail: { r: number; d: number; h: number; s: number[]; t: number[] }[] = [];
+    // For the conductor: each rail trip's GTFS id and stop sequences, to
+    // match UTA's realtime to it (rt-<key>.json, aligned with rail).
+    const railIds = new Map<object, { id: string; q: number[] }>();
     const ski: { r: number; t: number; h: number }[] = [];
     const perMinute = new Array<number>(MINUTES).fill(0);
     const west = new Array<number>(MINUTES).fill(0);
@@ -580,6 +585,7 @@ async function main() {
           s: rows.map((row) => addStation(row.stop)),
           t: rows.map((row) => row.sec),
         });
+        railIds.set(rail.at(-1)!, { id: tripIds[t]!, q: rows.map((row) => row.seq) });
         inService(rows[0]!.sec, rows.at(-1)!.sec);
         railEvents += rows.length;
       } else if (isSki(r)) {
@@ -624,6 +630,8 @@ async function main() {
     };
     const file = `day-${key}.json`;
     written.push({ file, bytes: writeJson(join(args.out, file), day) });
+    const rt = { version: 1, key, ids: rail.map((tr) => railIds.get(tr)!.id), seqs: rail.map((tr) => railIds.get(tr)!.q) };
+    written.push({ file: `rt-${key}.json`, bytes: writeJson(join(args.out, `rt-${key}.json`), rt) });
     dayStats[key] = { rail: railEvents, bus: busEvents, ski: skiEvents, trips, railTrips: rail.length };
   }
 
@@ -679,7 +687,7 @@ async function main() {
   // Remove day files no date refers to any more.
   const keep = new Set([...written.map((w) => w.file), ...Object.values(days).map((k) => `day-${k}.json`)]);
   for (const f of readdirSync(args.out)) {
-    if (/^day-[0-9a-f]+\.json$/.test(f) && !keep.has(f)) unlinkSync(join(args.out, f));
+    if (/^(day|rt)-[0-9a-f]+\.json$/.test(f) && !keep.has(f)) unlinkSync(join(args.out, f));
   }
   if (args.previous) console.log(`archive: ${archived} earlier dates carried over`);
 
