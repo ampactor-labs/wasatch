@@ -40,6 +40,11 @@ GET /vehicles.json   every train where it is, and how many trains and buses are 
 GET /health          what it's doing
 ```
 
+`/health` says how long it's been up, the commit it was built from, its
+sealed windows and whether they're kept on disk, what realtime it's
+tracking, the fleet's counts and age, each seismometer's level, and any
+feed that's failing.
+
 ## Run it
 
 ```sh
