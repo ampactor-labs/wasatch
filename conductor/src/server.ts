@@ -184,6 +184,8 @@ const server = createServer((req, res) => {
   if (url.pathname === "/health") {
     const body = {
       ok: true,
+      // The commit it was built from, when Railway built it from GitHub.
+      commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
       up_s: Math.round((Date.now() - started) / 1000),
       windows: { sealed: windows.sealedCount, latest: windows.latestSealed(), kept: windows.persistent ? "on disk" : "in memory" },
       transit: transit.stats,
