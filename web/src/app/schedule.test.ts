@@ -47,10 +47,11 @@ describe("the schedule", () => {
     expect(s.trainsAt(t0 + 36_601_000)).toEqual([]);
   });
 
-  test("vehicles and bus rate by the minute", async () => {
+  test("buses and trains in service, and the bus rate, by the minute", async () => {
     const s = await loaded();
-    expect(s.vehiclesAt(t0 + 605 * 60_000)).toBe(7);
-    expect(s.vehiclesAt(t0 + 700 * 60_000)).toBe(0);
+    // Seven trips in service, one of them the train.
+    expect(s.transitAt(t0 + 605 * 60_000)).toEqual({ buses: 6, trains: 1 });
+    expect(s.transitAt(t0 + 700 * 60_000)).toEqual({ buses: 0, trains: 0 });
     expect(s.busRate(t0 + 100 * 60_000)).toBe(5);
   });
 

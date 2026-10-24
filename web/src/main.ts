@@ -8,7 +8,7 @@ import { Host, type EngineEvent, type Heard } from "./engine/host.ts";
 import { syncClock, syncClockFromConductor } from "./engine/clock.ts";
 import { Conductor } from "./data/conductor.ts";
 import { Schedule } from "./app/schedule.ts";
-import { Valley, DAYPART_NAMES } from "./app/valley.ts";
+import { Valley, daypartName } from "./app/valley.ts";
 import { PlayScreen } from "./app/screen.ts";
 import { keyName } from "./app/music.ts";
 import { Menu } from "./app/menu.ts";
@@ -59,7 +59,7 @@ function mediaSession(host: Host, screen: PlayScreen, valley: Valley, toggle: ()
   const update = () => {
     ms.metadata = new MediaMetadata({
       title: "Wasatch Symphony",
-      artist: `${DAYPART_NAMES[valley.daypart()]} · ${keyName(screen.currentKey())}`,
+      artist: `${daypartName(valley.now())} · ${keyName(screen.currentKey())}`,
       album: "Live from the Salt Lake valley",
       artwork: [
         { src: `${BASE}icon-192.png`, sizes: "192x192", type: "image/png" },

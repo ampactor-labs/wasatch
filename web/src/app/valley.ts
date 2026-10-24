@@ -27,6 +27,13 @@ import { daypartAt } from "../art/sky.ts";
 
 const MIN = 60_000;
 
+/** "248 buses and 31 trains running", "1 bus running", "" for none. */
+export function transitPhrase({ buses, trains }: { buses: number; trains: number }, verb: string): string {
+  const count = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+  const parts = [buses ? count(buses, "bus", "buses") : "", trains ? count(trains, "train", "trains") : ""].filter(Boolean);
+  return parts.length ? `${parts.join(" and ")} ${verb}` : "";
+}
+
 export const DAYPART_NAMES: Record<Daypart, string> = {
   nocturne: "Nocturne",
   "first-light": "First light",
@@ -34,6 +41,16 @@ export const DAYPART_NAMES: Record<Daypart, string> = {
   rush: "Evening rush",
   "last-trains": "Last trains",
 };
+
+/** The daypart's name at `ms` in Mountain time: there's no working day or
+ * evening rush on a Saturday or a Sunday. */
+export function daypartName(ms: number): string {
+  const daypart = daypartAt(mountainHour(ms));
+  const weekend = /^(Sat|Sun)/.test(mountainDay(ms));
+  if (weekend && daypart === "work") return "The day";
+  if (weekend && daypart === "rush") return "Evening";
+  return DAYPART_NAMES[daypart];
+}
 
 export interface GroundState {
   station: string;
@@ -235,10 +252,8 @@ export class Valley {
   /** "FRIDAY 5:42 PM · EVENING RUSH · 302 VEHICLES MOVING" */
   status1(): string {
     const t = this.now();
-    const vehicles = this.schedule.vehiclesAt(t);
-    const moving =
-      vehicles > 1 ? `${vehicles.toLocaleString("en-US")} vehicles moving` : vehicles === 1 ? "one vehicle moving" : "the trains are asleep";
-    return `${mountainDay(t)} ${mountainTime(t)} · ${DAYPART_NAMES[this.daypart()]} · ${moving}`;
+    const moving = transitPhrase(this.schedule.transitAt(t), "running") || "no buses or trains running";
+    return `${mountainDay(t)} ${mountainTime(t)} · ${daypartName(t)} · ${moving}`;
   }
 
   /** "CLEAN AIR · NO NEW SNOW · LAKE 4,189.8 FT" */

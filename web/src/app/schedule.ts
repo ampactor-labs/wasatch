@@ -178,14 +178,19 @@ export class Schedule {
     return best;
   }
 
-  /** Vehicles in service (all modes) at `utcMs`, from every day covering it. */
-  vehiclesAt(utcMs: number): number {
-    let n = 0;
+  /** UTA's buses and trains in service at `utcMs`, by the schedule. Trains
+   * are the rail trips (TRAX, the S-Line, FrontRunner) under way, counted
+   * exactly; buses (ski buses among them) are every other trip in service. */
+  transitAt(utcMs: number): { buses: number; trains: number } {
+    let all = 0;
+    let trains = 0;
     for (const d of this.days.values()) {
       const m = Math.floor((utcMs - d.t0) / 60_000);
-      if (m >= 0 && m < (d.day.active?.length ?? 0)) n += d.day.active?.[m] ?? 0;
+      if (m >= 0 && m < (d.day.active?.length ?? 0)) all += d.day.active?.[m] ?? 0;
+      const sec = (utcMs - d.t0) / 1000;
+      for (const trip of d.day.rail) if (sec >= trip.t[0]! && sec <= trip.t.at(-1)!) trains++;
     }
-    return n;
+    return { buses: Math.max(0, all - trains), trains };
   }
 
   /** Bus stop events per minute at `utcMs`. */

@@ -10,7 +10,7 @@ import { mountainDate, mountainDay, mountainTime, receiptText } from "./captions
 import { keyName, midiName } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
 import { SECTION_NAMES, type PlayScreen } from "./screen.ts";
-import type { Valley } from "./valley.ts";
+import { transitPhrase, type Valley } from "./valley.ts";
 import { STATIONS } from "../data/ground.ts";
 import type { Conductor } from "../data/conductor.ts";
 import { Kind, encodeSolo, encodeTwelve } from "../engine/protocol.ts";
@@ -417,12 +417,12 @@ export class Menu {
         ? row(
             "Transit",
             "the groove: bells, horn, drums, bass",
-            `${schedule.vehiclesAt(now)} in service · ${c.stats.observed} departures seen live, ${c.stats.scheduled} from the schedule`,
+            `${transitPhrase(schedule.transitAt(now), "in service") || "nothing in service"} · ${c.stats.observed} departures seen live, ${c.stats.scheduled} from the schedule`,
             c.stats.windows ? `live ${mountainTime(c.stats.latest)}` : "waiting",
             "UTA realtime, by the conductor",
             "https://www.rideuta.com/",
           )
-        : row("Transit", "the groove: bells, horn, drums, bass", `${schedule.vehiclesAt(now)} vehicles in service`, "scheduled", "UTA GTFS", "https://www.rideuta.com/Rider-Info/Developer-Resources"),
+        : row("Transit", "the groove: bells, horn, drums, bass", transitPhrase(schedule.transitAt(now), "in service") || "nothing in service", "scheduled", "UTA GTFS", "https://www.rideuta.com/Rider-Info/Developer-Resources"),
       row(
         "Great Salt Lake",
         "the drone under everything; whether phrases come home",

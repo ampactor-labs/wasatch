@@ -23,12 +23,11 @@ import {
 } from "../art/index.ts";
 import { esc, n } from "../art/util.ts";
 import type { BarEvent, DayEvent, FeatureEvent, Heard, PlayEvent, PulseEvent, SoloEvent, ThemeEvent } from "../engine/host.ts";
-import { daypartAt } from "../art/sky.ts";
 import { featureCaption, harmonyCaption, mountainDate, mountainDay, mountainHour, mountainTime, receiptText, type Caption, type Family } from "./captions.ts";
 import { midiName } from "./music.ts";
 import { dialLabels, homePos, keyName, noteName, push, type Key } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
-import { DAYPART_NAMES, type Valley } from "./valley.ts";
+import { daypartName, type Valley } from "./valley.ts";
 import { season } from "../data/feeds.ts";
 import { STATIONS } from "../data/ground.ts";
 
@@ -481,7 +480,7 @@ export class PlayScreen {
     if (this.day) {
       this.dayTick();
     } else {
-      if (clock) clock.textContent = `${v.shift ? "⏪ " : ""}${mountainTime(t)} · ${DAYPART_NAMES[v.daypart()]}`;
+      if (clock) clock.textContent = `${v.shift ? "⏪ " : ""}${mountainTime(t)} · ${daypartName(t)}`;
       this.drawVehicles();
     }
     const s = this.pickStickers();
@@ -496,7 +495,7 @@ export class PlayScreen {
   private dayTick(): void {
     const now = this.dayNow();
     const clock = this.root.querySelector('[data-slot="clock"]');
-    if (clock) clock.textContent = `⏩ ${mountainTime(now)} · ${DAYPART_NAMES[daypartAt(mountainHour(now))]}`;
+    if (clock) clock.textContent = `⏩ ${mountainTime(now)} · ${daypartName(now)}`;
     this.drawVehicles();
   }
 
