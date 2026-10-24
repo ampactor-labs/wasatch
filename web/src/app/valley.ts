@@ -236,7 +236,8 @@ export class Valley {
   status1(): string {
     const t = this.now();
     const vehicles = this.schedule.vehiclesAt(t);
-    const moving = vehicles > 0 ? `${vehicles.toLocaleString("en-US")} vehicles moving` : "the trains are asleep";
+    const moving =
+      vehicles > 1 ? `${vehicles.toLocaleString("en-US")} vehicles moving` : vehicles === 1 ? "one vehicle moving" : "the trains are asleep";
     return `${mountainDay(t)} ${mountainTime(t)} · ${DAYPART_NAMES[this.daypart()]} · ${moving}`;
   }
 
