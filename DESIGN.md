@@ -31,7 +31,12 @@ What's live, and where it differs from the rest of this document:
   seismometers once for everyone, and seals 30-second windows at immutable
   URLs. It runs as a small Node process on the page's own TypeScript, not
   on the .wasm, on Railway at wasatch-production.up.railway.app, and the
-  site reads it (conductor/README.md).
+  site reads it (conductor/README.md). It also serves UTA's fleet as it is,
+  every 15 seconds: the map draws each train where UTA last saw it, and the
+  status line counts the trains and buses out, by trip, saying it's live
+  (more than the schedule's "in service", since a bus laying over already
+  carries its next trip). Rewind and A Day in Twelve Minutes stay on the
+  schedule.
 - **The sky every phone agrees on.** NWS observations come every five
   minutes and have gaps (Oct 22 lost ten hours). The plan reads one slot an
   hour, the report nearest :54 in the quarter hour before the hour, and

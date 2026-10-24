@@ -5,7 +5,7 @@
 // KSLC's METARs; the same clock.
 
 import type { Host } from "../engine/host.ts";
-import { Kind, encodeRail } from "../engine/protocol.ts";
+import { Kind, encodeRail, type Fleet } from "../engine/protocol.ts";
 import type { Valley } from "../app/valley.ts";
 import { DELAY_MS, STATIONS, type Baseband, type GroundFeed } from "./ground.ts";
 import type { Lake, Quake, Reading, River, SkyNow, Snow } from "./feeds.ts";
@@ -62,9 +62,9 @@ export class Conductor implements GroundFeed {
     this.onLost?.();
   }
 
-  /** The sky and the slow values, before the first bar. */
+  /** The sky, the slow values and the fleet, before the first bar. */
   async prime(): Promise<void> {
-    await Promise.all([this.sky(), this.slow()]);
+    await Promise.all([this.sky(), this.slow(), this.vehicles()]);
   }
 
   start(): void {
@@ -78,6 +78,7 @@ export class Conductor implements GroundFeed {
     });
     every(5 * 60_000, () => this.sky());
     every(15 * 60_000, () => this.slow());
+    every(10_000, () => this.vehicles());
   }
 
   stop(): void {
@@ -88,6 +89,13 @@ export class Conductor implements GroundFeed {
   private async sky(): Promise<void> {
     const sky = await this.get<{ value: SkyNow; observed: number }>("/sky.json");
     if (sky) this.valley.conductorSky({ value: sky.value, observed: sky.observed, receipt: "live" });
+  }
+
+  /** UTA's fleet now, while the listener is in the present. */
+  private async vehicles(): Promise<void> {
+    if (this.valley.shift) return;
+    const fleet = await this.get<Fleet>("/vehicles.json");
+    if (fleet) this.valley.conductorFleet(fleet);
   }
 
   private async slow(): Promise<void> {

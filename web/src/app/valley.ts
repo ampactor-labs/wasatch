@@ -18,7 +18,8 @@ import {
   type Snow,
 } from "../data/feeds.ts";
 import type { Host } from "../engine/host.ts";
-import { Kind, encodeBikes, encodeDay, encodeNetwork, encodeQuakes, encodeSky, encodeSkyline, encodeSlow } from "../engine/protocol.ts";
+import { Kind, encodeBikes, encodeDay, encodeNetwork, encodeQuakes, encodeSky, encodeSkyline, encodeSlow, type Fleet } from "../engine/protocol.ts";
+import { utcNow } from "../engine/clock.ts";
 import { CREST_ELEV_FT } from "../art/crest-data.ts";
 import { mountainDay, mountainHour, mountainTime, type ValleyNow } from "./captions.ts";
 import type { Schedule } from "./schedule.ts";
@@ -125,6 +126,20 @@ export class Valley {
   // --- From the conductor --------------------------------------------------
 
   /** The sky as the conductor read it (from KSLC's METARs). */
+  /** UTA's fleet as the conductor last saw it: each train where it is, and
+   * how many trains and buses are out. */
+  fleet: Fleet | null = null;
+
+  conductorFleet(fleet: Fleet): void {
+    this.fleet = fleet;
+  }
+
+  /** The live fleet, if it's fresh and the listener is in the present. */
+  liveFleet(): Fleet | null {
+    const f = this.fleet;
+    return f && !this.shift && utcNow() - f.t < 90_000 ? f : null;
+  }
+
   conductorSky(sky: Reading<SkyNow>): void {
     this.sky = sky;
     this.host.post(Kind.SKY, encodeSky(sky.value.hours.filter((h) => !this.sealed.has(h.at))));
@@ -252,7 +267,10 @@ export class Valley {
   /** "FRIDAY 5:42 PM · EVENING RUSH · 302 VEHICLES MOVING" */
   status1(): string {
     const t = this.now();
-    const moving = transitPhrase(this.schedule.transitAt(t), "running") || "no buses or trains running";
+    const live = this.liveFleet();
+    const moving = live
+      ? transitPhrase(live.counts, "out") || "no buses or trains out"
+      : transitPhrase(this.schedule.transitAt(t), "running") || "no buses or trains running";
     return `${mountainDay(t)} ${mountainTime(t)} · ${daypartName(t)} · ${moving}`;
   }
 

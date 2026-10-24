@@ -24,6 +24,10 @@ exactly the same thing, and what the browser can't do on its own:
 - **Sealed windows.** Thirty seconds each, sealed a minute after they open,
   at immutable URLs a phone computes from its clock: the same bytes for
   every phone, so the same notes.
+- **The fleet, live.** UTA's vehicle positions every 15 seconds: each
+  train where it is (one per trip, however many cars report), and how many
+  trains and buses are out, counted by trip. Phones draw the trains there
+  and say the counts are live; a position over two minutes old is left out.
 - **A clock.** An uncached `/time`, read eight times, keeping the fastest
   round trip.
 
@@ -32,6 +36,7 @@ GET /time            {"t": UTC ms}, never cached
 GET /w/<start>.json  a sealed window: rail, bikes, quakes, the ground's baseband
 GET /sky.json        the sky's hours, by the phones' slot rules
 GET /slow.json       the lake, the river, the snow
+GET /vehicles.json   every train where it is, and how many trains and buses are out
 GET /health          what it's doing
 ```
 

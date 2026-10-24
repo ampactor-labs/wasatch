@@ -465,7 +465,11 @@ export class PlayScreen {
     const g = this.root.querySelector(".play__overlay .map-vehicles");
     const proj = this.proj;
     if (!g || !proj) return;
-    const trains = this.deps.schedule.trainsAt(this.dayNow());
+    // Live, each train where UTA last saw it; otherwise (and in Rewind and
+    // A Day in Twelve Minutes) where the schedule says it is.
+    const fleet = this.day ? null : this.deps.valley.liveFleet();
+    const trains = fleet ? fleet.trains.map(([route, , lat, lon]) => ({ route, lat, lon })) : this.deps.schedule.trainsAt(this.dayNow());
+    this.root.querySelector(".play__map")?.classList.toggle("play__map--live", !!fleet);
     const edge = 9;
     g.innerHTML = trains
       .map((t) => {

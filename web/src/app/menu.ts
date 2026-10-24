@@ -412,13 +412,18 @@ export class Menu {
     const hour = sky?.value.hours.find((h) => h.at === Math.floor((now - 20 * 60_000) / 3_600_000) * 3_600_000);
     const bar = screen.currentBar();
     const c = this.deps.conductor;
+    const fleet = valley.liveFleet();
     const rows = [
       c
         ? row(
             "Transit",
             "the groove: bells, horn, drums, bass",
-            `${transitPhrase(schedule.transitAt(now), "in service") || "nothing in service"} · ${c.stats.observed} departures seen live, ${c.stats.scheduled} from the schedule`,
-            c.stats.windows ? `live ${mountainTime(c.stats.latest)}` : "waiting",
+            `${
+              fleet
+                ? transitPhrase(fleet.counts, "out") || "nothing out"
+                : transitPhrase(schedule.transitAt(now), "in service") || "nothing in service"
+            } · ${c.stats.observed} departures seen live, ${c.stats.scheduled} from the schedule`,
+            fleet ? `live ${mountainTime(fleet.t)}` : c.stats.windows ? `live ${mountainTime(c.stats.latest)}` : "waiting",
             "UTA realtime, by the conductor",
             "https://www.rideuta.com/",
           )

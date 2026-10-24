@@ -83,3 +83,31 @@ test("trains realtime doesn't track keep their schedule", async () => {
     [at(36_200), at(36_200), 0, 1, 21, 0],
   ]);
 });
+
+test("the fleet: trains where they are, one per trip, and buses counted", async () => {
+  const t = new Transit(schedule());
+  await t.load(at(36_000));
+  const now = T0 / 1000 + 36_150;
+  const v = (tripId: string, vehicleId: string, lat: number, age: number) => ({ tripId, vehicleId, lat, lon: -111.9, speed: 10, timestamp: now - age });
+  const fleet = t.fleet({
+    timestamp: now,
+    trips: [],
+    vehicles: [
+      // T1 runs as a two-car consist; the fresher car places it.
+      v("T1", "car-a", 40.71, 40),
+      v("T1", "car-b", 40.7123456, 5),
+      v("T2", "car-c", 40.65, 10),
+      // Two buses, one with two reports, and one gone quiet.
+      v("B1", "bus-1", 40.6, 3),
+      v("B1", "bus-1b", 40.6, 30),
+      v("B2", "bus-2", 40.62, 8),
+      v("B3", "bus-3", 40.63, 600),
+    ],
+  });
+  assert.equal(fleet.t, now * 1000);
+  assert.deepEqual(fleet.counts, { trains: 2, buses: 2 });
+  assert.deepEqual(fleet.trains, [
+    [0, 1, 40.65, -111.9, 10],
+    [1, 0, 40.71235, -111.9, 5],
+  ]);
+});

@@ -14,6 +14,7 @@
 //   GET /w/<start>.json  a sealed window (start a multiple of 30 000 ms)
 //   GET /sky.json        the sky's hours, by the phones' slot rules
 //   GET /slow.json       the lake, the river, the snow
+//   GET /vehicles.json   every train where it is, and how many trains and buses are out
 //   GET /health          what it's doing
 //
 // Environment: PORT (8080), SCHEDULE (where the compiled schedule is served,
@@ -74,6 +75,8 @@ const ground = new GroundSource("wasatch-symphony:conductor:0:node");
 const seenQuakes = new Set<string>();
 let sky: string | null = null;
 let slow: string | null = null;
+let vehicles: string | null = null;
+let fleetStats: { t: number; trains: number; buses: number } | null = null;
 const errors: Record<string, string> = {};
 const every = (ms: number, name: string, f: () => Promise<void>) => {
   const run = () =>
@@ -100,6 +103,13 @@ every(10_000, "transit", async () => {
   transit.ingest(decodeFeed(new Uint8Array(await res.arrayBuffer())));
   const now = Date.now();
   for (const row of transit.drain()) windows.addRail(row, now);
+});
+every(15_000, "vehicles", async () => {
+  const res = await fetch(`${UTA}/Vehicle`, { headers: UA });
+  if (!res.ok) throw new Error(`Vehicle ${res.status}`);
+  const fleet = transit.fleet(decodeFeed(new Uint8Array(await res.arrayBuffer())));
+  vehicles = JSON.stringify(fleet);
+  fleetStats = { t: fleet.t, ...fleet.counts };
 });
 every(30_000, "bikes", async () => {
   if (!(await bikes.poll())) return;
@@ -170,12 +180,14 @@ const server = createServer((req, res) => {
   }
   if (url.pathname === "/sky.json") return sky ? send(res, 200, sky, "public, max-age=60") : send(res, 503, '{"error":"warming up"}', "no-store");
   if (url.pathname === "/slow.json") return slow ? send(res, 200, slow, "public, max-age=300") : send(res, 503, '{"error":"warming up"}', "no-store");
+  if (url.pathname === "/vehicles.json") return vehicles ? send(res, 200, vehicles, "public, max-age=5") : send(res, 503, '{"error":"warming up"}', "no-store");
   if (url.pathname === "/health") {
     const body = {
       ok: true,
       up_s: Math.round((Date.now() - started) / 1000),
       windows: { sealed: windows.sealedCount, latest: windows.latestSealed(), kept: windows.persistent ? "on disk" : "in memory" },
       transit: transit.stats,
+      fleet: fleetStats && { ...fleetStats, age_s: Math.round((Date.now() - fleetStats.t) / 1000) },
       ground: STATIONS.map((s, b) => ({ station: s.code, level: Number(ground.level(b).toFixed(2)), fresh: ground.freshAt(b, Date.now() - 30_000) })),
       errors,
     };

@@ -8,6 +8,7 @@
 
 import type { Feed } from "./gtfsrt.ts";
 import type { RailRow } from "./windows.ts";
+import type { Fleet } from "../../web/src/engine/protocol.ts";
 
 interface DayFile {
   rail: { r: number; d: number; s: number[]; t: number[] }[];
@@ -39,6 +40,13 @@ interface Pending {
   /** When it was first listed. */
   since: number;
 }
+
+type FleetTrain = Fleet["trains"][number];
+
+/** A vehicle position older than this is left out of the fleet. */
+const FLEET_FRESH_S = 120;
+
+const round5 = (x: number) => Math.round(x * 1e5) / 1e5;
 
 /** A prediction more than this far in the past is stale. */
 const CURRENT_MS = 60_000;
@@ -185,6 +193,29 @@ export class Transit {
   /** The departures settled since the last call. */
   drain(): RailRow[] {
     return this.settled.splice(0);
+  }
+
+  /** The live fleet from a vehicle-position feed: every train where it is
+   * (one per trip, however many cars report), and how many trains and
+   * buses are out. A position over two minutes old is left out. */
+  fleet(feed: Feed): Fleet {
+    const feedMs = feed.timestamp * 1000;
+    const trains = new Map<string, FleetTrain>();
+    const buses = new Set<string>();
+    for (const v of feed.vehicles) {
+      if (!v.tripId || !Number.isFinite(v.lat) || !Number.isFinite(v.lon) || v.lat === 0) continue;
+      const age = Math.max(0, feed.timestamp - v.timestamp);
+      if (age > FLEET_FRESH_S) continue;
+      const ref = this.refFor(v.tripId, feedMs);
+      if (!ref) {
+        buses.add(v.tripId);
+        continue;
+      }
+      // The freshest car of a consist stands for the train.
+      const seen = trains.get(v.tripId);
+      if (!seen || age < seen[4]) trains.set(v.tripId, [ref.trip.r, ref.trip.d ?? 0, round5(v.lat), round5(v.lon), age]);
+    }
+    return { t: feedMs, trains: [...trains.values()].sort((a, b) => a[0] - b[0] || a[2] - b[2]), counts: { trains: trains.size, buses: buses.size } };
   }
 
   /** The schedule's departures from `from` to `to` for trains realtime

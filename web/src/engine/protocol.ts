@@ -397,3 +397,13 @@ export const PIANO_SAMPLES: [string, number][] = [
 export const PIANO_FIRST: string[] = ["C4", "Ds4", "Fs4", "A4", "C5", "Ds5", "Fs5"];
 /** Seconds of each sample kept. */
 export const PIANO_SECONDS = 7;
+
+/** The conductor's /vehicles.json: UTA's fleet as last seen. */
+export interface Fleet {
+  /** The feed's time, UTC ms. */
+  t: number;
+  /** [route index, direction, lat, lon, seconds old], one per train. */
+  trains: [number, number, number, number, number][];
+  /** Trips out now, counted by trip (a three-car train is one). */
+  counts: { trains: number; buses: number };
+}
