@@ -22,8 +22,10 @@ import {
   type Vantage,
 } from "../art/index.ts";
 import { esc, n } from "../art/util.ts";
-import type { BarEvent, FeatureEvent, Heard, PulseEvent, ThemeEvent } from "../engine/host.ts";
-import { featureCaption, harmonyCaption, mountainHour, mountainTime, receiptText, type Caption, type Family } from "./captions.ts";
+import type { BarEvent, DayEvent, FeatureEvent, Heard, PlayEvent, PulseEvent, SoloEvent, ThemeEvent } from "../engine/host.ts";
+import { daypartAt } from "../art/sky.ts";
+import { featureCaption, harmonyCaption, mountainDate, mountainDay, mountainHour, mountainTime, receiptText, type Caption, type Family } from "./captions.ts";
+import { midiName } from "./music.ts";
 import { dialLabels, homePos, keyName, noteName, push, type Key } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
 import { DAYPART_NAMES, type Valley } from "./valley.ts";
@@ -55,7 +57,12 @@ export interface ScreenDeps {
   onVantage(code: number): void;
   onMenu(): void;
   onPause(): void;
+  /** Leave A Day in Twelve Minutes for the live valley. */
+  onLive(): void;
 }
+
+/** How much faster than the day A Day in Twelve Minutes runs. */
+const DAY_SPEED = 120;
 
 export class PlayScreen {
   readonly root: HTMLElement;
@@ -77,6 +84,12 @@ export class PlayScreen {
   private mapTimer = 0;
   private tickTimer = 0;
   private paused = false;
+  /** A Day in Twelve Minutes: the moment of the day at a bar, and when it was heard. */
+  private day: { ms: number; at: number; first: number } | null = null;
+  private dayTimer = 0;
+  /** A run's solo: how many notes, how many heard. */
+  private solo = { count: 0, heard: 0 };
+  private noteTimer = 0;
 
   constructor(root: HTMLElement, deps: ScreenDeps) {
     this.root = root;
@@ -88,7 +101,8 @@ export class PlayScreen {
       <header class="play__sky">
         <div class="play__skyline"></div>
       </header>
-      <div class="play__status" role="status"><span data-slot="clock"></span><span data-slot="key"></span><span data-slot="section"></span></div>
+      <div class="play__status" role="status"><span data-slot="clock"></span><span data-slot="key"></span><span data-slot="section"></span><button type="button" class="play__live" data-action="live" hidden>Back to live</button></div>
+      <div class="play__note" aria-hidden="true"></div>
       <section class="play__valley">
         <div class="play__mapwrap">
           <div class="play__map" aria-label="The valley map"></div>
@@ -116,6 +130,7 @@ export class PlayScreen {
     });
     this.root.querySelector('[data-action="menu"]')?.addEventListener("click", () => this.deps.onMenu());
     this.root.querySelector('[data-action="pause"]')?.addEventListener("click", () => this.deps.onPause());
+    this.root.querySelector('[data-action="live"]')?.addEventListener("click", () => this.deps.onLive());
     this.layout();
     window.addEventListener("resize", () => {
       clearTimeout(this.resizeTimer);
@@ -207,8 +222,12 @@ export class PlayScreen {
     const data = defaultSkylineData();
     const summit = data.summits[s];
     if (!summit) return;
-    const target = summit.i / (data.elevFt.length - 1);
     this.root.querySelectorAll(".skyline-flag").forEach((f, k) => f.classList.toggle("skyline-flag--active", k === s));
+    this.hopToT(summit.i / (data.elevFt.length - 1));
+  }
+
+  /** Hop along the ridge to `target` (0 Ben Lomond … 1 Mount Nebo). */
+  private hopToT(target: number): void {
     cancelAnimationFrame(this.riderAnim);
     const from = this.riderT;
     this.riderT = target;
@@ -291,11 +310,18 @@ export class PlayScreen {
     return `${casing.join("")}${lines.join("")}<g class="map-stations">${stations}</g>`;
   }
 
+  /** The moment of the day being played: the listening time, or in A Day
+   * in Twelve Minutes, the day's racing clock. */
+  private dayNow(): number {
+    if (this.day) return this.day.ms + (performance.now() - this.day.at) * DAY_SPEED;
+    return this.deps.valley.now() - 90_000;
+  }
+
   private drawVehicles(): void {
     const g = this.root.querySelector(".map-vehicles");
     const proj = this.proj;
     if (!g || !proj) return;
-    const trains = this.deps.schedule.trainsAt(this.deps.valley.now() - 90_000);
+    const trains = this.deps.schedule.trainsAt(this.dayNow());
     g.innerHTML = trains
       .map((t) => {
         const [x, y] = proj.project(t.lat, t.lon);
@@ -378,8 +404,12 @@ export class PlayScreen {
     const v = this.deps.valley;
     const t = v.now();
     const clock = this.root.querySelector('[data-slot="clock"]');
-    if (clock) clock.textContent = `${v.shift ? "⏪ " : ""}${mountainTime(t)} · ${DAYPART_NAMES[v.daypart()]}`;
-    this.drawVehicles();
+    if (this.day) {
+      this.dayTick();
+    } else {
+      if (clock) clock.textContent = `${v.shift ? "⏪ " : ""}${mountainTime(t)} · ${DAYPART_NAMES[v.daypart()]}`;
+      this.drawVehicles();
+    }
     const s = this.pickStickers();
     if (s[0] !== this.stickers[0] || s[1] !== this.stickers[1]) {
       this.stickers = s;
@@ -388,7 +418,47 @@ export class PlayScreen {
     if (v.daypart() !== this.daypart) this.renderSky();
   }
 
+  /** Five times a second in A Day in Twelve Minutes: the racing clock and the trains. */
+  private dayTick(): void {
+    const now = this.dayNow();
+    const clock = this.root.querySelector('[data-slot="clock"]');
+    if (clock) clock.textContent = `⏩ ${mountainTime(now)} · ${DAYPART_NAMES[daypartAt(mountainHour(now))]}`;
+    this.drawVehicles();
+  }
+
+  private enterDay(e: Heard<BarEvent>): void {
+    this.day = { ms: e.day, at: e.at, first: e.day };
+    this.root.querySelector(".play")?.classList.add("play--day");
+    const live = this.root.querySelector<HTMLButtonElement>('[data-action="live"]');
+    if (live) live.hidden = false;
+    clearInterval(this.dayTimer);
+    this.dayTimer = window.setInterval(() => this.dayTick(), 200);
+    this.caption({
+      text: `${mountainDay(e.day)}, ${mountainDate(e.day).replace(/, \d{4}$/, "")}, from 5 AM to 5 AM, in twelve minutes`,
+      receipt: "scheduled",
+      at: e.at,
+      family: "harmony",
+    });
+  }
+
+  private exitDay(e: Heard<BarEvent>): void {
+    const first = this.day?.first ?? e.at;
+    this.day = null;
+    clearInterval(this.dayTimer);
+    this.root.querySelector(".play")?.classList.remove("play--day");
+    const live = this.root.querySelector<HTMLButtonElement>('[data-action="live"]');
+    if (live) live.hidden = true;
+    this.caption({ text: `That was ${mountainDay(first)} in twelve minutes. Back to the valley, live.`, receipt: "scheduled", at: e.at, family: "harmony" });
+    this.tick();
+  }
+
   onBar(e: Heard<BarEvent>): void {
+    if (e.day > 0) {
+      if (!this.day) this.enterDay(e);
+      else this.day = { ...this.day, ms: e.day, at: e.at };
+    } else if (this.day) {
+      this.exitDay(e);
+    }
     const first = this.bar === null;
     const newSection = first || e.sec !== this.bar?.sec || e.chain !== this.bar?.chain;
     this.bar = e;
@@ -413,8 +483,45 @@ export class PlayScreen {
 
   onFeature(e: Heard<FeatureEvent>): void {
     if (e.k === 11) return; // the bar event captions the boundary
-    const c = featureCaption(e, this.deps.schedule, this.deps.valley.valleyNow(), this.key);
+    const c = featureCaption(e, this.deps.schedule, this.deps.valley.valleyNow(), this.key, this.day !== null);
     if (c) this.caption(c);
+  }
+
+  /** A note the listener played: show it for a moment. */
+  onPlay(e: Heard<PlayEvent>): void {
+    this.flashNote(`♪ ${midiName(e.m)}`);
+  }
+
+  /** A note of the listener's run: the rider skis it along the ridge. */
+  onSolo(e: Heard<SoloEvent>): void {
+    this.solo.heard++;
+    const t = this.solo.count > 1 ? Math.min(1, this.solo.heard / this.solo.count) : 0.5;
+    this.riderT = Math.max(0, t - 0.02);
+    this.hopToT(t);
+    this.flashNote(`♪ ${midiName(e.m)}`);
+    if (this.solo.heard === this.solo.count) {
+      this.caption({ text: "That was your run. Back to the valley.", receipt: "scheduled", at: e.at, family: "harmony" });
+    }
+  }
+
+  onDay(e: Heard<DayEvent>): void {
+    if (!e.ok) this.caption({ text: "That day isn't in the schedule yet.", receipt: "scheduled", at: e.at, family: "harmony" });
+  }
+
+  /** A run is coming: `count` notes. */
+  startSolo(count: number): void {
+    this.solo = { count, heard: 0 };
+  }
+
+  private flashNote(text: string): void {
+    const el = this.root.querySelector<HTMLElement>(".play__note");
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove("play__note--on");
+    void el.offsetWidth;
+    el.classList.add("play__note--on");
+    clearTimeout(this.noteTimer);
+    this.noteTimer = window.setTimeout(() => el.classList.remove("play__note--on"), 900);
   }
 
   onPulse(e: Heard<PulseEvent>): void {
@@ -457,6 +564,12 @@ export class PlayScreen {
 
   destroy(): void {
     clearInterval(this.tickTimer);
+    clearInterval(this.dayTimer);
     cancelAnimationFrame(this.riderAnim);
+  }
+
+  /** Whether A Day in Twelve Minutes is playing. */
+  inDay(): boolean {
+    return this.day !== null;
   }
 }

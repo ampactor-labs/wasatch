@@ -678,3 +678,99 @@ a {
     transition: none;
   }
 }
+
+/* --- A Day in Twelve Minutes, notes the listener plays ----------------------- */
+
+.play__live {
+  appearance: none;
+  margin-left: 12px;
+  padding: 2px 10px 3px;
+  border: 2px solid var(--sun);
+  border-radius: 999px;
+  background: var(--sun);
+  color: var(--ink);
+  font: 700 11px/1.2 var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.play__live[hidden] {
+  display: none;
+}
+.play--day .play__status {
+  background: repeating-linear-gradient(-45deg, var(--ink) 0 14px, #2a2f57 14px 28px);
+}
+.play--day .play__status [data-slot="clock"] {
+  color: var(--pink);
+}
+.play__note {
+  position: fixed;
+  left: 50%;
+  bottom: calc(96px + env(safe-area-inset-bottom));
+  z-index: 20;
+  padding: 6px 14px 8px;
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: var(--sun);
+  box-shadow: var(--shadow-hard);
+  font: 400 22px/1 var(--font-display);
+  opacity: 0;
+  translate: -50% 10px;
+  pointer-events: none;
+  transition:
+    opacity 0.25s ease,
+    translate 0.25s ease;
+}
+.play__note--on {
+  opacity: 1;
+  translate: -50% 0;
+}
+
+/* The play-along ski. */
+.skipad {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 190px;
+  margin: 14px 0 6px;
+  border: 3px solid var(--ink);
+  border-radius: var(--radius);
+  background:
+    repeating-linear-gradient(170deg, rgb(255 255 255 / 0) 0 22px, rgb(79 163 217 / 0.12) 22px 24px),
+    linear-gradient(180deg, #e3f4fb, var(--white));
+  touch-action: none;
+  cursor: ew-resize;
+  user-select: none;
+}
+.skipad:focus-visible {
+  outline: 4px solid var(--pink);
+  outline-offset: 3px;
+}
+.skipad__ski {
+  width: min(86%, 420px);
+  transition: transform 0.08s linear;
+  filter: drop-shadow(3px 5px 0 rgb(27 31 59 / 0.5));
+}
+.skipad__note {
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  font: 400 24px/1 var(--font-display);
+  color: var(--sky-deep);
+}
+.filebtn {
+  display: inline-block;
+  cursor: pointer;
+}
+.run__result {
+  min-height: 1.4em;
+  margin: 14px 0 10px;
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .play__note,
+  .skipad__ski {
+    transition: none;
+  }
+}

@@ -18,9 +18,11 @@ use crate::compose::{
     Bar, BikeEvent, ComposeState, Feature, Harmony, Inst, Mix, Note, QuakeEvent, Slow, Valley,
     compose,
 };
+use crate::listener::{self, SoloNote};
 use crate::music::midi_hz;
 use crate::plan::{ANCHOR_HOURS, Chain, Section, Sky, SkyHour, plan_chain};
 use crate::schedule::{Network, Schedule, ServiceDay};
+use crate::twelve::{self, DayRun};
 use sonido_core::Upconverter;
 use sonido_synth::modal::presets;
 use std::fmt::Write as _;
@@ -83,7 +85,9 @@ pub struct Engine {
     compose_state: ComposeState,
     scratch: Bar,
     pending: Vec<Note>,
-    harmonies: Vec<(Harmony, Mix, Section, u32)>,
+    /// Harmony changes to apply, with the section, the bar and (in A Day in
+    /// Twelve Minutes) the moment of the day the bar stands for.
+    harmonies: Vec<(Harmony, Mix, Section, u32, f64)>,
     features: Vec<Feature>,
     mix: Mix,
     mix_target: Mix,
@@ -98,6 +102,18 @@ pub struct Engine {
     drums: Vec<DrumVoice>,
     bells: Vec<ModalVoice<2>>,
     marimbas: Vec<ModalVoice<1>>,
+    /// The listener's own voice, for playing along.
+    vibes: Vec<ModalVoice<2>>,
+    /// The chord sounding now.
+    now_chord: Option<Harmony>,
+    /// A run, played as a solo; `solo_at` is its first beat (listening ms)
+    /// and the length of a beat.
+    solo: Vec<SoloNote>,
+    solo_at: Option<(f64, f64)>,
+    solo_next: usize,
+    /// A Day in Twelve Minutes, playing or asked for.
+    day: Option<DayRun>,
+    day_request: Option<u32>,
     grains: Vec<ModalVoice<2>>,
     quake_bells: Vec<ModalVoice<2>>,
     horns: Vec<HornVoice>,
@@ -148,6 +164,13 @@ impl Engine {
             drums: (0..12).map(|i| DrumVoice::new(sr, i + 1)).collect(),
             bells: (0..6).map(|_| ModalVoice::new(sr)).collect(),
             marimbas: (0..6).map(|_| ModalVoice::new(sr)).collect(),
+            vibes: (0..6).map(|_| ModalVoice::new(sr)).collect(),
+            now_chord: None,
+            solo: Vec::new(),
+            solo_at: None,
+            solo_next: 0,
+            day: None,
+            day_request: None,
             grains: (0..10).map(|_| ModalVoice::new(sr)).collect(),
             quake_bells: (0..2).map(|_| ModalVoice::new(sr)).collect(),
             horns: (0..10).map(|_| HornVoice::new(sr)).collect(),
@@ -322,6 +345,162 @@ impl Engine {
         self.fade_in_at = None;
     }
 
+    /// The key sounding now (the home key before anything is planned).
+    fn key_now(&self) -> crate::music::Key {
+        self.cursor
+            .map_or(crate::music::Key::new(0, 1), |c| c.section.key)
+    }
+
+    /// Play along: a note on the listener's own vibraphone, picked by a ski's
+    /// edge (−1…1) from the notes in play; a steady edge plays chord tones.
+    pub fn play(&mut self, edge: f32, vel: f32, steady: bool) {
+        let tones = self
+            .now_chord
+            .map_or(([0u8; 4], 0), |h| (h.tones, usize::from(h.n_tones)));
+        let midi = listener::edge_note(self.key_now(), &tones.0[..tones.1], edge, steady);
+        let f = midi_hz(midi as f32);
+        let pan = edge.clamp(-1.0, 1.0) * 0.45;
+        let (gl, gr) = crate::audio::pan_gains(pan);
+        let place = Placement {
+            gl,
+            gr,
+            send: 0.3,
+            cut: 0.0,
+            canyon: 0.0,
+        };
+        let i = pick(&mut self.rr[8], self.vibes.iter().map(|v| v.is_active()));
+        let decay = if steady { 1.3 } else { 0.55 };
+        self.vibes[i].strike_modes(
+            f,
+            presets::VIBRAPHONE,
+            decay,
+            Hit {
+                vel: vel.clamp(0.05, 1.0),
+                hardness: if steady { 0.35 } else { 0.6 },
+                gain: 0.32,
+            },
+            place,
+        );
+        let _ = writeln!(
+            self.outbox,
+            r#"{{"t":"play","f":{:.0},"m":{midi}}}"#,
+            self.frame
+        );
+    }
+
+    /// A Day in Twelve Minutes: play service date `date` (yyyymmdd) as its
+    /// own piece from the next bar line; 0 returns to the live valley.
+    pub fn twelve(&mut self, date: u32) {
+        self.day_request = None;
+        if date != 0 {
+            self.day_request = Some(date);
+            return;
+        }
+        if self.day.take().is_some() {
+            if let Some(l) = self.listening_ms(self.frame) {
+                self.pending.retain(|n| n.at_ms < l);
+                self.harmonies.retain(|h| h.0.at_ms < l);
+                self.features.retain(|f| f.at_ms < l);
+            }
+            self.cursor = None;
+        }
+    }
+
+    /// Switch to the day at the bar the cursor would compose next.
+    fn begin_day(&mut self, date: u32, l: f64) {
+        let Some(t0) = self
+            .inputs
+            .schedule
+            .days
+            .iter()
+            .find(|d| d.date == date)
+            .map(|d| d.t0_ms)
+        else {
+            let _ = writeln!(
+                self.outbox,
+                r#"{{"t":"day","f":{:.0},"date":{date},"ok":false}}"#,
+                self.frame
+            );
+            return;
+        };
+        let piece0 = self
+            .cursor
+            .map_or(l + 300.0, |c| {
+                c.section.start_ms + f64::from(c.bar) * c.section.bar_ms()
+            })
+            .max(l + 50.0);
+        let run = twelve::plan_day(date, t0, piece0, &self.inputs.schedule, &self.inputs.sky);
+        self.pending.retain(|n| n.at_ms < piece0);
+        self.harmonies.retain(|h| h.0.at_ms < piece0);
+        self.features.retain(|f| f.at_ms < piece0);
+        self.compose_state = ComposeState::default();
+        self.cursor = run
+            .chain
+            .sections
+            .first()
+            .map(|&section| Cursor { section, bar: 0 });
+        let _ = writeln!(
+            self.outbox,
+            r#"{{"t":"day","f":{:.0},"date":{date},"ok":true,"anchor":{:.0}}}"#,
+            self.frame, run.anchor
+        );
+        self.day = Some(run);
+    }
+
+    /// A run's solo, starting at the next bar line; empty stops it.
+    pub fn set_solo(&mut self, mut notes: Vec<SoloNote>) {
+        notes.retain(|n| n.beat.is_finite() && n.beats.is_finite() && n.vel.is_finite());
+        notes.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        self.solo = notes;
+        self.solo_next = 0;
+        self.solo_at = None;
+        if self.solo.is_empty() {
+            return;
+        }
+        let Some(l) = self.listening_ms(self.frame) else {
+            return;
+        };
+        let (start, beat_ms) = self.cursor.map_or((l + 500.0, 600.0), |c| {
+            let bar_ms = c.section.bar_ms();
+            let since = l - c.section.start_ms;
+            let next = c.section.start_ms + ((since + 300.0) / bar_ms).ceil() * bar_ms;
+            (next, bar_ms / 4.0)
+        });
+        self.solo_at = Some((start, beat_ms));
+    }
+
+    /// Queue the solo's notes that fall inside the lookahead.
+    fn solo_ahead(&mut self, l: f64) {
+        let Some((start, beat_ms)) = self.solo_at else {
+            return;
+        };
+        let key = self.key_now();
+        while let Some(n) = self.solo.get(self.solo_next) {
+            let at = start + f64::from(n.beat) * beat_ms;
+            if at > l + LOOKAHEAD_MS {
+                break;
+            }
+            if at >= l - 50.0 {
+                self.pending.push(Note {
+                    at_ms: at,
+                    inst: Inst::Piano,
+                    midi: listener::solo_midi(key, n.degree) as f32,
+                    vel: n.vel.clamp(0.1, 1.0),
+                    dur_ms: (f64::from(n.beats.max(0.25)) * beat_ms * 1.2) as f32,
+                    variant: 200,
+                    lat: f32::NAN,
+                    lon: f32::NAN,
+                    feature: crate::compose::NO_FEATURE,
+                });
+            }
+            self.solo_next += 1;
+        }
+        self.sort_pending();
+        if self.solo_next >= self.solo.len() {
+            self.solo_at = None;
+        }
+    }
+
     fn sort_pending(&mut self) {
         self.pending.sort_unstable_by(|a, b| {
             a.at_ms
@@ -371,19 +550,36 @@ impl Engine {
     /// Start composing at listening time `l`, mid-section if need be,
     /// replaying the section's earlier bars silently to rebuild the voicing.
     fn locate(&mut self, l: f64) {
-        let Some(sec) = self.chain.as_ref().and_then(|c| c.section_at(l)).copied() else {
+        // A jump out of A Day in Twelve Minutes ends it.
+        if self
+            .day
+            .as_ref()
+            .is_some_and(|r| l < r.piece0 || l >= r.end())
+        {
+            self.day = None;
+        }
+        let sec = match &self.day {
+            Some(run) => run.chain.section_at(l).copied(),
+            None => self.chain.as_ref().and_then(|c| c.section_at(l)).copied(),
+        };
+        let Some(sec) = sec else {
             return;
         };
         let bar = (((l - sec.start_ms) / sec.bar_ms()).floor().max(0.0) as u32).min(sec.bars() - 1);
         self.compose_state = ComposeState::default();
+        let valley = self.inputs.valley();
         for b in 0..bar {
-            compose(
-                &sec,
-                b,
-                &self.inputs.valley(),
-                &mut self.compose_state,
-                &mut self.scratch,
-            );
+            match &self.day {
+                Some(run) => twelve::compose_day(
+                    &sec,
+                    b,
+                    run,
+                    &valley,
+                    &mut self.compose_state,
+                    &mut self.scratch,
+                ),
+                None => compose(&sec, b, &valley, &mut self.compose_state, &mut self.scratch),
+            }
         }
         self.cursor = Some(Cursor { section: sec, bar });
         self.compose_next(l - 50.0);
@@ -394,13 +590,28 @@ impl Engine {
         let Some(cur) = self.cursor else {
             return;
         };
-        compose(
-            &cur.section,
-            cur.bar,
-            &self.inputs.valley(),
-            &mut self.compose_state,
-            &mut self.scratch,
-        );
+        let valley = self.inputs.valley();
+        match &self.day {
+            Some(run) => twelve::compose_day(
+                &cur.section,
+                cur.bar,
+                run,
+                &valley,
+                &mut self.compose_state,
+                &mut self.scratch,
+            ),
+            None => compose(
+                &cur.section,
+                cur.bar,
+                &valley,
+                &mut self.compose_state,
+                &mut self.scratch,
+            ),
+        }
+        let day_ms = self
+            .day
+            .as_ref()
+            .map_or(0.0, |r| r.day_at(self.scratch.start_ms));
         for n in &self.scratch.notes {
             if n.at_ms >= not_before {
                 self.pending.push(*n);
@@ -408,7 +619,7 @@ impl Engine {
         }
         for h in &self.scratch.harmony {
             self.harmonies
-                .push((*h, self.scratch.mix, cur.section, cur.bar));
+                .push((*h, self.scratch.mix, cur.section, cur.bar, day_ms));
         }
         for f in &self.scratch.features {
             if f.at_ms >= not_before {
@@ -428,6 +639,20 @@ impl Engine {
             return;
         }
         let end = cur.section.end_ms();
+        if let Some(run) = &self.day {
+            match run.chain.section_at(end + 1.0).copied() {
+                Some(section) => {
+                    self.cursor = Some(Cursor { section, bar: 0 });
+                }
+                None => {
+                    // The day is over: back to the valley as it is now.
+                    self.day = None;
+                    self.ensure_chain(end + 1.0);
+                    self.locate(end + 1.0);
+                }
+            }
+            return;
+        }
         self.ensure_chain(end + 1.0);
         let next = self
             .chain
@@ -449,10 +674,14 @@ impl Engine {
 
     /// Compose bars whose start is within the lookahead of `l`.
     fn compose_ahead(&mut self, l: f64) {
+        if let Some(date) = self.day_request.take() {
+            self.begin_day(date, l);
+        }
         self.ensure_chain(l);
         if self.cursor.is_none() {
             self.locate(l);
         }
+        self.solo_ahead(l);
         let mut guard = 0;
         while let Some(c) = self.cursor {
             let start = c.section.start_ms + f64::from(c.bar) * c.section.bar_ms();
@@ -476,7 +705,9 @@ impl Engine {
         let mix = self.mix_target;
         match n.inst {
             Inst::Piano => {
-                let welcome = n.variant >= 100;
+                // Variants: 100 + summit for the welcome, 200 for a run's solo.
+                let welcome = (100..200).contains(&n.variant);
+                let solo = n.variant >= 200;
                 let pan = ((n.midi - 66.0) / 30.0).clamp(-0.5, 0.5);
                 let (gl, gr) = crate::audio::pan_gains(pan);
                 let place = Placement {
@@ -488,6 +719,8 @@ impl Engine {
                 };
                 let gain = if welcome {
                     0.62
+                } else if solo {
+                    0.58
                 } else {
                     0.55 * mix.piano.max(0.6)
                 };
@@ -505,7 +738,13 @@ impl Engine {
                     welcome,
                 );
                 let summit = if welcome { n.variant - 100 } else { n.variant };
-                if welcome
+                if solo {
+                    let _ = writeln!(
+                        self.outbox,
+                        r#"{{"t":"solo","f":{frame:.0},"m":{}}}"#,
+                        n.midi
+                    );
+                } else if welcome
                     || n.feature != crate::compose::NO_FEATURE
                     || self
                         .cursor
@@ -662,8 +901,17 @@ impl Engine {
         }
     }
 
-    fn apply_harmony(&mut self, h: Harmony, mix: Mix, sec: Section, bar: u32, frame: f64) {
+    fn apply_harmony(
+        &mut self,
+        h: Harmony,
+        mix: Mix,
+        sec: Section,
+        bar: u32,
+        day_ms: f64,
+        frame: f64,
+    ) {
         self.mix_target = mix;
+        self.now_chord = Some(h);
         // Pad: keep voices whose note stays, release the rest, start the new.
         let keep: Vec<i32> = h.pad.iter().copied().filter(|&m| m > 0).collect();
         for v in &mut self.pad {
@@ -723,7 +971,7 @@ impl Engine {
         }
         let _ = writeln!(
             self.outbox,
-            r#"{{"t":"bar","f":{frame:.0},"chain":{},"sec":{},"kind":{},"bar":{bar},"bars":{},"bpm":{:.2},"start":{:.0},"c":{},"r":{},"pc":{},"pr":{},"nc":{},"nr":{},"why":{},"home":{},"chord":"{}","act":{:.3},"bright":{:.3},"tension":{:.3},"haze":{:.3},"inv":{:.3}}}"#,
+            r#"{{"t":"bar","f":{frame:.0},"chain":{},"sec":{},"kind":{},"bar":{bar},"bars":{},"bpm":{:.2},"start":{:.0},"c":{},"r":{},"pc":{},"pr":{},"nc":{},"nr":{},"why":{},"home":{},"chord":"{}","act":{:.3},"bright":{:.3},"tension":{:.3},"haze":{:.3},"inv":{:.3},"day":{day_ms:.0}}}"#,
             sec.chain,
             sec.index,
             sec.kind as u8,
@@ -783,7 +1031,7 @@ impl Engine {
             }
             while let Some(&h) = self.harmonies.first().filter(|h| h.0.at_ms <= l) {
                 self.harmonies.remove(0);
-                self.apply_harmony(h.0, h.1, h.2, h.3, frame);
+                self.apply_harmony(h.0, h.1, h.2, h.3, h.4, frame);
             }
             while let Some(&n) = self.pending.first().filter(|n| n.at_ms <= l) {
                 self.pending.remove(0);
@@ -827,6 +1075,9 @@ impl Engine {
                 v.tick(&mut stream);
             }
             for v in &mut self.marimbas {
+                v.tick(&mut stream);
+            }
+            for v in &mut self.vibes {
                 v.tick(&mut stream);
             }
             for v in &mut self.grains {

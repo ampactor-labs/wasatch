@@ -21,6 +21,7 @@ import {
   encodeSample,
   encodeSkyline,
   encodeSlow,
+  encodeTwelve,
   type DayFile,
   type NetworkFile,
 } from "../../web/src/engine/protocol.ts";
@@ -39,7 +40,12 @@ export interface RenderResult {
   hash: string;
 }
 
-export async function render(date: string, time: string, seconds: number, opts: { scalar?: boolean; sampleRate?: number } = {}): Promise<RenderResult> {
+export async function render(
+  date: string,
+  time: string,
+  seconds: number,
+  opts: { scalar?: boolean; sampleRate?: number; twelve?: { date: string; after: number } } = {},
+): Promise<RenderResult> {
   const sr = opts.sampleRate ?? 48_000;
   const wasm = readFileSync(join(pub, "engine", opts.scalar ? "wasatch.wasm" : "wasatch-simd.wasm"));
   const module = await WebAssembly.compile(wasm);
@@ -80,7 +86,9 @@ export async function render(date: string, time: string, seconds: number, opts: 
   const events: string[] = [];
   const decoder = new TextDecoder();
   const started = performance.now();
+  const twelveAt = opts.twelve ? Math.round(opts.twelve.after * sr) : -1;
   for (let done = 0; done < frames; done += 128) {
+    if (opts.twelve && done <= twelveAt && twelveAt < done + 128) engine.post(Kind.TWELVE, encodeTwelve(opts.twelve.date));
     const n = Math.min(128, frames - done);
     const [l, r] = engine.render(n);
     left.set(l, done);
@@ -121,7 +129,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   const scalar = process.argv.includes("--scalar");
   const [date = "2026-10-23", time = "17:40", secs = "60", out] = args;
-  const r = await render(date, time, Number(secs), { scalar });
+  const t = process.argv.indexOf("--twelve");
+  const twelve = t >= 0 ? { date: process.argv[t + 1] ?? date, after: 5 } : undefined;
+  const r = await render(date, time, Number(secs), { scalar, ...(twelve ? { twelve } : {}) });
   const kinds: Record<string, number> = {};
   for (const e of r.events) {
     const t = (JSON.parse(e) as { t: string }).t;

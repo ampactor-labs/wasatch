@@ -5,7 +5,8 @@
 //
 // Without a url it serves dist/ itself at /wasatch/.
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,6 +116,7 @@ try {
     if (state.captions.length === 0) failures.push(`${view.name}: no captions`);
     // Feeds can be down; anything else is a bug.
     const real = errors.filter((e) => !/Failed to load resource|net::|CORS|status of 4|status of 5/.test(e));
+    if (view.name === "desktop") await interactions(page, failures);
     for (const e of real) failures.push(`${view.name}: ${e}`);
     for (const e of errors) console.log(`  ${e}`);
     await page.close();
@@ -123,6 +125,102 @@ try {
   await browser.close();
   server?.close();
 }
+/** A zig-zag run down Snowbird, as GPX. */
+function gpx(): string {
+  const t0 = Date.parse("2026-12-20T17:00:00Z");
+  const rows: string[] = [];
+  let lat = 40.565;
+  let lon = -111.657;
+  for (let i = 0; i <= 240; i++) {
+    lat -= 0.00004;
+    lon += (Math.floor(i / 20) % 2 === 0 ? 1 : -1) * 0.00005;
+    rows.push(`<trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}"><ele>${(3000 - i * 2).toFixed(1)}</ele><time>${new Date(t0 + i * 2000).toISOString()}</time></trkpt>`);
+  }
+  return `<?xml version="1.0"?><gpx version="1.1" creator="smoke"><trk><name>Smoke test run</name><trkseg>${rows.join("")}</trkseg></trk></gpx>`;
+}
+
+/** Drive every menu feature once and listen for what the engine reports. */
+async function interactions(page: import("puppeteer-core").Page, failures: string[]): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __events: string[]; __wasatch: { host: { onEvent(cb: (e: { t: string; day?: number }) => void): void } } };
+    w.__events = [];
+    w.__wasatch.host.onEvent((e) => w.__events.push(e.t === "bar" ? `bar:${e.day ?? 0}` : e.t));
+  });
+  const events = () => page.evaluate(() => (window as unknown as { __events: string[] }).__events.splice(0));
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // The sheet slides up for 280 ms; click once it has landed.
+  const menu = async (panel: string) => {
+    await page.click('[data-action="menu"]');
+    await page.waitForSelector(`[data-panel="${panel}"]`, { visible: true });
+    await sleep(450);
+    await page.click(`[data-panel="${panel}"]`);
+    await sleep(450);
+  };
+
+  // A Day in Twelve Minutes.
+  await menu("rewind");
+  await page.waitForSelector("[data-twelve]", { visible: true });
+  await page.click("[data-twelve]");
+  await sleep(9000);
+  let ev = await events();
+  const dayBars = ev.filter((e) => e.startsWith("bar:") && e !== "bar:0").length;
+  const clock = await page.$eval('[data-slot="clock"]', (e) => e.textContent ?? "");
+  console.log(`  day in twelve: ${dayBars} day bars, clock "${clock}"`);
+  if (dayBars < 2) failures.push("A Day in Twelve Minutes: no day bars");
+  if (!clock.startsWith("⏩")) failures.push("A Day in Twelve Minutes: the clock isn't racing");
+  await page.click('[data-action="live"]');
+  await sleep(4000);
+  ev = await events();
+  if (!ev.includes("bar:0")) failures.push("Back to live: no live bars");
+
+  // Play along on the pad.
+  await menu("play");
+  const pad = await page.waitForSelector(".skipad", { visible: true });
+  const box = await pad!.boundingBox();
+  if (box) {
+    await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2);
+    await page.mouse.down();
+    for (let k = 0; k <= 10; k++) {
+      await page.mouse.move(box.x + box.width * (0.2 + k * 0.06), box.y + box.height / 2);
+      await sleep(120);
+    }
+    await page.mouse.up();
+  }
+  await sleep(1200);
+  ev = await events();
+  const plays = ev.filter((e) => e === "play").length;
+  console.log(`  play along: ${plays} notes`);
+  if (plays < 3) failures.push(`Play along: only ${plays} notes`);
+  await page.click(".sheet__close");
+
+  // Add your run.
+  const dir = mkdtempSync(join(tmpdir(), "wasatch-smoke-"));
+  const file = join(dir, "run.gpx");
+  writeFileSync(file, gpx());
+  await sleep(400);
+  await menu("run");
+  const input = await page.waitForSelector('input[type="file"]');
+  await (input as import("puppeteer-core").ElementHandle<HTMLInputElement>).uploadFile(file);
+  await sleep(9000);
+  ev = await events();
+  const solo = ev.filter((e) => e === "solo").length;
+  const result = await page.$eval(".run__result", (e) => e.textContent ?? "");
+  console.log(`  run: "${result}" · ${solo} solo notes heard`);
+  if (solo < 3) failures.push(`Add your run: only ${solo} solo notes`);
+  await page.click(".sheet__close");
+
+  // Show mappings.
+  await sleep(400);
+  await menu("mappings");
+  await page.waitForSelector("table.mappings", { visible: true });
+  await sleep(1500);
+  const rows = await page.$$eval("table.mappings tbody tr", (r) => r.length);
+  console.log(`  mappings: ${rows} streams`);
+  if (rows < 10) failures.push(`Show mappings: only ${rows} rows`);
+  if (shots) await page.screenshot({ path: join(shots, "desktop-mappings.png") });
+  await page.click(".sheet__close");
+}
+
 if (failures.length) {
   console.error(`FAIL\n${failures.join("\n")}`);
   process.exit(1);

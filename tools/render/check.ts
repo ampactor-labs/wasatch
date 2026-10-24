@@ -5,7 +5,8 @@
 //   node tools/render/check.ts [YYYY-MM-DD] [--seconds 90]
 //
 // Fails if any rendering is too loud or too quiet, peaks above the ceiling,
-// goes silent, produces a NaN, or differs between two runs.
+// goes silent, produces a NaN, or differs between two runs; then plays the
+// day before as A Day in Twelve Minutes and holds that to the same rules.
 import { render, type RenderResult } from "./render.ts";
 
 const SR = 48_000;
@@ -139,6 +140,35 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (!same) failures.push(`${time}: two identical renders differ`);
     if (features < Math.floor((seconds - settle) / 40)) failures.push(`${time}: only ${features} captions in ${seconds} s`);
   }
+  // A Day in Twelve Minutes: the day before, start to finish, then live.
+  const days = Object.keys(manifest.days).sort();
+  const yesterday = days[days.indexOf(day) - 1] ?? day;
+  const r = await render(day, "17:40", 740, { twelve: { date: yesterday, after: 5 } });
+  const SRATE = 48_000;
+  const parsed = r.events.map((e) => JSON.parse(e) as { t: string; day?: number; v?: number; k?: number });
+  const dayBars = parsed.filter((e) => e.t === "bar" && (e.day ?? 0) > 0).length;
+  const backLive = parsed.findIndex((e, i) => e.t === "bar" && e.day === 0 && parsed.slice(0, i).some((x) => x.t === "bar" && (x.day ?? 0) > 0)) >= 0;
+  const moments = new Set(parsed.filter((e) => e.t === "feat" && e.v !== undefined && e.v >= 1 && e.v <= 5 && e.k !== 11).map((e) => Math.round(e.v!)));
+  const minutes: number[] = [];
+  for (let m = 0; m < 12; m++) {
+    const a = Math.round((8 + m * 60) * SRATE);
+    const b = a + 60 * SRATE;
+    minutes.push(loudness(r.left.subarray(a, b), r.right.subarray(a, b)));
+  }
+  const tp = Math.max(truePeak(r.left), truePeak(r.right));
+  const quiet = longestSilence(r.left.subarray(8 * SRATE), r.right.subarray(8 * SRATE));
+  console.log(
+    `${yesterday} in twelve minutes: ${dayBars} bars, ${Math.min(...minutes).toFixed(1)} to ${Math.max(...minutes).toFixed(1)} LUFS a minute, ${tp.toFixed(2)} dBTP, longest quiet ${quiet.toFixed(2)} s, moments ${[...moments].sort().join(",")}`,
+  );
+  if (dayBars < 295) failures.push(`twelve: only ${dayBars} bars of the day`);
+  if (!backLive) failures.push("twelve: never came back to live");
+  if (minutes.some((l) => !(l > -21 && l < -12))) failures.push(`twelve: a minute outside −21…−12 LUFS (${minutes.map((l) => l.toFixed(1)).join(" ")})`);
+  if (tp > -0.5) failures.push(`twelve: true peak ${tp.toFixed(2)} dBTP`);
+  if (quiet > 2.5) failures.push(`twelve: ${quiet.toFixed(2)} s of near-silence`);
+  for (const [m, name] of [[2, "the night's last train"], [3, "sunrise"], [4, "sunset"]] as const) {
+    if (!moments.has(m)) failures.push(`twelve: no caption for ${name}`);
+  }
+
   if (failures.length) {
     console.error(`FAIL\n${failures.join("\n")}`);
     process.exit(1);

@@ -105,7 +105,8 @@ const REASON: Record<number, (to: Key) => string> = {
   8: (to) => `Night drift → ${keyName(to)}`,
 };
 
-/** The caption for a section's first bar: why the harmony moved. */
+/** The caption for a section's first bar: why the harmony moved. In A Day
+ * in Twelve Minutes, prefixed with the moment of the day. */
 export function harmonyCaption(bar: Heard<BarEvent>): Caption {
   const to = { c: bar.c, r: bar.r };
   const from = { c: bar.pc, r: bar.pr };
@@ -117,13 +118,36 @@ export function harmonyCaption(bar: Heard<BarEvent>): Caption {
   }
   const swap = changedNote(from, to);
   if (swap) text += ` (${swap[0]} for ${swap[1]})`;
+  if (bar.day > 0) return { text: `${mountainTime(bar.day)} · ${text.charAt(0).toLowerCase()}${text.slice(1)}`, receipt: "scheduled", at: bar.at, family: "harmony" };
   return { text, receipt: "scheduled", at: bar.at, family: "harmony", intro: INTROS.harmony };
 }
 
-export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valley: ValleyNow, key: Key): Caption | null {
+/** Feature values that mark A Day in Twelve Minutes' moments (engine/src/twelve.rs). */
+export const MOMENT = { FIRST_TRAIN: 1, LAST_TRAIN: 2, SUNRISE: 3, SUNSET: 4, FIRST_SKI: 5, CLOCK: 6 } as const;
+
+export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valley: ValleyNow, key: Key, inDay = false): Caption | null {
   const family = FEATURE_FAMILY[f.k];
   if (!family || family === "harmony") return null;
-  const base = { at: f.at, family, intro: INTROS[family] };
+  const base = { at: f.at, family, intro: inDay ? undefined : INTROS[family] };
+  if (inDay) {
+    const when = mountainTime(f.ev);
+    const v = Math.round(f.v);
+    if (family === "trax" && v === MOMENT.FIRST_TRAIN) {
+      return { ...base, text: `${when} · the morning's first train: ${schedule.routeName(f.route)} from ${schedule.stopName(f.stop)}`, receipt: "scheduled" };
+    }
+    if (family === "trax" && v === MOMENT.LAST_TRAIN) {
+      return { ...base, text: `${when} · the night's last train: ${schedule.routeName(f.route)} from ${schedule.stopName(f.stop)}`, receipt: "scheduled" };
+    }
+    if (family === "sky" && v === MOMENT.SUNRISE) return { ...base, text: `${when} · the sun clears the Wasatch`, receipt: "scheduled" };
+    if (family === "sky" && v === MOMENT.SUNSET) return { ...base, text: `${when} · the sun drops behind the Oquirrhs`, receipt: "scheduled" };
+    if (family === "skibus" && v === MOMENT.FIRST_SKI) {
+      const r = schedule.network.routes[f.route];
+      return { ...base, text: `${when} · the first ski bus ${SKI_ROUTE[r?.short ?? ""] ?? "up the canyon"}`, receipt: "scheduled" };
+    }
+    if (family === "quake") return { ...base, text: `${when} · M${f.v.toFixed(1)} earthquake`, receipt: "live", observed: f.ev };
+    if (family === "theme") return { ...base, text: `${when} · first light, and the Wasatch theme in ${keyName(key)}`, receipt: "scheduled" };
+    return null;
+  }
   switch (family) {
     case "trax": {
       const route = schedule.routeName(f.route);

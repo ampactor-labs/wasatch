@@ -35,6 +35,8 @@ export interface BarEvent {
   tension: number;
   haze: number;
   inv: number;
+  /** In A Day in Twelve Minutes, the moment of the day the bar stands for (UTC ms); 0 live. */
+  day: number;
 }
 export interface FeatureEvent {
   t: "feat";
@@ -57,7 +59,24 @@ export interface ThemeEvent {
   s: number;
   m: number;
 }
-export type EngineEvent = (BarEvent | FeatureEvent | PulseEvent | ThemeEvent) & { f: number };
+/** A note the listener played along with. */
+export interface PlayEvent {
+  t: "play";
+  m: number;
+}
+/** A note of the listener's run, as a solo. */
+export interface SoloEvent {
+  t: "solo";
+  m: number;
+}
+/** A Day in Twelve Minutes was asked for: whether the day is in the schedule. */
+export interface DayEvent {
+  t: "day";
+  date: number;
+  ok: boolean;
+  anchor?: number;
+}
+export type EngineEvent = (BarEvent | FeatureEvent | PulseEvent | ThemeEvent | PlayEvent | SoloEvent | DayEvent) & { f: number };
 export type Heard<E> = E & { /** performance.now() when it's heard */ at: number };
 
 type Listener = (e: Heard<EngineEvent>) => void;
@@ -142,8 +161,12 @@ export class Host {
     this.node?.port.postMessage({ type: "post", kind, bytes }, [bytes.buffer]);
   }
 
-  onEvent(cb: Listener): void {
+  /** Hear the engine's events as they sound; returns a way to stop. */
+  onEvent(cb: Listener): () => void {
     this.listeners.push(cb);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== cb);
+    };
   }
 
   /** The tap: resume audio (as "playback" on iOS, so the Silent switch and the

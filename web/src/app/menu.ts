@@ -6,12 +6,15 @@ import { esc } from "../art/util.ts";
 import { icon, type IconName } from "../art/index.ts";
 import type { Host } from "../engine/host.ts";
 import { clockEstimate } from "../engine/clock.ts";
-import { mountainDate, mountainTime, receiptText } from "./captions.ts";
-import { keyName } from "./music.ts";
+import { mountainDate, mountainDay, mountainTime, receiptText } from "./captions.ts";
+import { keyName, midiName } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
 import { SECTION_NAMES, type PlayScreen } from "./screen.ts";
 import type { Valley } from "./valley.ts";
 import { STATIONS } from "../data/ground.ts";
+import { Kind, encodeSolo, encodeTwelve } from "../engine/protocol.ts";
+import { PlayAlong } from "./playalong.ts";
+import { parseGpx, soloFromRun } from "./run.ts";
 
 export interface MenuDeps {
   host: Host;
@@ -21,14 +24,40 @@ export interface MenuDeps {
   base: string;
 }
 
-type PanelId = "rewind" | "tune" | "mappings" | "about";
+type PanelId = "play" | "run" | "rewind" | "tune" | "mappings" | "about";
 
 const ITEMS: { id: PanelId; title: string; blurb: string; icon: IconName }[] = [
-  { id: "rewind", title: "Rewind", blurb: "Hear an earlier hour of the valley", icon: "chairlift" },
+  { id: "play", title: "Play along", blurb: "Tip your phone like a ski; it can't play a wrong note", icon: "snowflake" },
+  { id: "run", title: "Add your run", blurb: "A GPX of your run becomes a solo over the valley", icon: "mountain" },
+  { id: "rewind", title: "Rewind", blurb: "An earlier hour, or a whole day in twelve minutes", icon: "chairlift" },
   { id: "tune", title: "Line up with a friend", blurb: "Nudge this phone to match the one next to it", icon: "bell" },
   { id: "mappings", title: "Show mappings", blurb: "Every stream, what it plays, and where it came from", icon: "seismometer" },
-  { id: "about", title: "About", blurb: "What this is, who made the data, the licenses", icon: "mountain" },
+  { id: "about", title: "About", blurb: "What this is, who made the data, the licenses", icon: "gull-small" },
 ];
+
+/** Record `ms` of what this phone is playing; resolves with a download URL. */
+function recordClip(host: Host, ms: number): Promise<{ href: string; ext: string }> {
+  const node = host.output();
+  if (!node) return Promise.reject(new Error("nothing is playing"));
+  const dest = host.ctx.createMediaStreamDestination();
+  node.connect(dest);
+  const type = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"].find((t) => MediaRecorder.isTypeSupported(t));
+  const rec = new MediaRecorder(dest.stream, type ? { mimeType: type } : undefined);
+  const chunks: Blob[] = [];
+  rec.ondataavailable = (e) => {
+    if (e.data.size) chunks.push(e.data);
+  };
+  return new Promise((resolve, reject) => {
+    rec.onerror = () => reject(new Error("the recorder failed"));
+    rec.onstop = () => {
+      node.disconnect(dest);
+      const blob = new Blob(chunks, { type: rec.mimeType });
+      resolve({ href: URL.createObjectURL(blob), ext: rec.mimeType.includes("mp4") ? "m4a" : rec.mimeType.includes("ogg") ? "ogg" : "webm" });
+    };
+    rec.start(1000);
+    window.setTimeout(() => rec.stop(), ms);
+  });
+}
 
 const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
@@ -38,6 +67,15 @@ export class Menu {
   private closeTimer = 0;
   private raf = 0;
   private refresh = 0;
+  private playing: PlayAlong | null = null;
+  /** Undone whenever the panel changes or closes. */
+  private cleanup: (() => void)[] = [];
+
+  private tidy(): void {
+    this.playing?.stop();
+    this.playing = null;
+    for (const f of this.cleanup.splice(0)) f();
+  }
 
   constructor(deps: MenuDeps) {
     this.deps = deps;
@@ -66,6 +104,7 @@ export class Menu {
     clearTimeout(this.closeTimer);
     cancelAnimationFrame(this.raf);
     clearInterval(this.refresh);
+    this.tidy();
     this.body().innerHTML = html;
     this.sheet.hidden = false;
     requestAnimationFrame(() => this.sheet.classList.add("sheet--open"));
@@ -76,6 +115,7 @@ export class Menu {
     this.sheet.classList.remove("sheet--open");
     cancelAnimationFrame(this.raf);
     clearInterval(this.refresh);
+    this.tidy();
     this.closeTimer = window.setTimeout(() => (this.sheet.hidden = true), 250);
     this.deps.screen.root.querySelector<HTMLElement>('[data-action="menu"]')?.focus();
   }
@@ -92,7 +132,9 @@ export class Menu {
   }
 
   panel(id: PanelId): void {
-    if (id === "rewind") this.rewind();
+    if (id === "play") this.playAlong();
+    else if (id === "run") this.run();
+    else if (id === "rewind") this.rewind();
     else if (id === "tune") this.tune();
     else if (id === "mappings") this.mappings();
     else this.about();
@@ -111,24 +153,167 @@ export class Menu {
       if (at < earliest) break;
       hours.push({ label: `${back} h ago · ${mountainDate(at).replace(/, \d{4}$/, "")} ${mountainTime(at)}`, shift: -back * 3_600_000 });
     }
+    // Whole days: any compiled day that has begun, as far back as the sky
+    // observations reach.
+    const now = Date.now();
+    const days = Object.entries(schedule.manifest.t0)
+      .filter(([, t0]) => t0 + 5 * 3_600_000 < now && t0 > now - 4 * 86_400_000)
+      .sort((a, b) => b[1] - a[1])
+      .map(([date, t0]) => ({ date, label: now - t0 < 29 * 3_600_000 ? "Today so far" : `${mountainDay(t0 + 12 * 3_600_000)}, ${mountainDate(t0 + 12 * 3_600_000).replace(/, \d{4}$/, "")}` }));
+    const inDay = this.deps.screen.inDay();
     this.show(`<h2 class="sheet__title" id="sheet-title">Rewind</h2>
-      <p class="sheet__lede">Hear the valley as it was. The schedule, the sky, the lake and the quakes come back; GREENbike and the ground only play live.</p>
-      ${valley.shift ? `<button type="button" class="btn btn--sun" data-shift="0">Back to live</button>` : ""}
+      ${valley.shift || inDay ? `<button type="button" class="btn btn--sun" data-shift="0">Back to live</button>` : ""}
+      <h3 class="sheet__sub">A Day in Twelve Minutes</h3>
+      <p class="sheet__lede">A whole day, 5 AM to 5 AM, composed for the speed: three hundred bars, every bar 4.8 minutes of the day, the harmony moving every 38. Watch the trains race across the map.</p>
+      <div class="chips">${days.map((d) => `<button type="button" class="chip" data-twelve="${d.date}">${esc(d.label)}</button>`).join("")}</div>
+      <h3 class="sheet__sub">An earlier hour</h3>
+      <p class="fine">The schedule, the sky, the lake and the quakes come back; GREENbike and the ground only play live.</p>
       <div class="chips">${hours
         .filter((_, i) => i < 6 || i % 3 === 2)
         .map((h) => `<button type="button" class="chip${h.shift === valley.shift ? " chip--on" : ""}" data-shift="${h.shift}">${esc(h.label)}</button>`)
         .join("")}</div>`);
     this.body()
+      .querySelectorAll<HTMLButtonElement>("[data-twelve]")
+      .forEach((b) =>
+        b.addEventListener("click", async () => {
+          if (valley.shift) {
+            valley.shift = 0;
+            host.setTimeShift(0);
+          }
+          await valley.loadDays();
+          host.post(Kind.TWELVE, encodeTwelve(b.dataset.twelve ?? null));
+          this.close();
+        }),
+      );
+    this.body()
       .querySelectorAll<HTMLButtonElement>("[data-shift]")
       .forEach((b) =>
         b.addEventListener("click", async () => {
           const shift = Number(b.dataset.shift);
+          if (this.deps.screen.inDay()) host.post(Kind.TWELVE, encodeTwelve(null));
           valley.shift = shift;
           await valley.loadDays();
           host.setTimeShift(shift);
           this.close();
         }),
       );
+  }
+
+  // --- Play along --------------------------------------------------------------
+
+  private playAlong(): void {
+    const motion = PlayAlong.hasMotion();
+    this.show(`<h2 class="sheet__title" id="sheet-title">Play along</h2>
+      <p class="sheet__lede">${motion ? "Hold your phone flat like a ski and tip it onto its edges." : "Drag along the ski, or use the arrow keys."} Hold an edge and it plays the chord; wobble and it plays the notes between. It can't play a wrong note, and only you hear it.</p>
+      ${motion ? `<button type="button" class="btn btn--sun" data-strap>Strap in</button>` : ""}
+      <div class="skipad" tabindex="0" role="slider" aria-label="Your ski's edge" aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0">
+        <svg class="skipad__ski" viewBox="-160 -40 320 80" aria-hidden="true">
+          <path d="M-140 -14 H118 C138 -14 150 -26 154 -34 C158 -22 152 4 128 14 H-140 C-150 14 -154 8 -154 0 C-154 -8 -150 -14 -140 -14 Z" fill="#FF4F9A" stroke="#1B1F3B" stroke-width="5" stroke-linejoin="round"/>
+          <path d="M-120 -2 H100" stroke="#FFD23F" stroke-width="6" stroke-linecap="round"/>
+          <rect x="-34" y="-24" width="68" height="20" rx="6" fill="#1B1F3B"/>
+        </svg>
+        <output class="skipad__note" aria-live="polite"></output>
+      </div>
+      <p class="fine">${motion ? "No sensor prompt? Drag along the ski instead." : "Tap the ski for a chord tone."}</p>`);
+    const pad = this.body().querySelector<HTMLElement>(".skipad");
+    const ski = this.body().querySelector<SVGElement>(".skipad__ski");
+    if (!pad || !ski) return;
+    const play = new PlayAlong(this.deps.host, (edge) => {
+      ski.style.transform = `rotate(${(edge * 30).toFixed(1)}deg)`;
+      pad.setAttribute("aria-valuenow", edge.toFixed(2));
+    });
+    this.playing = play;
+    play.run();
+    this.body()
+      .querySelector<HTMLButtonElement>("[data-strap]")
+      ?.addEventListener("click", async (e) => {
+        const b = e.currentTarget as HTMLButtonElement;
+        const ok = await play.strapIn();
+        b.textContent = ok ? "Strapped in: tip it" : "No motion sensor here; drag instead";
+        b.disabled = true;
+      });
+    const edgeAt = (x: number) => {
+      const r = pad.getBoundingClientRect();
+      return ((x - r.left) / r.width) * 2 - 1;
+    };
+    pad.addEventListener("pointerdown", (e) => {
+      pad.setPointerCapture(e.pointerId);
+      play.edge(edgeAt(e.clientX));
+      play.tap();
+    });
+    pad.addEventListener("pointermove", (e) => {
+      if (pad.hasPointerCapture(e.pointerId)) play.edge(edgeAt(e.clientX));
+    });
+    let keyEdge = 0;
+    pad.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        keyEdge = Math.max(-1, Math.min(1, keyEdge + (e.key === "ArrowLeft" ? -0.14 : 0.14)));
+        play.edge(keyEdge);
+        e.preventDefault();
+      } else if (e.key === " " || e.key === "Enter") {
+        play.tap();
+        e.preventDefault();
+      }
+    });
+    const out = pad.querySelector("output");
+    this.cleanup.push(
+      this.deps.host.onEvent((ev) => {
+        if (ev.t === "play" && out) out.textContent = `♪ ${midiName(ev.m)}`;
+      }),
+    );
+  }
+
+  // --- Add your run --------------------------------------------------------------
+
+  private run(): void {
+    const { host, screen } = this.deps;
+    this.show(`<h2 class="sheet__title" id="sheet-title">Add your run</h2>
+      <p class="sheet__lede">Load a GPX from Slopes, Strava, a watch or any tracker. Your run becomes a piano solo over the valley: the vertical is the melody coming down, every turn is a note, speed is how hard it's played. The file is read on this device and never leaves it.</p>
+      <label class="btn btn--sun filebtn">Choose a GPX<input type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden /></label>
+      <p class="run__result" aria-live="polite"></p>
+      <button type="button" class="btn" data-clip hidden>Save a 30-second clip</button>
+      <p class="fine" data-cliphint hidden>The clip starts with your solo; it's a recording of this phone's audio, saved to your device.</p>`);
+    const input = this.body().querySelector<HTMLInputElement>('input[type="file"]');
+    const result = this.body().querySelector<HTMLElement>(".run__result");
+    const clip = this.body().querySelector<HTMLButtonElement>("[data-clip]");
+    const hint = this.body().querySelector<HTMLElement>("[data-cliphint]");
+    input?.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file || !result) return;
+      try {
+        const { name, points } = parseGpx(await file.text());
+        const { run, notes } = soloFromRun(points, name || file.name.replace(/\.gpx$/i, ""));
+        host.post(Kind.SOLO, encodeSolo(notes));
+        screen.startSolo(notes.length);
+        const ft = Math.round(run.dropM * 3.28084).toLocaleString("en-US");
+        const mi = (run.distanceM / 1609.344).toFixed(1);
+        result.textContent = `${run.name ? `${run.name}: ` : ""}${ft} ft of vertical, ${mi} mi, ${run.turns} turns, as ${notes.length} notes. It starts at the next bar.`;
+        screen.caption({ text: `Your run: ${ft} ft of vertical, ${run.turns} turns, as a solo`, receipt: "live", observed: Date.now(), at: performance.now(), family: "harmony" });
+        if (clip && "MediaRecorder" in window) {
+          clip.hidden = false;
+          if (hint) hint.hidden = false;
+        }
+      } catch (err) {
+        result.textContent = err instanceof Error ? err.message : String(err);
+      }
+    });
+    clip?.addEventListener("click", () => {
+      clip.disabled = true;
+      clip.textContent = "Recording… 30 s";
+      void recordClip(host, 30_000).then(
+        (url) => {
+          clip.disabled = false;
+          clip.textContent = "Save a 30-second clip";
+          const a = document.createElement("a");
+          a.href = url.href;
+          a.download = `wasatch-run.${url.ext}`;
+          a.click();
+        },
+        (err: unknown) => {
+          clip.textContent = `Couldn't record: ${err instanceof Error ? err.message : String(err)}`;
+        },
+      );
+    });
   }
 
   // --- Line up --------------------------------------------------------------
@@ -254,6 +439,7 @@ export class Menu {
     const canvas = this.body().querySelector<HTMLCanvasElement>(".spectrogram");
     const analyser = this.deps.host.analyser(2048);
     if (!canvas || !analyser) return;
+    this.cleanup.push(() => this.deps.host.output()?.disconnect(analyser));
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const bins = new Float32Array(analyser.frequencyBinCount);

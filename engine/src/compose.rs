@@ -294,10 +294,10 @@ pub struct Valley<'a> {
 /// The composer's carried state: the pad's last voicing and a few flags.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct ComposeState {
-    voicing: Voicing,
-    phrase_featured: bool,
-    fill_pending: bool,
-    last_quake_ms: f64,
+    pub(crate) voicing: Voicing,
+    pub(crate) phrase_featured: bool,
+    pub(crate) fill_pending: bool,
+    pub(crate) last_quake_ms: f64,
 }
 
 /// One composed bar.
@@ -335,7 +335,7 @@ pub fn euclid(k: u32, n: u32, rot: u32) -> u32 {
 }
 
 /// The family levels for a bar.
-fn mix_for(sec: &Section, phrase: u32) -> Mix {
+pub(crate) fn mix_for(sec: &Section, phrase: u32) -> Mix {
     let night = sec.daypart == Daypart::Nocturne;
     let mut m = match sec.kind {
         SectionKind::Theme => Mix {
@@ -407,12 +407,12 @@ fn mix_for(sec: &Section, phrase: u32) -> Mix {
 }
 
 /// Lowest MIDI note of pitch class `pc` at or above `floor`.
-fn at_or_above(pc: u8, floor: i32) -> i32 {
+pub(crate) fn at_or_above(pc: u8, floor: i32) -> i32 {
     floor + (i32::from(pc) - floor).rem_euclid(12)
 }
 
 /// The chord on a bar (and the chord's color).
-fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>) -> Chord {
+pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>) -> Chord {
     let key = sec.key;
     let mode = key.mode();
     let phrase = bar / 8;
@@ -1019,7 +1019,7 @@ pub fn compose(
 /// the current chord, blown in the grade-crossing rhythm (long, long, short,
 /// long).
 #[allow(clippy::too_many_arguments)]
-fn horn(
+pub(crate) fn horn(
     key: Key,
     chord: Chord,
     at: f64,

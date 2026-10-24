@@ -54,6 +54,12 @@ pub mod kind {
     pub const STOP: u32 = 12;
     /// Baseband samples for a ground band.
     pub const GROUND: u32 = 13;
+    /// Play along: a ski's edge picks a note.
+    pub const PLAY: u32 = 14;
+    /// A run's solo.
+    pub const SOLO: u32 = 15;
+    /// A Day in Twelve Minutes (a date), or back to live (0).
+    pub const TWELVE: u32 = 16;
 }
 
 /// A little-endian reader that never panics: short reads return zeros.
@@ -279,6 +285,28 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
             let iq: Vec<(f32, f32)> = (0..n).map(|_| (r.f32(), r.f32())).collect();
             with_engine(|e| e.push_ground(band, lat, lon, &iq))
         }
+        kind::PLAY => {
+            let edge = r.f32();
+            let vel = r.f32();
+            let flags = r.u32();
+            with_engine(|e| e.play(edge, vel, flags & 1 == 1))
+        }
+        kind::SOLO => {
+            let n = r.count(16);
+            let notes = (0..n)
+                .map(|_| crate::listener::SoloNote {
+                    beat: r.f32(),
+                    degree: r.i32(),
+                    vel: r.f32(),
+                    beats: r.f32(),
+                })
+                .collect();
+            with_engine(|e| e.set_solo(notes))
+        }
+        kind::TWELVE => {
+            let date = r.u32();
+            with_engine(|e| e.twelve(date))
+        }
         _ => return -2,
     };
     if ok.is_some() { 0 } else { -1 }
@@ -384,5 +412,35 @@ mod tests {
         assert!(!p.is_null());
         let n = wasatch_outbox_len();
         assert!(n > 0, "start should report a bar and the theme");
+
+        // Play along: one note, reported at once.
+        let mut play = Vec::new();
+        play.extend_from_slice(&0.3f32.to_le_bytes());
+        play.extend_from_slice(&0.8f32.to_le_bytes());
+        play.extend_from_slice(&1u32.to_le_bytes());
+        assert_eq!(post(kind::PLAY, &play), 0);
+        let events = |_: ()| {
+            let n = wasatch_outbox_len() as usize;
+            let p = wasatch_outbox_ptr();
+            String::from_utf8_lossy(unsafe { core::slice::from_raw_parts(p, n) }).into_owned()
+        };
+        assert!(events(()).contains(r#""t":"play""#));
+
+        // A run's solo starts at the next bar line.
+        let mut solo = Vec::new();
+        solo.extend_from_slice(&3u32.to_le_bytes());
+        for (beat, degree) in [(0.0f32, 4i32), (1.0, 2), (2.0, 0)] {
+            solo.extend_from_slice(&beat.to_le_bytes());
+            solo.extend_from_slice(&degree.to_le_bytes());
+            solo.extend_from_slice(&0.7f32.to_le_bytes());
+            solo.extend_from_slice(&1.0f32.to_le_bytes());
+        }
+        assert_eq!(post(kind::SOLO, &solo), 0);
+        let mut heard = String::new();
+        for _ in 0..(48_000 * 10 / 512) {
+            wasatch_render(512);
+            heard.push_str(&events(()));
+        }
+        assert_eq!(heard.matches(r#""t":"solo""#).count(), 3, "{heard}");
     }
 }

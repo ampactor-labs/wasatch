@@ -16,6 +16,9 @@ export const Kind = {
   START: 11,
   STOP: 12,
   GROUND: 13,
+  PLAY: 14,
+  SOLO: 15,
+  TWELVE: 16,
 } as const;
 export type KindCode = (typeof Kind)[keyof typeof Kind];
 
@@ -251,6 +254,33 @@ export function encodeGround(band: number, iq: [number, number][]): Uint8Array {
   w.u32(band).u32(iq.length);
   for (const [i, q] of iq) w.f32(i).f32(q);
   return w.bytes();
+}
+
+/** Play along: a ski's edge (−1…1), how hard, and whether it's steady. */
+export function encodePlay(edge: number, vel: number, steady: boolean): Uint8Array {
+  return new Writer().f32(edge).f32(vel).u32(steady ? 1 : 0).bytes();
+}
+
+export interface SoloNote {
+  /** Onset, beats from the solo's start. */
+  beat: number;
+  /** Scale degree from the tonic near middle C. */
+  degree: number;
+  vel: number;
+  /** Length, beats. */
+  beats: number;
+}
+
+export function encodeSolo(notes: SoloNote[]): Uint8Array {
+  const w = new Writer();
+  w.u32(notes.length);
+  for (const n of notes) w.f32(n.beat).i32(n.degree).f32(n.vel).f32(n.beats);
+  return w.bytes();
+}
+
+/** A Day in Twelve Minutes for a date ("2026-10-23"), or null for live. */
+export function encodeTwelve(date: string | null): Uint8Array {
+  return new Writer().u32(date ? Number(date.replaceAll("-", "")) : 0).bytes();
 }
 
 /** The engine's exports. */

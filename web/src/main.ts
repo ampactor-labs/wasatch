@@ -12,6 +12,7 @@ import { PlayScreen } from "./app/screen.ts";
 import { keyName } from "./app/music.ts";
 import { Menu } from "./app/menu.ts";
 import { Ground } from "./data/ground.ts";
+import { Kind, encodeTwelve } from "./engine/protocol.ts";
 
 const BASE = import.meta.env.BASE_URL;
 const app = document.getElementById("app")!;
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
       onVantage: (code) => h.setVantage(code),
       onMenu: () => menu.open(),
       onPause: () => void toggle(),
+      onLive: () => h.post(Kind.TWELVE, encodeTwelve(null)),
     });
     screen = s;
     const menu = new Menu({ host: h, valley: v, schedule, screen: s, base: BASE });
@@ -132,6 +134,9 @@ async function main(): Promise<void> {
       else if (e.t === "feat") s.onFeature(e);
       else if (e.t === "pulse") s.onPulse(e);
       else if (e.t === "theme") s.onTheme(e);
+      else if (e.t === "play") s.onPlay(e);
+      else if (e.t === "solo") s.onSolo(e);
+      else if (e.t === "day") s.onDay(e);
     });
     // Inside the tap's own call: the audio session, the context, the
     // keep-alive element.
