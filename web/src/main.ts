@@ -175,7 +175,7 @@ async function main(): Promise<void> {
     // A shared link to a day: play it in twelve minutes after the welcome.
     const asked = new URLSearchParams(location.search).get("day");
     if (asked && /^\d{4}-\d{2}-\d{2}$/.test(asked) && asked in schedule.manifest.days) {
-      void v.loadDays([asked]).then(() => window.setTimeout(() => h.post(Kind.TWELVE, encodeTwelve(asked)), 9000));
+      void v.loadDays(schedule.twelveDates(asked)).then(() => window.setTimeout(() => h.post(Kind.TWELVE, encodeTwelve(asked)), 9000));
     }
     // The ground: the city's seismometers, if the server will have us.
     // With a conductor, the ground comes in its windows; without, straight

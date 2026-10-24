@@ -63,7 +63,10 @@ export async function render(
   engine.post(Kind.NETWORK, encodeNetwork(network));
   for (const [d, key] of Object.entries(manifest.days)) {
     const t0 = manifest.t0[d];
-    if (t0 === undefined || Math.abs(t0 - target) > 1.5 * 86_400_000) continue;
+    // The days around the start, and the day to play in twelve minutes with
+    // the next (whose first trains end its night), as the page loads them.
+    const twelve = opts.twelve ? [opts.twelve.date, new Date(Date.parse(`${opts.twelve.date}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10)] : [];
+    if (t0 === undefined || (Math.abs(t0 - target) > 1.5 * 86_400_000 && !twelve.includes(d))) continue;
     const day = JSON.parse(readFileSync(join(pub, "schedule", `day-${key}.json`), "utf8")) as DayFile;
     engine.post(Kind.DAY, encodeDay(d, t0, day));
   }

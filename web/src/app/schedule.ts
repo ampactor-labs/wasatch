@@ -121,6 +121,13 @@ export class Schedule {
       .sort();
   }
 
+  /** What A Day in Twelve Minutes needs for `date`: the day, and the next
+   * one, whose first trains end the night. Every phone loads the same two. */
+  twelveDates(date: string): string[] {
+    const next = new Date(Date.parse(`${date}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+    return [date, next].filter((d) => d in this.manifest.days);
+  }
+
   /** The earliest and latest instants the compiled schedule covers. */
   span(): [number, number] {
     const t0s = Object.values(this.manifest.t0);

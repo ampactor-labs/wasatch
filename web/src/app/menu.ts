@@ -203,7 +203,7 @@ export class Menu {
         valley.shift = 0;
         host.setTimeShift(0);
       }
-      await valley.loadDays([date]);
+      await valley.loadDays(schedule.twelveDates(date));
       host.post(Kind.TWELVE, encodeTwelve(date));
       this.close();
     };

@@ -492,8 +492,10 @@ impl Engine {
             .map(|&section| Cursor { section, bar: 0 });
         let _ = writeln!(
             self.outbox,
-            r#"{{"t":"day","f":{:.0},"date":{date},"ok":true,"anchor":{:.0}}}"#,
-            self.frame, run.anchor
+            r#"{{"t":"day","f":{:.0},"date":{date},"ok":true,"anchor":{:.0},"speed":{:.4}}}"#,
+            self.frame,
+            run.anchor,
+            run.speed()
         );
         self.day = Some(run);
     }

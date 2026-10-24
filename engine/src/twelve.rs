@@ -28,9 +28,11 @@ pub const BPM: f32 = 100.0;
 pub const BARS: u32 = 300;
 /// One bar, ms of listening.
 pub const BAR_MS: f64 = 2400.0;
-/// One bar, ms of the day: 4.8 minutes.
+/// One bar, ms of the day, on a 24-hour day: 4.8 minutes. The night the
+/// clocks fall back is 25 hours and spring forward's 23, so a run keeps its
+/// own ([`DayRun::per_bar_ms`]).
 pub const DAY_PER_BAR_MS: f64 = 288_000.0;
-/// How much faster than the day the piece runs.
+/// How much faster than a 24-hour day the piece runs.
 pub const SPEED: f64 = DAY_PER_BAR_MS / BAR_MS;
 
 /// Feature values that say which moment of the day a caption is.
@@ -62,6 +64,9 @@ pub struct DayRun {
     pub piece0: f64,
     /// The sections: one per phrase.
     pub chain: Chain,
+    /// How much of the day a bar stands for, ms: the day from 05:00 to the
+    /// next 05:00, in 300 bars.
+    pub per_bar_ms: f64,
     first_train: f64,
     last_train: f64,
     first_ski: f64,
@@ -72,7 +77,12 @@ pub struct DayRun {
 impl DayRun {
     /// The moment of the day a listening time stands for.
     pub fn day_at(&self, l: f64) -> f64 {
-        self.anchor + (l - self.piece0) * SPEED
+        self.anchor + (l - self.piece0) * self.speed()
+    }
+
+    /// How much faster than the day the piece runs: 120 on a 24-hour day.
+    pub fn speed(&self) -> f64 {
+        self.per_bar_ms / BAR_MS
     }
 
     /// Listening time when the piece is over.
@@ -118,8 +128,31 @@ fn sun_crossing(from: f64, to: f64, rising: bool) -> f64 {
 pub fn plan_day(date: u32, t0: f64, piece0: f64, schedule: &Schedule, sky_data: &Sky) -> DayRun {
     let anchor = t0 + ANCHOR_HOURS * 3_600_000.0;
     let root = CounterRng::new(u64::from(date)).stream(0xD12);
+    // The day runs from 05:00 to the next day's 05:00: 25 hours the night
+    // the clocks fall back, 23 the night they spring forward, by the next
+    // service day's start (24 when it isn't loaded).
+    let next_t0 = schedule
+        .days
+        .iter()
+        .map(|d| d.t0_ms)
+        .filter(|&t| t > t0 + 12.0 * 3_600_000.0)
+        .fold(f64::INFINITY, f64::min);
+    let day_ms = if (next_t0 - t0 - 86_400_000.0).abs() <= 3_600_000.0 {
+        next_t0 - t0
+    } else {
+        86_400_000.0
+    };
+    let per_bar_ms = day_ms / f64::from(BARS);
+    // The local hour, which the next day's start resets once it's past.
+    let local_h = |ms: f64| {
+        if ms >= next_t0 {
+            24.0 + (ms - next_t0) / 3_600_000.0
+        } else {
+            (ms - t0) / 3_600_000.0
+        }
+    };
     let phrases = BARS.div_ceil(8);
-    let phrase_day = 8.0 * DAY_PER_BAR_MS;
+    let phrase_day = 8.0 * per_bar_ms;
     let mut sections = Vec::with_capacity(phrases as usize);
     let mut key = Key::new(
         i32::from(Key::HOME_COLLECTION),
@@ -129,7 +162,7 @@ pub fn plan_day(date: u32, t0: f64, piece0: f64, schedule: &Schedule, sky_data: 
     for index in 0..phrases {
         let d0 = anchor + f64::from(index) * phrase_day;
         let d1 = d0 + phrase_day;
-        let local_h = (d0 - t0) / 3_600_000.0;
+        let local_h = local_h(d0);
         let rng = root.stream(u64::from(index));
         let activity = schedule.mean_activity(d0, d1);
         let b = brightness_at(sky_data, d0 + phrase_day * 0.5);
@@ -215,10 +248,11 @@ pub fn plan_day(date: u32, t0: f64, piece0: f64, schedule: &Schedule, sky_data: 
     for i in 0..sections.len() {
         sections[i].next_key = sections.get(i + 1).map_or(home, |s| s.key);
     }
-    let end = anchor + 24.0 * 3_600_000.0;
+    let end = anchor + day_ms;
     // The night: the longest pause in rail service. The last train runs
-    // just before it, the next morning's first just after.
-    let rail = schedule.rail_between(anchor, end);
+    // just before it, the next morning's first just after, which on a
+    // weekend can be after the day's 5 AM end: look a few hours past it.
+    let rail = schedule.rail_between(anchor, end + 4.0 * 3_600_000.0);
     let (mut last_train, mut first_train, mut gap) = (f64::NAN, f64::NAN, 0.0);
     for w in rail.windows(2) {
         if w[1].ms - w[0].ms > gap {
@@ -241,6 +275,7 @@ pub fn plan_day(date: u32, t0: f64, piece0: f64, schedule: &Schedule, sky_data: 
             end_ms: piece0 + f64::from(BARS) * BAR_MS,
             sections,
         },
+        per_bar_ms,
         first_train,
         last_train,
         first_ski: schedule
@@ -266,7 +301,7 @@ pub fn compose_day(
     let step_ms = BAR_MS / 16.0;
     let beat_ms = BAR_MS / 4.0;
     let d0 = run.day_at(start);
-    let d1 = d0 + DAY_PER_BAR_MS;
+    let d1 = d0 + run.per_bar_ms;
     let key = sec.key;
     let rng = sec.rng.stream(u64::from(bar) + 1);
     let piece_bar = sec.index * 8 + bar;
@@ -684,6 +719,58 @@ mod tests {
         // The 120× clock: bar 0 is 05:00, the last bar 04:55 the next morning.
         assert!((run.day_at(run.piece0) - run.anchor).abs() < 1e-6);
         assert!((run.day_at(run.end()) - run.anchor - 86_400_000.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_night_the_clocks_fall_back_is_twenty_five_hours_in_twelve_minutes() {
+        let day = |date, t0_ms| ServiceDay {
+            date,
+            t0_ms,
+            rail: vec![],
+            ski: vec![],
+            bus: vec![50; 1800],
+            bus_west: vec![25; 1800],
+        };
+        let mut s = Schedule::default();
+        s.insert(day(20261031, t0()));
+        s.insert(day(20261101, t0() + 25.0 * 3_600_000.0));
+        let run = plan_day(20261031, t0(), 1.0e12, &s, &Sky::default());
+        // 05:00 MDT to 05:00 MST, still 300 bars.
+        assert!((run.day_at(run.end()) - run.anchor - 25.0 * 3_600_000.0).abs() < 1e-3);
+        assert!((run.per_bar_ms - 300_000.0).abs() < 1e-6);
+        assert!((run.speed() - 125.0).abs() < 1e-9);
+        // Without the next day, it's taken as 24 hours.
+        let mut alone = Schedule::default();
+        alone.insert(day(20261031, t0()));
+        let run = plan_day(20261031, t0(), 1.0e12, &alone, &Sky::default());
+        assert!((run.speed() - SPEED).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_weekend_night_ends_with_the_next_days_first_train() {
+        // Saturday: trains to 01:00, and Sunday's first after 06:30, past the
+        // day's 05:00 end, in Sunday's own service day.
+        let sat: Vec<(u32, u32)> = (300..1500).step_by(5).map(|m| (m * 60, m % 2)).collect();
+        let sun: Vec<(u32, u32)> = (390..600).step_by(5).map(|m| (m * 60, m % 2)).collect();
+        let day = |date, t0_ms, rail| ServiceDay {
+            date,
+            t0_ms,
+            rail,
+            ski: vec![],
+            bus: vec![50; 1800],
+            bus_west: vec![25; 1800],
+        };
+        let mut s = Schedule::default();
+        s.insert(day(20261024, t0(), sat));
+        s.insert(day(20261025, t0() + 86_400_000.0, sun));
+        let run = plan_day(20261024, t0(), 1.0e12, &s, &Sky::default());
+        let one_am = t0() + 25.0 * 3_600_000.0 - 5.0 * 60_000.0;
+        assert!(
+            (run.last_train - one_am).abs() < 120_000.0,
+            "last train {}",
+            (run.last_train - t0()) / 3.6e6
+        );
+        assert!(run.first_train > run.anchor + 86_400_000.0);
     }
 
     #[test]

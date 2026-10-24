@@ -142,8 +142,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const seconds = i >= 0 ? Number(args[i + 1]) : 90;
   const { readFileSync } = await import("node:fs");
   const manifest = JSON.parse(readFileSync(new URL("../../web/public/schedule/manifest.json", import.meta.url), "utf8")) as { days: Record<string, string> };
-  // Default: the second compiled date (today), so the day before is loaded too.
-  const day = date ?? Object.keys(manifest.days).sort()[1]!;
+  // Default: today in Salt Lake City (the day before is compiled too), or,
+  // in an old build, the second compiled date.
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Denver" }).format(Date.now());
+  const sorted = Object.keys(manifest.days).sort();
+  const day = date ?? (sorted.includes(today) && sorted.indexOf(today) > 0 ? today : sorted[1]!);
   const times = ["03:10", "06:45", "12:20", "17:40", "22:30"];
   const failures: string[] = [];
   const settle = 12; // the welcome and the fade-in

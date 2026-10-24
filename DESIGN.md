@@ -43,8 +43,14 @@ What's live, and where it differs from the rest of this document:
 - **The archive.** GitHub Pages can't run a server, so the site is the
   archive: each daily build compiles against the deployed site, keeping the
   network append-only and carrying every earlier day forward with its
-  schedule and sealed sky. Rewind and A Day in Twelve Minutes reach back as
-  far as it goes, with a shareable `?day=` link.
+  schedule and sealed sky. Days from before the site existed are filled
+  in: every date since the current feed took effect (Aug 16, 2026) is
+  rebuilt from that feed, which was the published timetable then, and
+  listed in the manifest's `rebuilt`; its sky is sealed from KSLC's METARs
+  in the Iowa Environmental Mesonet's archive, with the models' last 92
+  days for color. Rewind and A Day in Twelve Minutes reach back as far as it
+  goes, with a shareable `?day=` link, and a day plays with the next one
+  loaded, whose first trains end its night.
 - **Clocks.** Without the conductor's `/time`, phones find our server's UTC
   from the moment its `Date` header ticks over (requests every 80 ms), which
   pins it to about half a round trip.

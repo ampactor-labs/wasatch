@@ -62,6 +62,17 @@ test("--previous keeps indices, keeps dropped routes, and carries old dates", ()
   assert.ok(readdirSync(out).includes("day-0000000abc.json"));
   // Skies are the sky tool's to carry.
   assert.deepEqual(man.sky, {});
+  // Every date since the feed took effect is there, kept or rebuilt, and the
+  // rebuilt ones say so.
+  const src = (man as unknown as { source: { feedStart: string } }).source;
+  const rebuilt = (man as unknown as { rebuilt: string[] }).rebuilt;
+  const first = Object.keys(man.days).filter((d) => d !== "2026-01-14").sort()[0]!;
+  assert.equal(first, src.feedStart);
+  assert.ok(rebuilt.includes(src.feedStart));
+  assert.ok(!rebuilt.includes("2026-01-14"));
+  for (let d = Date.parse(`${src.feedStart}T12:00:00Z`); d < Date.parse(`${Object.keys(man.days).sort().at(-1)}T12:00:00Z`); d += 86_400_000) {
+    assert.ok(new Date(d).toISOString().slice(0, 10) in man.days, new Date(d).toISOString().slice(0, 10));
+  }
   // New days are keyed by the feed and the services, so they differ from the
   // old service-only keys.
   for (const [date, key] of Object.entries(man.days)) {

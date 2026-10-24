@@ -13,7 +13,9 @@
 //
 // Writes manifest.json, network.json and one day-<key>.json per distinct set
 // of running services, for every date from yesterday through --days ahead in
-// America/Denver. Times are seconds since the service day's GTFS reference
+// America/Denver. Earlier dates since the feed took effect that no build
+// kept are rebuilt from it, since it was the published timetable then, and
+// listed in the manifest's `rebuilt`. Times are seconds since the service day's GTFS reference
 // time (local noon minus 12 h; manifest.t0 gives it per date) and may exceed
 // 86,400.
 
@@ -81,6 +83,7 @@ interface PreviousManifest {
   days: Record<string, string>;
   t0: Record<string, number>;
   sky?: Record<string, string>;
+  rebuilt?: string[];
 }
 
 /** Read a file of the previous build, from a directory or a URL. */
@@ -542,9 +545,18 @@ async function main() {
   const today = denverDate(Date.now());
   const dates: string[] = [];
   for (let k = -1; k <= args.days; k++) dates.push(addDays(today, k));
+  // The archive, filled in: every date since this feed took effect (within
+  // the archive's reach) that no earlier build kept, rebuilt from this feed.
+  const reach = addDays(today, -ARCHIVE_DAYS);
+  const rebuilt: string[] = [];
+  if (feedStart) {
+    for (let d = feedStart > reach ? feedStart : reach; d < dates[0]!; d = addDays(d, 1)) {
+      if (!prevManifest || !(d in prevManifest.days)) rebuilt.push(d);
+    }
+  }
   const dayKey = new Map<string, string>();
   const keyServices = new Map<string, string[]>();
-  for (const date of dates) {
+  for (const date of [...rebuilt, ...dates]) {
     const services = activeServices(date, calendar, exceptions);
     const key = sha256(`${feedSha}:${services.join(",")}`).slice(0, 10);
     dayKey.set(date, key);
@@ -675,10 +687,13 @@ async function main() {
     written.push({ file, bytes: statSync(join(args.out, file)).size });
     archived++;
   }
-  for (const date of dates) {
+  for (const date of [...rebuilt, ...dates]) {
     days[date] = dayKey.get(date)!;
     t0s[date] = serviceDayT0(date);
   }
+  // Which dates were rebuilt from a later feed rather than kept as they were
+  // published: said, not hidden.
+  const wasRebuilt = [...(prevManifest?.rebuilt ?? []).filter((d) => d in days && !dates.includes(d)), ...rebuilt].sort();
   const manifest = {
     version: 1,
     generated: new Date().toISOString(),
@@ -686,6 +701,7 @@ async function main() {
     source: { url, sha256: feedSha, bytes: bytes.length, feedStart, feedEnd },
     days: Object.fromEntries(Object.entries(days).sort()),
     t0: Object.fromEntries(Object.entries(t0s).sort()),
+    rebuilt: wasRebuilt,
     // Sealed skies are added by tools/archive/sky.ts, which carries its own.
     sky: {},
   };
@@ -697,6 +713,7 @@ async function main() {
     if (/^(day|rt)-[0-9a-f]+\.json$/.test(f) && !keep.has(f)) unlinkSync(join(args.out, f));
   }
   if (args.previous) console.log(`archive: ${archived} earlier dates carried over`);
+  if (rebuilt.length) console.log(`archive: ${rebuilt.length} earlier dates rebuilt from this feed (${rebuilt[0]} to ${rebuilt.at(-1)})`);
 
   // --- summary ------------------------------------------------------------------
   const ms = Math.round(performance.now() - t0);

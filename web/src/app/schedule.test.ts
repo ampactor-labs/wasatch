@@ -61,6 +61,13 @@ describe("the schedule", () => {
     expect(s.span()[0]).toBe(t0);
   });
 
+  test("a day in twelve minutes loads the day and the next, where there is one", async () => {
+    const s = await loaded();
+    expect(s.twelveDates("2026-10-23")).toEqual(["2026-10-23"]);
+    s.manifest.days["2026-10-24"] = "k";
+    expect(s.twelveDates("2026-10-23")).toEqual(["2026-10-23", "2026-10-24"]);
+  });
+
   test("station names lose their suffix", () => {
     expect(tidyStation("Salt Lake Central Station")).toBe("Salt Lake Central");
     expect(tidyStation("Ballpark")).toBe("Ballpark");

@@ -93,6 +93,9 @@ export interface DayEvent {
   date: number;
   ok: boolean;
   anchor?: number;
+  /** How much faster than the day it plays: 120, or 125 the night the
+   * clocks fall back. */
+  speed?: number;
 }
 export type EngineEvent = (BarEvent | FeatureEvent | PulseEvent | ThemeEvent | PlayEvent | SoloEvent | DayEvent | VantageEvent) & { f: number };
 export type Heard<E> = E & { /** performance.now() when it's heard */ at: number };

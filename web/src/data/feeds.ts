@@ -376,24 +376,34 @@ export interface SkyRaw {
 export async function fetchSkyRaw(from: number, to?: number, pastDays = 3): Promise<SkyRaw> {
   const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
   const span = `start=${iso(from)}${to ? `&end=${iso(to)}` : ""}`;
-  const [obs, alerts, slc, alta, air] = await Promise.all([
+  const [obs, alerts, models] = await Promise.all([
     json<{ features: NwsObs[] }>(`https://api.weather.gov/stations/KSLC/observations?${span}&limit=500`, { headers: NWS_HEADERS }, 20_000),
     json<{ features: NwsAlert[] }>("https://api.weather.gov/alerts/active?point=40.7608,-111.891", { headers: NWS_HEADERS }).catch(
       () => ({ features: [] as NwsAlert[] }),
     ),
-    json<{ hourly: Record<string, number[]> }>(
-      `https://api.open-meteo.com/v1/forecast?latitude=40.76&longitude=-111.89&hourly=temperature_2m,temperature_850hPa,temperature_800hPa,temperature_750hPa,temperature_700hPa&past_days=${pastDays}&forecast_days=2&timeformat=unixtime`,
-    ).catch(() => null),
-    json<{ hourly: Record<string, number[]> }>(
-      `https://api.open-meteo.com/v1/forecast?latitude=40.588&longitude=-111.638&hourly=wind_speed_10m,wind_gusts_10m,snowfall&past_days=${pastDays}&forecast_days=2&timeformat=unixtime&wind_speed_unit=ms`,
-    ).catch(() => null),
-    json<{ hourly: Record<string, number[]> }>(
-      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=40.76&longitude=-111.89&hourly=pm2_5&past_days=${Math.min(pastDays, 92)}&forecast_days=1&timeformat=unixtime`,
-    ).catch(() => null),
+    fetchSkyModels(pastDays),
   ]);
   const reports = obs.features.map(obsFromNws).sort((a, b) => b.t - a.t);
   const first = reports[0];
-  return { obs: reports, latest: first ? { text: first.text, tempC: first.tempC, t: first.t } : null, alerts, slc, alta, air };
+  return { obs: reports, latest: first ? { text: first.text, tempC: first.tempC, t: first.t } : null, alerts, ...models };
+}
+
+/** The models that color the bars (the lid, the ridges, the air), with
+ * `pastDays` of history (Open-Meteo keeps 92). */
+export async function fetchSkyModels(pastDays: number): Promise<Pick<SkyRaw, "slc" | "alta" | "air">> {
+  const past = Math.min(Math.max(1, Math.ceil(pastDays)), 92);
+  const [slc, alta, air] = await Promise.all([
+    json<{ hourly: Record<string, number[]> }>(
+      `https://api.open-meteo.com/v1/forecast?latitude=40.76&longitude=-111.89&hourly=temperature_2m,temperature_850hPa,temperature_800hPa,temperature_750hPa,temperature_700hPa&past_days=${past}&forecast_days=2&timeformat=unixtime`,
+    ).catch(() => null),
+    json<{ hourly: Record<string, number[]> }>(
+      `https://api.open-meteo.com/v1/forecast?latitude=40.588&longitude=-111.638&hourly=wind_speed_10m,wind_gusts_10m,snowfall&past_days=${past}&forecast_days=2&timeformat=unixtime&wind_speed_unit=ms`,
+    ).catch(() => null),
+    json<{ hourly: Record<string, number[]> }>(
+      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=40.76&longitude=-111.89&hourly=pm2_5&past_days=${past}&forecast_days=1&timeformat=unixtime`,
+    ).catch(() => null),
+  ]);
+  return { slc, alta, air };
 }
 
 /** The sky's hours from its sources, by the slot rules above: the same on

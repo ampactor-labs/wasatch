@@ -84,7 +84,7 @@ export interface ScreenDeps {
   onLive(): void;
 }
 
-/** How much faster than the day A Day in Twelve Minutes runs. */
+/** How much faster than a 24-hour day A Day in Twelve Minutes runs. */
 const DAY_SPEED = 120;
 
 export class PlayScreen {
@@ -113,6 +113,8 @@ export class PlayScreen {
   private paused = false;
   /** A Day in Twelve Minutes: the moment of the day at a bar, and when it was heard. */
   private day: { ms: number; at: number; first: number } | null = null;
+  /** Its speed, from the engine: the night the clocks change is 25 or 23 hours. */
+  private daySpeed = DAY_SPEED;
   private dayTimer = 0;
   /** A run's solo: how many notes, how many heard. */
   private solo = { count: 0, heard: 0 };
@@ -455,7 +457,7 @@ export class PlayScreen {
   /** The moment of the day being played: the listening time, or in A Day
    * in Twelve Minutes, the day's racing clock. */
   private dayNow(): number {
-    if (this.day) return this.day.ms + (performance.now() - this.day.at) * DAY_SPEED;
+    if (this.day) return this.day.ms + (performance.now() - this.day.at) * this.daySpeed;
     return this.deps.valley.now() - 90_000;
   }
 
@@ -673,6 +675,7 @@ export class PlayScreen {
 
   onDay(e: Heard<DayEvent>): void {
     if (!e.ok) this.caption({ text: "That day isn't in the schedule yet.", receipt: "scheduled", at: e.at, family: "harmony" });
+    else this.daySpeed = e.speed ?? DAY_SPEED;
   }
 
   /** A run is coming: `count` notes. */

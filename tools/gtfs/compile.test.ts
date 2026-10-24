@@ -52,6 +52,8 @@ const manifest = read<Manifest>("manifest.json");
 const network = read<Network>("network.json");
 const dayFor = (date: string) => read<Day>(`day-${manifest.days[date]}.json`);
 const weekdayDates = Object.keys(manifest.days).filter((d) => weekday(d) >= 1 && weekday(d) <= 4);
+// The rest of the tests look at one ordinary weekday: the latest compiled.
+weekdayDates.reverse();
 
 test("the manifest covers yesterday through nine days ahead", () => {
   assert.equal(manifest.version, 1);
@@ -78,10 +80,16 @@ test("service days count from local noon minus 12 hours", () => {
 
 test("a weekday has about 243,304 stop events", () => {
   assert.ok(weekdayDates.length > 0, "a Monday–Thursday in range");
-  for (const date of weekdayDates) {
+  const total = (date: string) => {
     const c = dayFor(date).counts;
-    const total = c.railStopEvents + c.busStopEvents + c.skiStopEvents;
-    assert.ok(Math.abs(total - 243_304) / 243_304 < 0.15, `${date}: ${total} stop events`);
+    return c.railStopEvents + c.busStopEvents + c.skiStopEvents;
+  };
+  // Most Mondays to Thursdays run weekday service; the odd one is a holiday
+  // (Labor Day, Thanksgiving) running reduced service.
+  const holidays = weekdayDates.filter((d) => total(d) < 0.75 * 243_304);
+  assert.ok(holidays.length <= Math.max(1, weekdayDates.length * 0.1), `holiday service on ${holidays.join(", ")}`);
+  for (const date of weekdayDates.filter((d) => !holidays.includes(d))) {
+    assert.ok(Math.abs(total(date) - 243_304) / 243_304 < 0.15, `${date}: ${total(date)} stop events`);
   }
 });
 

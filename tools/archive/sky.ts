@@ -7,11 +7,15 @@
 //
 // NWS keeps about a week of observations, so a day is sealed from the first
 // build after it ends, and rewritten while it's still inside that week (to
-// fill any report that was late the first time).
+// fill any report that was late the first time). An older day that has no
+// sky (one the schedule's archive rebuilt, or one no build could reach) is
+// sealed from KSLC's METARs in the Iowa Environmental Mesonet's archive
+// and the models' last 92 days.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fetchSkyRaw, obsFromMetar, skyFrom, type Metar } from "../../web/src/data/feeds.ts";
+import { fetchSkyModels, fetchSkyRaw, obsFromMetar, skyFrom, type Metar } from "../../web/src/data/feeds.ts";
+import { fetchIemMetars } from "./iem.ts";
 import type { SkyHour } from "../../web/src/engine/protocol.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -33,6 +37,8 @@ export interface SkyFile {
   date: string;
   /** When it was sealed. */
   sealed: string;
+  /** Where its observations came from: "awc" or "nws" in its week, "iem" after. */
+  from?: "awc" | "nws" | "iem";
   hours: SkyHour[];
 }
 
@@ -110,22 +116,50 @@ async function main(): Promise<void> {
     if (!raw) continue;
     // Prefer the METARs where they cover the day.
     const reports = metars.map(obsFromMetar).filter((o) => o.t >= t0 - BEFORE && o.t < t0 + AFTER);
-    if (reports.length >= 24) raw.obs = reports.sort((a, b) => b.t - a.t);
+    const awc = reports.length >= 24;
+    if (awc) raw.obs = reports.sort((a, b) => b.t - a.t);
+    if (seal(date, t0, raw, awc ? "awc" : "nws")) sealed++;
+  }
+
+  // The older days without a sky, from the archives.
+  const missing = Object.entries(manifest.t0)
+    .filter(([date, t0]) => !(date in sky) && t0 + AFTER <= now)
+    .sort((a, b) => a[1] - b[1]);
+  let backfilled = 0;
+  if (missing.length) {
+    const from = missing[0]![1] - BEFORE;
+    const to = missing.at(-1)![1] + AFTER;
+    const [iem, models] = await Promise.all([
+      fetchIemMetars(from, to).catch((err: unknown) => {
+        console.warn(`IEM: ${err instanceof Error ? err.message : String(err)}`);
+        return [] as Metar[];
+      }),
+      fetchSkyModels((now - from) / 86_400_000 + 1),
+    ]);
+    console.log(`backfill: ${missing.length} days without a sky, ${iem.length} archived METARs`);
+    const obs = iem.map(obsFromMetar).sort((a, b) => b.t - a.t);
+    for (const [date, t0] of missing) {
+      const raw = { obs: obs.filter((o) => o.t >= t0 - BEFORE && o.t < t0 + AFTER), latest: null, alerts: { features: [] }, ...models };
+      if (seal(date, t0, raw, "iem")) backfilled++;
+    }
+  }
+
+  /** Seal a day's sky if most of its hours were observed. */
+  function seal(date: string, t0: number, raw: Parameters<typeof skyFrom>[0], from: SkyFile["from"]): boolean {
     const { value } = skyFrom(raw, t0 + AFTER);
     const hours = dayHours(value.hours, t0);
     const observed = hours.filter((h) => Number.isFinite(h.cloud)).length;
-    // A day is worth keeping when most of its hours were observed.
-    if (observed < 20) continue;
+    if (observed < 20) return false;
     const file = `sky-${date}.json`;
-    const body: SkyFile = { version: 1, date, sealed: new Date(now).toISOString(), hours };
+    const body: SkyFile = { version: 1, date, sealed: new Date(now).toISOString(), from, hours };
     writeFileSync(join(out, file), JSON.stringify(body));
     sky[date] = file;
-    sealed++;
+    return true;
   }
 
   manifest.sky = Object.fromEntries(Object.entries(sky).sort());
   writeFileSync(manifestPath, JSON.stringify(manifest));
-  console.log(`sky archive: ${sealed} days sealed, ${carried} carried over, ${Object.keys(sky).length} in all`);
+  console.log(`sky archive: ${sealed} days sealed, ${backfilled} from the archives, ${carried} carried over, ${Object.keys(sky).length} in all`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) await main();
