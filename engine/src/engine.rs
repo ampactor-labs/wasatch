@@ -255,6 +255,11 @@ impl Engine {
         self.samples.sort_by_key(|s| s.midi);
     }
 
+    /// A conductor's window of rail departures, `from_ms` to `to_ms`.
+    pub fn perform(&mut self, from_ms: f64, to_ms: f64, events: &[crate::schedule::RailEvent]) {
+        self.inputs.schedule.perform(from_ms, to_ms, events);
+    }
+
     /// Push baseband samples for a ground band, from a station at `lat`, `lon`.
     pub fn push_ground(&mut self, band: usize, lat: f32, lon: f32, iq: &[(f32, f32)]) {
         if let Some(at) = self.ground_at.get_mut(band)
@@ -1002,8 +1007,14 @@ impl Engine {
     fn emit_feature(&mut self, f: Feature, frame: f64) {
         let _ = writeln!(
             self.outbox,
-            r#"{{"t":"feat","f":{frame:.0},"k":{},"route":{},"stop":{},"ev":{:.0},"late":{},"v":{:.3}}}"#,
-            f.kind as u8, f.route, f.stop, f.event_ms, f.late_s, f.value
+            r#"{{"t":"feat","f":{frame:.0},"k":{},"route":{},"stop":{},"ev":{:.0},"late":{},"obs":{},"v":{:.3}}}"#,
+            f.kind as u8,
+            f.route,
+            f.stop,
+            f.event_ms,
+            f.late_s,
+            u8::from(f.observed),
+            f.value
         );
     }
 

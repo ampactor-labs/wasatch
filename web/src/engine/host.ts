@@ -44,7 +44,10 @@ export interface FeatureEvent {
   route: number;
   stop: number;
   ev: number;
+  /** Seconds behind schedule, when realtime saw it. */
   late: number;
+  /** 1 when realtime saw it happen, 0 when it's the schedule. */
+  obs: number;
   v: number;
 }
 export interface PulseEvent {

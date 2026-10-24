@@ -74,31 +74,65 @@ export class Valley {
     for (const l of this.listeners) l();
   }
 
-  /** Everything the first bar needs, before the tap. */
-  async prime(): Promise<void> {
+  /** Everything the first bar needs, before the tap. With a conductor, it
+   * supplies the feeds (`direct` false) and this only loads the schedule. */
+  async prime(direct = true): Promise<void> {
     this.host.post(Kind.NETWORK, encodeNetwork(this.schedule.network));
     // The pad's waveform is the crest: the same numbers the skyline draws.
     this.host.post(Kind.SKYLINE, encodeSkyline([...CREST_ELEV_FT]));
     await Promise.all([
       this.loadDays(),
-      this.refreshSky(),
-      this.refreshSlow(),
-      this.refreshQuakes(),
       this.bikes.init().then(() => (this.bikesReady = true)).catch(() => {}),
+      ...(direct ? [this.refreshSky(), this.refreshSlow(), this.refreshQuakes()] : []),
     ]);
   }
 
-  /** Keep every feed fresh. */
-  run(): void {
+  /** Keep every feed fresh (the schedule only, with a conductor). */
+  run(direct = true): void {
     const every = (ms: number, f: () => Promise<unknown>) => {
       this.timers.push(window.setInterval(() => void f().catch(() => {}), ms));
     };
+    every(10 * MIN, () => this.loadDays());
+    if (!direct) return;
     every(5 * MIN, () => this.refreshSky());
     every(15 * MIN, () => this.refreshSlow());
     every(2 * MIN, () => this.refreshQuakes());
     every(30_000, () => this.refreshBikes());
-    every(10 * MIN, () => this.loadDays());
     void this.refreshBikes().catch(() => {});
+  }
+
+  // --- From the conductor --------------------------------------------------
+
+  /** The sky as the conductor read it (from KSLC's METARs). */
+  conductorSky(sky: Reading<SkyNow>): void {
+    this.sky = sky;
+    this.host.post(Kind.SKY, encodeSky(sky.value.hours.filter((h) => !this.sealed.has(h.at))));
+    this.changed();
+  }
+
+  conductorSlow(lake: Reading<Lake> | null, river: Reading<River> | null, snow: Reading<Snow> | null): void {
+    if (lake) this.lake = lake;
+    if (river) this.river = river;
+    if (snow) this.snow = snow;
+    this.postSlow();
+    this.changed();
+  }
+
+  /** Bike changes from a window: the last ten minutes go to the engine. */
+  conductorBikes(events: { ms: number; lat: number; lon: number; delta: number; station: number }[]): void {
+    for (const e of events) this.bikes.events.push({ ...e, name: this.bikes.stationName(e.station) });
+    const cutoff = this.now() - 10 * MIN;
+    this.bikes.events.sort((a, b) => a.ms - b.ms);
+    while (this.bikes.events.length && (this.bikes.events[0]?.ms ?? 0) < cutoff) this.bikes.events.shift();
+    this.host.post(Kind.BIKES, encodeBikes(this.bikes.events));
+  }
+
+  conductorQuakes(quakes: Quake[]): void {
+    const known = new Map((this.quakes?.value ?? []).map((q) => [q.id, q]));
+    for (const q of quakes) known.set(q.id, q);
+    const all = [...known.values()].filter((q) => q.ms > this.now() - 2 * 86_400_000).sort((a, b) => a.ms - b.ms);
+    this.quakes = { value: all, observed: Date.now(), receipt: "live" };
+    this.host.post(Kind.QUAKES, encodeQuakes(all));
   }
 
   stop(): void {

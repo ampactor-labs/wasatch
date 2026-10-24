@@ -27,6 +27,23 @@ plays the same bar at the same moment, about 90 seconds behind the valley.
 Pick where you're listening from (the whole valley, downtown, the canyons, the
 lake) and the mix and the room change; the music doesn't.
 
+Everything else is in the menu, all optional:
+
+- **Play along.** Hold the phone like a ski and tip it onto its edges: a
+  steady edge plays the chord, a wobble plays the notes between. It can't
+  play a wrong note, and only you hear it.
+- **Add your run.** A GPX from any tracker becomes a piano solo over the live
+  valley, every turn a note, the vertical as the melody coming down. Save a
+  30-second clip. The file never leaves your device.
+- **Rewind,** and **A Day in Twelve Minutes:** a whole day, 5 AM to 5 AM, as
+  its own 300-bar piece, the trains racing across the map. Any day in the
+  archive, with a link to share it.
+- **Line up with a friend.** Phones play the same bar; on Android and
+  desktop, *Tune to the room* listens for the phone next to it and lines
+  this one up (a Bluetooth speaker's delay included). iPhones get a nudge.
+- **Show mappings.** Every stream, what it plays, its last value, where it
+  came from, and a live spectrogram.
+
 [DESIGN.md](DESIGN.md) is the whole design: the music theory, the data, the
 sync, and why each choice was made.
 
@@ -54,6 +71,14 @@ sync, and why each choice was made.
   with a shredder riding the theme summit to summit, the valley map with every
   scheduled train, the harmony dial as a ski-lift bullwheel, and captions on
   routed-wood trail signs.
+- **The conductor** ([`conductor/`](conductor/)), optional, is a small Node
+  server that reads what a browser can't (UTA's realtime, KSLC's METARs),
+  holds the one connection to the seismometers, and seals it all into
+  30-second windows every phone reads alike: the bells ring when the trains
+  actually leave, and a late one lays back behind the beat. Without it, the
+  site plays from the schedule and the open feeds.
+- **The archive.** Each daily build compiles against the deployed site, so
+  every earlier day carries forward with its schedule and its sealed sky.
 
 ## Develop
 
@@ -73,8 +98,9 @@ Checks:
 cd engine && cargo test --release && cargo clippy --all-targets && cd ..
 npm run typecheck
 npm test                                  # vitest and the tools' node tests
-node tools/render/check.ts                # loudness, true peak, silence, determinism
-node tools/e2e/smoke.ts                   # headless Chrome against dist/
+node tools/render/check.ts                # loudness, true peak, silence, determinism, a day in 12 minutes
+node tools/e2e/smoke.ts                   # headless Chrome against dist/, every menu feature
+npm run conductor                         # the conductor on :8080; open the site with ?conductor=http://localhost:8080
 node tools/render/render.ts 2026-10-23 17:40 60 rush.wav
 ```
 
@@ -87,9 +113,11 @@ voice.
 ```
 engine/          the Rust engine (plan, compose, voicing, audio, FFI)
 web/             the page: src/engine (worklet host), src/app, src/art, src/data
-tools/gtfs/      UTA GTFS → the score's schedule files
+conductor/       the optional server: realtime trains, sealed windows, a clock
+tools/gtfs/      UTA GTFS → the score's schedule files (and the archive)
+tools/archive/   sealing each finished day's sky
 tools/render/    offline renders and the quality check
-tools/e2e/       the headless browser smoke test
+tools/e2e/       the headless browser test
 research/        the measurements behind DESIGN.md
 docs/            the first design, for the record
 ```

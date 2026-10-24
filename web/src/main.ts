@@ -5,17 +5,30 @@ import "./styles/index.css";
 import "./styles/app.css";
 import { bootScene, type StickerKind } from "./art/index.ts";
 import { Host, type EngineEvent, type Heard } from "./engine/host.ts";
-import { syncClock } from "./engine/clock.ts";
+import { syncClock, syncClockFromConductor } from "./engine/clock.ts";
+import { Conductor } from "./data/conductor.ts";
 import { Schedule } from "./app/schedule.ts";
 import { Valley, DAYPART_NAMES } from "./app/valley.ts";
 import { PlayScreen } from "./app/screen.ts";
 import { keyName } from "./app/music.ts";
 import { Menu } from "./app/menu.ts";
-import { Ground } from "./data/ground.ts";
+import { Ground, GroundSource } from "./data/ground.ts";
 import { Kind, encodeTwelve } from "./engine/protocol.ts";
 
 const BASE = import.meta.env.BASE_URL;
 const app = document.getElementById("app")!;
+
+/** The conductor, if one is deployed: ?conductor=<url>, or config.json. */
+async function conductorUrl(): Promise<string | null> {
+  const asked = new URLSearchParams(location.search).get("conductor");
+  if (asked && /^https?:\/\//.test(asked)) return asked;
+  try {
+    const config = (await fetch(`${BASE}config.json`, { cache: "no-cache" }).then((r) => r.json())) as { conductor?: string | null };
+    return config.conductor ?? null;
+  } catch {
+    return null;
+  }
+}
 
 function bootStickers(valley: Valley | null): [StickerKind, StickerKind] {
   if (!valley) return ["801", "LISTEN LOCAL"];
@@ -128,7 +141,7 @@ async function main(): Promise<void> {
       onLive: () => h.post(Kind.TWELVE, encodeTwelve(null)),
     });
     screen = s;
-    const menu = new Menu({ host: h, valley: v, schedule, screen: s, base: BASE });
+    const menu = new Menu({ host: h, valley: v, schedule, screen: s, base: BASE, conductor });
     h.onEvent((e: Heard<EngineEvent>) => {
       if (e.t === "bar") s.onBar(e);
       else if (e.t === "feat") s.onFeature(e);
@@ -149,12 +162,20 @@ async function main(): Promise<void> {
       void v.loadDays([asked]).then(() => window.setTimeout(() => h.post(Kind.TWELVE, encodeTwelve(asked)), 9000));
     }
     // The ground: the city's seismometers, if the server will have us.
-    const ground = new Ground(h, (g) => v.setGround(g));
-    ground.connect().catch((err) => console.warn("ground:", err));
+    // With a conductor, the ground comes in its windows; without, straight
+    // from EarthScope.
+    if (conductor) {
+      new Ground(h, conductor, (g) => v.setGround(g)).start();
+    } else {
+      const seismometers = new GroundSource();
+      new Ground(h, seismometers, (g) => v.setGround(g)).start();
+      seismometers.connect().catch((err) => console.warn("ground:", err));
+    }
   };
 
   // --- Before the tap: the engine, the schedule, the valley, the piano.
-  const clock = syncClock(`${BASE}schedule/manifest.json`).catch(() => null);
+  const conductorAt = await conductorUrl();
+  const clock = (conductorAt ? syncClockFromConductor(conductorAt) : syncClock(`${BASE}schedule/manifest.json`)).catch(() => null);
   try {
     [host] = await Promise.all([Host.create(BASE), schedule.load(BASE)]);
   } catch (err) {
@@ -166,12 +187,14 @@ async function main(): Promise<void> {
   }
   const h = host;
   const v = new Valley(h, schedule);
+  const conductor = conductorAt ? new Conductor(conductorAt, h, v) : null;
   // A handle for the end-to-end test and for the curious.
   Object.assign(window, {
     __wasatch: {
       host: h,
       valley: v,
       schedule,
+      conductor,
       get state() {
         return h.ctx.state;
       },
@@ -185,7 +208,7 @@ async function main(): Promise<void> {
       setListen("Listen to the Wasatch", valley !== null);
     }
   });
-  await Promise.all([v.prime(), clock]);
+  await Promise.all([v.prime(!conductor), conductor?.prime(), clock]);
   valley = v;
   drawBoot();
   if (h.pianoReady()) {
@@ -197,7 +220,8 @@ async function main(): Promise<void> {
   v.onChange(() => {
     if (!screen) setStatus();
   });
-  v.run();
+  v.run(!conductor);
+  conductor?.start();
   const statusTimer = setInterval(() => {
     if (screen) clearInterval(statusTimer);
     else setStatus();

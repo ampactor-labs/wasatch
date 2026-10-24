@@ -39,7 +39,7 @@ impl RouteKind {
 /// One rail departure from a stop, in absolute time.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct RailEvent {
-    /// UTC milliseconds.
+    /// UTC milliseconds: when it left (observed) or is due to (scheduled).
     pub ms: f64,
     /// Index into the network's routes.
     pub route: u8,
@@ -47,6 +47,10 @@ pub struct RailEvent {
     pub dir: u8,
     /// Index into the network's stops.
     pub stop: u16,
+    /// Seconds behind the schedule (observed departures only).
+    pub late_s: i16,
+    /// `true` when realtime saw it leave; `false` when it's the schedule.
+    pub observed: bool,
 }
 
 /// A ski bus leaving its first stop.
@@ -113,6 +117,11 @@ pub struct Schedule {
     pub days: Vec<ServiceDay>,
     rail: Vec<RailEvent>,
     ski: Vec<SkiEvent>,
+    /// Spans the conductor has reported in full: inside them, the observed
+    /// departures (and the schedule for trains realtime doesn't track) stand
+    /// in for the schedule.
+    covered: Vec<(f64, f64)>,
+    observed: Vec<RailEvent>,
 }
 
 impl Schedule {
@@ -149,6 +158,8 @@ impl Schedule {
                     route: (packed & 0xff) as u8,
                     dir: ((packed >> 8) & 0xff) as u8,
                     stop: (packed >> 16) as u16,
+                    late_s: 0,
+                    observed: false,
                 });
             }
             for &(t, route) in &day.ski {
@@ -197,6 +208,64 @@ impl Schedule {
             .map(|d| per_minute(&d.bus_west, (ms - d.t0_ms) / 60_000.0))
             .sum();
         (west / total).clamp(0.0, 1.0)
+    }
+
+    /// Record a conductor's window: every departure from `from_ms` to
+    /// `to_ms`, observed or (for untracked trains) scheduled. A window posted
+    /// again replaces itself.
+    pub fn perform(&mut self, from_ms: f64, to_ms: f64, events: &[RailEvent]) {
+        if to_ms <= from_ms {
+            return;
+        }
+        self.observed.retain(|e| e.ms < from_ms || e.ms >= to_ms);
+        self.observed
+            .extend(events.iter().filter(|e| e.ms >= from_ms && e.ms < to_ms));
+        self.observed.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+        self.covered.retain(|&(a, b)| b <= from_ms || a >= to_ms);
+        self.covered.push((from_ms, to_ms));
+        self.covered.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Keep six hours.
+        let horizon = to_ms - 6.0 * 3_600_000.0;
+        self.covered.retain(|&(_, b)| b > horizon);
+        self.observed.retain(|e| e.ms > horizon);
+    }
+
+    fn is_covered(&self, ms: f64) -> bool {
+        let i = self.covered.partition_point(|&(a, _)| a <= ms);
+        i > 0 && ms < self.covered[i - 1].1
+    }
+
+    /// The departures to play from `from_ms` to `to_ms`: what the conductor
+    /// reported where it did, the schedule elsewhere.
+    pub fn performed_between(&self, from_ms: f64, to_ms: f64) -> Vec<RailEvent> {
+        let mut out: Vec<RailEvent> = self
+            .rail_between(from_ms, to_ms)
+            .iter()
+            .filter(|e| !self.is_covered(e.ms))
+            .copied()
+            .collect();
+        let lo = self.observed.partition_point(|e| e.ms < from_ms);
+        let hi = self.observed.partition_point(|e| e.ms < to_ms);
+        out.extend_from_slice(&self.observed[lo..hi.max(lo)]);
+        out.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+        out
+    }
+
+    /// How far behind the system runs, from the observed departures in the
+    /// ten minutes before `ms`: their median lateness in seconds, 0 without.
+    pub fn system_late_s(&self, ms: f64) -> f32 {
+        let lo = self.observed.partition_point(|e| e.ms < ms - 600_000.0);
+        let hi = self.observed.partition_point(|e| e.ms < ms);
+        let mut late: Vec<i16> = self.observed[lo..hi.max(lo)]
+            .iter()
+            .filter(|e| e.observed)
+            .map(|e| e.late_s)
+            .collect();
+        if late.len() < 3 {
+            return 0.0;
+        }
+        late.sort_unstable();
+        f32::from(late[late.len() / 2])
     }
 
     /// Rail departures per minute around `ms`, over a five-minute window.
@@ -303,5 +372,42 @@ mod tests {
         s.insert(day(20261023, 0.0));
         assert_eq!(s.days.len(), 1);
         assert_eq!(s.rail_between(0.0, 1e12).len(), 2);
+    }
+
+    #[test]
+    fn a_reported_window_replaces_the_schedule_inside_it() {
+        let mut s = Schedule::default();
+        let t0 = 1_000_000.0;
+        s.insert(ServiceDay {
+            date: 20261023,
+            t0_ms: t0,
+            rail: vec![(100, 1), (200, 1 | (2 << 16)), (400, 1)],
+            ski: vec![],
+            bus: vec![],
+            bus_west: vec![],
+        });
+        // The conductor saw the 200 s train leave 30 s late; the window
+        // covers 150–250 s.
+        let late = RailEvent {
+            ms: t0 + 230_000.0,
+            route: 1,
+            dir: 0,
+            stop: 2,
+            late_s: 30,
+            observed: true,
+        };
+        s.perform(t0 + 150_000.0, t0 + 250_000.0, &[late]);
+        let played = s.performed_between(t0, t0 + 500_000.0);
+        let times: Vec<f64> = played.iter().map(|e| (e.ms - t0) / 1000.0).collect();
+        assert_eq!(times.len(), 3, "{times:?}");
+        assert!((times[0] - 100.0).abs() < 60.0);
+        assert!((times[1] - 230.0).abs() < 1e-9);
+        assert!(played[1].observed && played[1].late_s == 30);
+        assert!((times[2] - 400.0).abs() < 60.0);
+        // Posting the window again replaces it rather than doubling it.
+        s.perform(t0 + 150_000.0, t0 + 250_000.0, &[late]);
+        assert_eq!(s.performed_between(t0, t0 + 500_000.0).len(), 3);
+        // Too few observations for a system lateness yet.
+        assert_eq!(s.system_late_s(t0 + 260_000.0), 0.0);
     }
 }

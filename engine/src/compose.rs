@@ -180,6 +180,8 @@ pub struct Feature {
     pub event_ms: f64,
     /// Lateness in seconds (0 on the schedule).
     pub late_s: i16,
+    /// `true` when realtime saw it happen.
+    pub observed: bool,
     /// A value for the caption (magnitude, inches, mph…).
     pub value: f32,
 }
@@ -512,6 +514,7 @@ pub fn compose(
             stop: 0,
             event_ms: start,
             late_s: 0,
+            observed: false,
             value: 0.0,
         });
     }
@@ -682,6 +685,20 @@ pub fn compose(
         }
     }
 
+    // When the trains run late, the kit lays back with them: 1 ms behind the
+    // beat for every 6 s of the system's median lateness, up to 30 ms.
+    let kit_lay = f64::from((valley.schedule.system_late_s(start) / 6.0).clamp(0.0, 30.0));
+    if kit_lay > 0.0 {
+        for n in &mut out.notes {
+            if matches!(
+                n.inst,
+                Inst::Kick | Inst::Snare | Inst::Rim | Inst::Hat | Inst::Shaker | Inst::Tom
+            ) {
+                n.at_ms += kit_lay;
+            }
+        }
+    }
+
     // The theme, in Theme sections.
     if sec.kind == SectionKind::Theme && mix.piano > 0.0 {
         let statement = (1..=2).contains(&phrase) && bip == 0;
@@ -705,6 +722,7 @@ pub fn compose(
                         stop: 0,
                         event_ms: at,
                         late_s: 0,
+                        observed: false,
                         value: 0.0,
                     });
                     state.phrase_featured = true;
@@ -735,7 +753,7 @@ pub fn compose(
             3
         };
         let mut bells = 0;
-        for ev in valley.schedule.rail_between(start, start + bar_ms) {
+        for ev in valley.schedule.performed_between(start, start + bar_ms) {
             let kind = valley.network.kind(ev.route);
             let stop = valley
                 .network
@@ -744,7 +762,10 @@ pub fn compose(
                 .copied()
                 .unwrap_or_default();
             let step = (((ev.ms - start) / step_ms).round() as u32).min(15);
-            let at = start + f64::from(step) * step_ms;
+            // A late train lays back: 1 ms behind the grid for every 3 s late,
+            // up to 60 ms.
+            let lay = f64::from(ev.late_s.clamp(0, 180)) / 3.0;
+            let at = start + f64::from(step) * step_ms + lay;
             match kind {
                 RouteKind::Trax(_) | RouteKind::SLine if bells < cap => {
                     let idx = match kind {
@@ -765,7 +786,8 @@ pub fn compose(
                             route: ev.route,
                             stop: ev.stop,
                             event_ms: ev.ms,
-                            late_s: 0,
+                            late_s: ev.late_s,
+                            observed: ev.observed,
                             value: 0.0,
                         });
                         state.phrase_featured = true;
@@ -798,7 +820,8 @@ pub fn compose(
                         route: ev.route,
                         stop: ev.stop,
                         event_ms: ev.ms,
-                        late_s: 0,
+                        late_s: ev.late_s,
+                        observed: ev.observed,
                         value: 0.0,
                     });
                     state.phrase_featured = true;
@@ -828,6 +851,7 @@ pub fn compose(
                     stop: 0,
                     event_ms: ev.ms,
                     late_s: 0,
+                    observed: false,
                     value: 0.0,
                 });
                 let f = (out.features.len() - 1) as u16;
@@ -871,6 +895,7 @@ pub fn compose(
                     stop: b.station,
                     event_ms: b.ms,
                     late_s: 0,
+                    observed: false,
                     value: f32::from(b.delta),
                 });
                 state.phrase_featured = true;
@@ -908,6 +933,7 @@ pub fn compose(
             stop: 0,
             event_ms: q.origin_ms,
             late_s: 0,
+            observed: false,
             value: q.mag,
         });
         state.phrase_featured = true;
@@ -1006,6 +1032,7 @@ pub fn compose(
             stop: 0,
             event_ms: start,
             late_s: 0,
+            observed: false,
             value,
         });
         state.phrase_featured = true;

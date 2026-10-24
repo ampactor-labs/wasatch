@@ -292,6 +292,7 @@ pub fn compose_day(
             stop: 0,
             event_ms: d0,
             late_s: 0,
+            observed: false,
             value: moment::CLOCK,
         });
     }
@@ -334,6 +335,7 @@ pub fn compose_day(
             stop: 0,
             event_ms: d0,
             late_s: 0,
+            observed: false,
             value: 0.0,
         });
         let f = (out.features.len() - 1) as u16;
@@ -523,6 +525,7 @@ pub fn compose_day(
             stop: 0,
             event_ms: q.origin_ms,
             late_s: 0,
+            observed: false,
             value: q.mag,
         });
         let f = (out.features.len() - 1) as u16;
@@ -570,6 +573,7 @@ pub fn compose_day(
                 stop,
                 event_ms: ms,
                 late_s: 0,
+                observed: false,
                 value,
             });
         }

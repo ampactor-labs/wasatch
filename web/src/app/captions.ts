@@ -75,6 +75,13 @@ export function receiptText(c: Pick<Caption, "receipt" | "observed">): string {
   return c.observed ? `${c.receipt} ${mountainTime(c.observed)}` : c.receipt;
 }
 
+/** "on time", "2 min late", "1 min early". */
+export function lateness(s: number): string {
+  if (Math.abs(s) < 60) return "on time";
+  const m = Math.round(Math.abs(s) / 60);
+  return `${m} min ${s > 0 ? "late" : "early"}`;
+}
+
 const fmt1 = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 /** Where the piece's live readings are, for captions that quote them. */
@@ -151,9 +158,11 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
   switch (family) {
     case "trax": {
       const route = schedule.routeName(f.route);
+      if (f.obs) return { ...base, text: `${route} · ${schedule.stopName(f.stop)} · ${lateness(f.late)}`, receipt: "live", observed: f.ev };
       return { ...base, text: `${route} · ${schedule.stopName(f.stop)} · departing ${mountainTime(f.ev)}`, receipt: "scheduled" };
     }
     case "frontrunner":
+      if (f.obs) return { ...base, text: `FrontRunner at Salt Lake Central · ${lateness(f.late)}`, receipt: "live", observed: f.ev };
       return { ...base, text: `FrontRunner at Salt Lake Central · ${mountainTime(f.ev)}`, receipt: "scheduled" };
     case "skibus": {
       const r = schedule.network.routes[f.route];

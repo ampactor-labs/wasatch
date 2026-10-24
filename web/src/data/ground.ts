@@ -39,7 +39,8 @@ export const STATIONS: Station[] = [
 
 const URL = "wss://rtserve.earthscope.org/datalink";
 const BASEBAND_MS = 100;
-const DELAY_MS = 90_000;
+/** The broadcast delay (engine/src/engine.rs). */
+export const DELAY_MS = 90_000;
 
 /** A second-order section (RBJ cookbook), direct form I, in doubles. */
 class Biquad {
@@ -193,26 +194,41 @@ class StationStream {
   }
 }
 
-export class Ground {
+/** One baseband sample of a band, on the 100 ms grid of absolute time. */
+export interface Baseband {
+  t: number;
+  i: number;
+  q: number;
+}
+
+/** Where the ground's baseband comes from: the seismometers directly, or
+ * the conductor's windows. */
+export interface GroundFeed {
+  /** Remove and return a band's samples at or before `upTo` (UTC ms). */
+  take(band: number, upTo: number): Baseband[];
+  /** A band's level, 0–1 (normalized to a busy day at its station). */
+  level(band: number): number;
+  /** Whether a band has data around listening time `l`. */
+  freshAt(band: number, l: number): boolean;
+}
+
+/**
+ * The seismometers themselves: one DataLink connection to EarthScope's
+ * ringserver, each station stitched across records and mixed down to its
+ * band's baseband. Runs in a browser or in Node.
+ */
+export class GroundSource implements GroundFeed {
   private ws: WebSocket | null = null;
   private streams = new Map<string, StationStream>();
-  private pushed = new Map<string, number>();
-  private timer = 0;
   private retry = 0;
   private stopped = false;
+  private rewindTo = 0;
   private readonly enc = new TextEncoder();
   private readonly dec = new TextDecoder();
-  /** Rewind offset, ms; the ground only plays live. */
-  shift = 0;
+  private readonly client: string;
 
-  private readonly host: Host;
-  private readonly onState: (g: GroundState | null) => void;
-  private readonly nowUtc: () => number;
-
-  constructor(host: Host, onState: (g: GroundState | null) => void, nowUtc: () => number = () => Date.now()) {
-    this.host = host;
-    this.onState = onState;
-    this.nowUtc = nowUtc;
+  constructor(client = "wasatch-symphony:web:0:browser") {
+    this.client = client;
     for (const s of STATIONS) this.streams.set(s.code, new StationStream(s));
   }
 
@@ -228,22 +244,25 @@ export class Ground {
     this.ws?.send(buf);
   }
 
-  connect(): Promise<void> {
+  /** Connect, rewinding the ring to just before `rewindTo` (UTC ms) so the
+   * ground can sound at once. */
+  connect(rewindTo = Date.now() - DELAY_MS - 15_000): Promise<void> {
     this.stopped = false;
+    this.rewindTo = rewindTo;
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(URL, ["DataLink1.0"]);
       ws.binaryType = "arraybuffer";
       this.ws = ws;
       let state: "id" | "match" | "position" | "streaming" = "id";
       const pattern = `^FDSN:UU_(${STATIONS.map((s) => s.code).join("|")})_[0-9]*_[EH]_[NH]_Z/MSEED$`;
-      ws.onopen = () => this.send("ID wasatch-symphony:web:0:browser");
+      ws.onopen = () => this.send(`ID ${this.client}`);
       ws.onerror = () => reject(new Error("the seismometers' server refused us"));
       ws.onclose = () => {
         this.ws = null;
         if (!this.stopped) {
           // Back off and try again; five connections per address, shared.
           this.retry = Math.min(this.retry + 1, 6);
-          window.setTimeout(() => void this.connect().catch(() => {}), 2000 * 2 ** this.retry);
+          globalThis.setTimeout(() => void this.connect(Date.now() - DELAY_MS - 15_000).catch(() => {}), 2000 * 2 ** this.retry);
         }
       };
       ws.onmessage = (e: MessageEvent<ArrayBuffer>) => {
@@ -258,8 +277,7 @@ export class Ground {
           this.streams.get(rec.station)?.add(rec.start, rec.rate, rec.samples);
           return;
         }
-        // ID, then MATCH our stations, then rewind to just before the
-        // listening time so the ground sounds at once, then STREAM.
+        // ID, then MATCH our stations, then rewind the ring, then STREAM.
         if (state === "id" && header.startsWith("ID")) {
           state = "match";
           this.send(`MATCH ${this.enc.encode(pattern).length}`, pattern);
@@ -270,8 +288,7 @@ export class Ground {
             return;
           }
           state = "position";
-          const from = Math.round((this.nowUtc() + this.shift - DELAY_MS - 15_000) * 1000);
-          this.send(`POSITION AFTER ${from}`);
+          this.send(`POSITION AFTER ${Math.round(this.rewindTo * 1000)}`);
         } else if (state === "position") {
           // Whether or not the ring still holds that far back, stream.
           state = "streaming";
@@ -279,50 +296,84 @@ export class Ground {
           resolve();
         }
       };
-      clearInterval(this.timer);
-      this.timer = window.setInterval(() => this.feed(), 250);
     });
   }
 
-  /** Hand the engine every baseband sample the listening time has reached. */
-  private feed(): void {
+  take(band: number, upTo: number): Baseband[] {
+    const ddc = this.streams.get(STATIONS[band]?.code ?? "")?.ddc;
+    if (!ddc) return [];
+    let n = 0;
+    while (n < ddc.out.length && ddc.out[n]!.t <= upTo) n++;
+    return ddc.out.splice(0, n);
+  }
+
+  level(band: number): number {
+    const s = STATIONS[band];
+    const ddc = s ? this.streams.get(s.code)?.ddc : undefined;
+    if (!s || !ddc) return 0;
+    const db = 20 * Math.log10(Math.max(1e-6, ddc.level() / s.ref));
+    return Math.max(0, Math.min(1, 0.45 + db / 40));
+  }
+
+  freshAt(band: number, l: number): boolean {
+    const st = this.streams.get(STATIONS[band]?.code ?? "");
+    return !!st && l - st.lastData < 60_000 && st.lastData - l < 120_000;
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.ws?.close();
+  }
+}
+
+/** The page's side: hands the engine each baseband sample as the listening
+ * time reaches it, from whichever feed. */
+export class Ground {
+  private timer = 0;
+  private pushed = [0, 0, 0, 0];
+  /** Rewind offset, ms; the ground only plays live. */
+  shift = 0;
+
+  private readonly host: Host;
+  private readonly feed: GroundFeed;
+  private readonly onState: (g: GroundState | null) => void;
+  private readonly nowUtc: () => number;
+
+  constructor(host: Host, feed: GroundFeed, onState: (g: GroundState | null) => void, nowUtc: () => number = () => Date.now()) {
+    this.host = host;
+    this.feed = feed;
+    this.onState = onState;
+    this.nowUtc = nowUtc;
+  }
+
+  start(): void {
+    clearInterval(this.timer);
+    this.timer = globalThis.setInterval(() => this.tick(), 250) as unknown as number;
+  }
+
+  private tick(): void {
     const listening = this.nowUtc() + this.shift - DELAY_MS;
     let loudest: { s: Station; rel: number } | null = null;
     const levels: [number, number, number, number] = [0, 0, 0, 0];
     let live = false;
     STATIONS.forEach((s, band) => {
-      const st = this.streams.get(s.code);
-      const ddc = st?.ddc;
-      if (!st || !ddc) return;
-      const fresh = this.shift === 0 && listening - st.lastData < 60_000 && st.lastData - listening < 120_000;
-      // Drop what the listener has passed; keep what's coming.
-      while (ddc.out.length && ddc.out[0]!.t < listening - 1000) ddc.out.shift();
-      const due: [number, number][] = [];
-      let last = this.pushed.get(s.code) ?? 0;
-      while (ddc.out.length && ddc.out[0]!.t <= listening + 500) {
-        const p = ddc.out.shift()!;
-        if (p.t <= last) continue;
-        due.push([p.i, p.q]);
-        last = p.t;
-      }
-      this.pushed.set(s.code, last);
-      if (fresh) {
-        live = true;
-        const db = 20 * Math.log10(Math.max(1e-6, ddc.level() / s.ref));
-        levels[band] = Math.max(0, Math.min(1, 0.45 + db / 40));
-        const rel = levels[band];
-        if (!loudest || rel > loudest.rel) loudest = { s, rel };
-      }
-      if (due.length && fresh) this.host.post(Kind.GROUND, encodeGroundPlaced(band, s.lat, s.lon, due));
+      // Drop what the listener has passed; hand over what's due.
+      this.feed.take(band, listening - 1000);
+      const due = this.feed.take(band, listening + 500).filter((p) => p.t > (this.pushed[band] ?? 0));
+      if (due.length) this.pushed[band] = due.at(-1)!.t;
+      const fresh = this.shift === 0 && this.feed.freshAt(band, listening);
+      if (!fresh) return;
+      live = true;
+      levels[band] = this.feed.level(band);
+      if (!loudest || levels[band] > loudest.rel) loudest = { s, rel: levels[band] };
+      if (due.length) this.host.post(Kind.GROUND, encodeGroundPlaced(band, s.lat, s.lon, due.map((p) => [p.i, p.q])));
     });
     const top = loudest as { s: Station; rel: number } | null;
     this.onState(live && top ? { station: top.s.name, levels, observed: listening } : null);
   }
 
   stop(): void {
-    this.stopped = true;
     clearInterval(this.timer);
-    this.ws?.close();
     this.onState(null);
   }
 }

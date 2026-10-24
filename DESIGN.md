@@ -1,13 +1,79 @@
 # Wasatch Symphony: design
 
-Status: design, revision 2, Oct 23, 2026. Nothing is built or deployed.
-Revision 2 folds in a review of revision 1, a research pass on libraries,
-platforms and feeds (with each feed fetched and decoded), and measurements
-taken the same day: the skyline from USGS 3DEP (Appendix D), a benchmark of
-modal voices in WebAssembly, and an inventory of what sonido already does.
-Appendix E lists every change. The page at ampactor.dev/wasatch (Oct 23) was a
-throwaway and is superseded by this; it should come down before this ships,
-because the new repo wants the same URL.
+Status: revision 2, Oct 23, 2026, built and live at
+[ampactor.dev/wasatch](https://ampactor.dev/wasatch/) on Oct 24. Revision 2
+folds in a review of revision 1, a research pass on libraries, platforms and
+feeds (with each feed fetched and decoded), and measurements taken the same
+day: the skyline from USGS 3DEP (Appendix D), a benchmark of modal voices in
+WebAssembly, and an inventory of what sonido already does. Appendix E lists
+every change. **As built**, below, says where the build follows this design
+and where it departs from it.
+
+## As built
+
+What's live, and where it differs from the rest of this document:
+
+- **The look.** The brand described under "The screen" (black, paper white,
+  one monospaced face) gave way to a goofy Wasatch trail-map look: a
+  shredder in a neon one-piece riding the skyline summit to summit as the
+  theme plays, a gull conducting, the harmony dial as a ski-lift bullwheel,
+  captions on routed-wood Forest Service signs, stickers on the map's corners
+  (POW DAY, INVERSION, THE LAKE IS LOW), sky gradients by daypart. Orange is
+  still for measured values. Everything stops moving under reduced motion.
+- **No conductor required.** The site plays from the compiled schedule and
+  the open feeds the browser can read itself (USGS, NWS, Open-Meteo, SNOTEL,
+  GBFS, the quake catalog, and the seismometers over EarthScope's DataLink
+  WebSocket). Each phone plans the whole day itself: the plan is a pure
+  function of the schedule, the sun and moon, and the sky's hourly slots, so
+  score pages turned out unnecessary. The **conductor** (`conductor/`) is
+  built and optional: it reads UTA's realtime (inferring departures from
+  trip updates; late trains lay back as designed), KSLC's METARs, and the
+  seismometers once for everyone, and seals 30-second windows at immutable
+  URLs. It runs as a small Node process on the page's own TypeScript, not
+  on the .wasm. Deploying it is a `railway up` away (conductor/README.md).
+- **The sky every phone agrees on.** NWS observations come every five
+  minutes and have gaps (Oct 22 lost ten hours). The plan reads one slot an
+  hour, the report nearest :54 in the quarter hour before the hour, and
+  every phone fetches the same span (from four hours before the day's 5 AM
+  anchor); alerts count from the hour after they're issued. Only
+  observations steer the plan; model data (ridge wind, mountain snow, PM2.5,
+  the inversion) only colors bars. Each finished day's sky is sealed from
+  the METARs into the archive.
+- **The archive.** GitHub Pages can't run a server, so the site is the
+  archive: each daily build compiles against the deployed site, keeping the
+  network append-only and carrying every earlier day forward with its
+  schedule and sealed sky. Rewind and A Day in Twelve Minutes reach back as
+  far as it goes, with a shareable `?day=` link.
+- **Clocks.** Without the conductor's `/time`, phones find our server's UTC
+  from the moment its `Date` header ticks over (requests every 80 ms), which
+  pins it to about half a round trip.
+- **The engine.** Rust on sonido in one AudioWorklet, SIMD and scalar
+  builds, 810 KB (280 KB gzipped). Departures from this document: the
+  skyline oscillator is the engine's own (8 haze frames × 6 band limits, from
+  the crest's DFT); the piano is 18 Salamander notes as MP3, decoded by
+  symphonia in the engine itself; the modal voices use sonido's bar-physics
+  presets rather than Faust; the worklet host lives here, not in sonido; the
+  reverb's FDN tail runs at half rate. sonido gained true-peak limiting,
+  up-conversion, counter-based random numbers, partitioned convolution,
+  modal banks and GCC-PHAT for this (all pushed to its main).
+- **The ground** sings one band per station rather than every station's
+  octaves: the Capitol 2–4 Hz, the Avenues 4–8, Brigham Young Park 8–16, the
+  I-15 bridge array 16–32 (where the freeway is), panned by station.
+- **Tune to the room** measures this phone's own round trip with two 120 ms
+  noise bursts rather than a click, and refuses unless each correlation peak
+  stands well clear of the noise (a reverberant room measured 49 against a
+  beep's 4.9). iPhones get the nudge, as planned.
+- **Measured:** the engine at 7.4% of an Intel i5-6300U core in WebAssembly
+  (5.6% native); −17 to −18 LUFS integrated at every daypart, true peak −1.3
+  to −7 dBTP, no gaps; two renders bit-identical, and GitHub's runners
+  render the same numbers as a laptop. CI listens to five dayparts and a
+  whole day in twelve minutes on every push, and plays every menu feature in
+  headless Chrome.
+- **Not built yet:** planes (they need our own ADS-B receiver), UDOT's roads
+  and plows (a key), the grid, UTA's service alerts, the resorts' own voices,
+  sampled strings and brass (the pad and the horn are synthesized), rooms
+  recorded on location (the vantages use modeled early reflections), and
+  keeping old engines for Rewind's "as broadcast" playback.
 
 ## The idea
 

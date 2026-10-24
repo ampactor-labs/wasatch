@@ -19,6 +19,7 @@ export const Kind = {
   PLAY: 14,
   SOLO: 15,
   TWELVE: 16,
+  RAIL: 17,
 } as const;
 export type KindCode = (typeof Kind)[keyof typeof Kind];
 
@@ -275,6 +276,15 @@ export function encodeSolo(notes: SoloNote[]): Uint8Array {
   const w = new Writer();
   w.u32(notes.length);
   for (const n of notes) w.f32(n.beat).i32(n.degree).f32(n.vel).f32(n.beats);
+  return w.bytes();
+}
+
+/** A conductor's window of rail departures: [actual ms, scheduled ms,
+ * route, dir, stop, observed 0/1] rows. */
+export function encodeRail(from: number, to: number, rows: [number, number, number, number, number, number][]): Uint8Array {
+  const w = new Writer();
+  w.f64(from).f64(to).u32(rows.length);
+  for (const [ms, sched, route, dir, stop, observed] of rows) w.f64(ms).f64(sched).u8(route).u8(dir).u16(stop).u8(observed);
   return w.bytes();
 }
 

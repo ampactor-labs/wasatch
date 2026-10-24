@@ -12,6 +12,7 @@ import type { Schedule } from "./schedule.ts";
 import { SECTION_NAMES, type PlayScreen } from "./screen.ts";
 import type { Valley } from "./valley.ts";
 import { STATIONS } from "../data/ground.ts";
+import type { Conductor } from "../data/conductor.ts";
 import { Kind, encodeSolo, encodeTwelve } from "../engine/protocol.ts";
 import { PlayAlong } from "./playalong.ts";
 import { parseGpx, soloFromRun } from "./run.ts";
@@ -23,6 +24,7 @@ export interface MenuDeps {
   schedule: Schedule;
   screen: PlayScreen;
   base: string;
+  conductor: Conductor | null;
 }
 
 type PanelId = "play" | "run" | "rewind" | "tune" | "mappings" | "about";
@@ -392,8 +394,18 @@ export class Menu {
     const sky = valley.sky;
     const hour = sky?.value.hours.find((h) => h.at === Math.floor((now - 20 * 60_000) / 3_600_000) * 3_600_000);
     const bar = screen.currentBar();
+    const c = this.deps.conductor;
     const rows = [
-      row("Transit", "the groove: bells, horn, drums, bass", `${schedule.vehiclesAt(now)} vehicles in service`, "scheduled", "UTA GTFS", "https://www.rideuta.com/Rider-Info/Developer-Resources"),
+      c
+        ? row(
+            "Transit",
+            "the groove: bells, horn, drums, bass",
+            `${schedule.vehiclesAt(now)} in service · ${c.stats.observed} departures seen live, ${c.stats.scheduled} from the schedule`,
+            c.stats.windows ? `live ${mountainTime(c.stats.latest)}` : "waiting",
+            "UTA realtime, by the conductor",
+            "https://www.rideuta.com/",
+          )
+        : row("Transit", "the groove: bells, horn, drums, bass", `${schedule.vehiclesAt(now)} vehicles in service`, "scheduled", "UTA GTFS", "https://www.rideuta.com/Rider-Info/Developer-Resources"),
       row(
         "Great Salt Lake",
         "the drone under everything; whether phrases come home",

@@ -536,6 +536,8 @@ export function fetchQuakes(): Promise<Reading<Quake[]> | null> {
 // --- GREENbike (GBFS) --------------------------------------------------------
 
 const GBFS = "https://gbfs.bcycle.com/bcycle_greenbikeslc";
+/** BCycle's feed can take twenty seconds to answer. */
+const GBFS_TIMEOUT_MS = 35_000;
 
 export interface Station {
   id: string;
@@ -547,6 +549,8 @@ export interface Station {
 export async function fetchStations(): Promise<Station[]> {
   const d = await json<{ data: { stations: { station_id: string; name: string; lat: number; lon: number }[] } }>(
     `${GBFS}/station_information.json`,
+    undefined,
+    GBFS_TIMEOUT_MS,
   );
   return d.data.stations.map((s) => ({ id: s.station_id, name: s.name, lat: s.lat, lon: s.lon }));
 }
@@ -570,6 +574,8 @@ export class BikeWatch {
   async poll(): Promise<boolean> {
     const d = await json<{ last_updated: number; data: { stations: { station_id: string; num_bikes_available: number }[] } }>(
       `${GBFS}/station_status.json`,
+      undefined,
+      GBFS_TIMEOUT_MS,
     );
     const updated = d.last_updated * 1000;
     if (updated <= this.lastUpdated) return false;

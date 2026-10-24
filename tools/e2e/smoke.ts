@@ -20,6 +20,7 @@ const flag = (name: string) => {
 };
 const shots = flag("--shots");
 const seconds = Number(flag("--seconds") ?? 25);
+const query = flag("--query");
 let url = args.find((a) => /^https?:/.test(a));
 
 const TYPES: Record<string, string> = {
@@ -97,7 +98,7 @@ try {
       else if (m.type() === "warn") console.log(`  warn: ${m.text()}`);
     });
     const t0 = Date.now();
-    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.goto(query ? `${url}?${query}` : url, { waitUntil: "domcontentloaded" });
     await page.waitForSelector('button[data-action="listen"]:not([disabled])', { timeout: 60_000 });
     const ready = (Date.now() - t0) / 1000;
     const status = await page.$eval('[data-slot="status1"]', (e) => e.textContent ?? "");
@@ -124,7 +125,14 @@ try {
     if (state.captions.length === 0) failures.push(`${view.name}: no captions`);
     // Feeds can be down; anything else is a bug.
     const real = errors.filter((e) => !/Failed to load resource|net::|CORS|status of 4|status of 5/.test(e));
-    if (view.name === "desktop") await interactions(page, failures);
+    // With a conductor: its windows arrive, and departures are heard live.
+    const c = await page.evaluate(() => (window as unknown as { __wasatch: { conductor: { stats: { windows: number; observed: number; scheduled: number } } | null } }).__wasatch.conductor?.stats ?? null);
+    if (c) {
+      const live = await page.$$eval(".play__captions .sign--live .sign__line:first-child", (e) => e.map((x) => x.textContent ?? ""));
+      console.log(`  conductor: ${c.windows} windows, ${c.observed} departures seen live, ${c.scheduled} scheduled; live captions: ${live.join(" | ") || "none yet"}`);
+      if (c.windows < 2) failures.push(`${view.name}: the conductor's windows didn't arrive`);
+    }
+    if (view.name === "desktop" && !query) await interactions(page, failures);
     for (const e of real) failures.push(`${view.name}: ${e}`);
     for (const e of errors) console.log(`  ${e}`);
     await page.close();
@@ -223,7 +231,8 @@ async function interactions(page: import("puppeteer-core").Page, failures: strin
   await page.waitForSelector("table.mappings", { visible: true });
   await sleep(1500);
   const rows = await page.$$eval("table.mappings tbody tr", (r) => r.length);
-  console.log(`  mappings: ${rows} streams`);
+  const ground = await page.$$eval("table.mappings tbody tr", (r) => r.find((x) => /ground/i.test(x.textContent ?? ""))?.querySelector(".num")?.textContent ?? "");
+  console.log(`  mappings: ${rows} streams · the ground: ${ground}`);
   if (rows < 10) failures.push(`Show mappings: only ${rows} rows`);
   if (shots) await page.screenshot({ path: join(shots, "desktop-mappings.png") });
   await page.click(".sheet__close");

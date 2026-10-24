@@ -61,6 +61,8 @@ pub mod kind {
     pub const SOLO: u32 = 15;
     /// A Day in Twelve Minutes (a date), or back to live (0).
     pub const TWELVE: u32 = 16;
+    /// A conductor's window of rail departures.
+    pub const RAIL: u32 = 17;
 }
 
 /// A little-endian reader that never panics: short reads return zeros.
@@ -303,6 +305,30 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
                 })
                 .collect();
             with_engine(|e| e.set_solo(notes))
+        }
+        kind::RAIL => {
+            let from = r.f64();
+            let to = r.f64();
+            let n = r.count(21);
+            let events: Vec<crate::schedule::RailEvent> = (0..n)
+                .map(|_| {
+                    let ms = r.f64();
+                    let sched = r.f64();
+                    let route = r.u8();
+                    let dir = r.u8();
+                    let stop = r.u16();
+                    let observed = r.u8() == 1;
+                    crate::schedule::RailEvent {
+                        ms,
+                        route,
+                        dir,
+                        stop,
+                        late_s: ((ms - sched) / 1000.0).round().clamp(-3600.0, 3600.0) as i16,
+                        observed,
+                    }
+                })
+                .collect();
+            with_engine(|e| e.perform(from, to, &events))
         }
         kind::TWELVE => {
             let date = r.u32();

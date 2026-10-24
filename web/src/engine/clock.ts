@@ -13,8 +13,9 @@ export interface ClockEstimate {
   offset: number;
   /** Half-width of the uncertainty, ms. */
   uncertainty: number;
-  /** "header" when measured from our server, "device" when trusting the phone. */
-  source: "header" | "device";
+  /** "conductor" from its /time, "header" from our server's Date edges,
+   * "device" when trusting the phone. */
+  source: "conductor" | "header" | "device";
 }
 
 let current: ClockEstimate = {
@@ -38,6 +39,27 @@ export function clockEstimate(): ClockEstimate {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The conductor's clock: eight round trips to its uncached /time, keeping
+ * the one with the shortest round trip and taking its midpoint
+ * (DESIGN.md, Clocks). */
+export async function syncClockFromConductor(base: string, tries = 8): Promise<ClockEstimate> {
+  let best: { offset: number; rtt: number } | null = null;
+  for (let i = 0; i < tries; i++) {
+    const t0 = performance.now();
+    try {
+      const res = await fetch(`${base}/time`, { cache: "no-store" });
+      const { t } = (await res.json()) as { t: number };
+      const t1 = performance.now();
+      const rtt = t1 - t0;
+      if (!best || rtt < best.rtt) best = { offset: t - (t0 + t1) / 2, rtt };
+    } catch {
+      // One lost round trip doesn't matter.
+    }
+  }
+  if (best && best.rtt < 2000) current = { offset: best.offset, uncertainty: best.rtt / 2, source: "conductor" };
+  return current;
+}
 
 /** Measure our server's UTC from Date-header edges. Resolves with the
  * estimate it settled on (and makes it current). */

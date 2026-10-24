@@ -16,10 +16,11 @@
     "gtfs": "node tools/gtfs/compile.ts",
     "theme": "node tools/theme/build.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --config web/vite.config.ts && node --test 'tools/**/*.test.ts'",
+    "test": "vitest run --config web/vite.config.ts && node --test 'tools/**/*.test.ts' 'conductor/**/*.test.ts'",
     "render": "node tools/render/render.ts",
     "check": "node tools/render/check.ts",
-    "smoke": "node tools/e2e/smoke.ts"
+    "smoke": "node tools/e2e/smoke.ts",
+    "conductor": "node conductor/src/server.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
