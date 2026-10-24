@@ -51,6 +51,8 @@ jobs:
       # schedule must not, so the run re-enables itself.
       - name: Stay scheduled
         if: github.event_name == 'schedule'
+        # Never let this block the day's deploy.
+        continue-on-error: true
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/pages.yml/enable"
         env:
           GH_TOKEN: ${{ github.token }}

@@ -79,20 +79,20 @@ async function main(): Promise<void> {
     }
     if (existsSync(join(out, file))) continue;
     const body = previous ? await previousFile(previous, file) : null;
-    if (body) {
-      writeFileSync(join(out, file), body);
-      carried++;
-    } else {
-      delete sky[date];
-    }
+    // The archive's sky didn't download: fail, rather than deploy a manifest
+    // without it, which the next build would take as final.
+    if (!body) throw new Error(`couldn't carry ${date}'s sky forward: ${file} didn't download`);
+    writeFileSync(join(out, file), body);
+    carried++;
   }
 
   // KSLC's METARs, hourly and complete (NWS's own feed has gaps); the data
   // API keeps about two weeks, and CI can read it where a browser can't.
-  const res = await fetch("https://aviationweather.gov/api/data/metar?ids=KSLC&format=json&hours=168", {
+  const metars = await fetch("https://aviationweather.gov/api/data/metar?ids=KSLC&format=json&hours=168", {
     headers: { "User-Agent": "wasatch-symphony (github.com/ampactor-labs/wasatch)" },
-  });
-  const metars = res.ok ? ((await res.json()) as Metar[]) : [];
+  })
+    .then((res) => (res.ok ? (res.json() as Promise<Metar[]>) : []))
+    .catch(() => [] as Metar[]);
   console.log(`METARs: ${metars.length}`);
 
   // Seal the days that have ended and are still inside the observations' week.
@@ -102,7 +102,12 @@ async function main(): Promise<void> {
     const recent = now - (t0 + AFTER) < RESEAL_DAYS * 86_400_000;
     if (!ended || !recent) continue;
     // KSLC reports every five minutes: a day's 34 hours are about 400 reports.
-    const raw = await fetchSkyRaw(t0 - BEFORE, t0 + AFTER, 7);
+    // A day that can't be read today is sealed by a later build in the week.
+    const raw = await fetchSkyRaw(t0 - BEFORE, t0 + AFTER, 7).catch((err: unknown) => {
+      console.warn(`sky ${date}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    });
+    if (!raw) continue;
     // Prefer the METARs where they cover the day.
     const reports = metars.map(obsFromMetar).filter((o) => o.t >= t0 - BEFORE && o.t < t0 + AFTER);
     if (reports.length >= 24) raw.obs = reports.sort((a, b) => b.t - a.t);

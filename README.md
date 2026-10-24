@@ -10,7 +10,8 @@ the valley is in right now. Then the live piece fades in under it:
 |---|---|
 | A TRAX train leaves a station | A bell on its line's chord tone (Blue root, Red fifth, Green third) |
 | FrontRunner at Salt Lake Central | A horn in the rhythm of a grade crossing |
-| Buses everywhere | The groove's density: hats, kick, the walking line |
+| Buses everywhere | The groove's density: hats and shakers in Euclidean patterns |
+| The Jordan River running high | A walking bass |
 | A ski bus heads up a canyon | Drums in that canyon's own echo |
 | Great Salt Lake's level | The drone under everything; below 4,198 ft, phrases don't always come home |
 | The sky over the valley | How bright the mode is, Lydian through minor |

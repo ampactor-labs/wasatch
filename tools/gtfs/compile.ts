@@ -191,6 +191,11 @@ async function main() {
   const prevManifestText = args.previous ? await previousFile(args.previous, "manifest.json") : null;
   const prevNetwork = prevNetworkText ? (JSON.parse(prevNetworkText) as PreviousNetwork) : null;
   const prevManifest = prevManifestText ? (JSON.parse(prevManifestText) as PreviousManifest) : null;
+  // One without the other means the previous build answered only in part:
+  // building on that could drop archived days for good, so don't.
+  if (args.previous && !prevNetwork !== !prevManifest) {
+    throw new Error(`the previous build at ${args.previous} answered in part; not building on it`);
+  }
   if (args.previous) console.log(`previous build: ${prevNetwork ? `${prevNetwork.stops.length} stations` : "none"}, ${prevManifest ? Object.keys(prevManifest.days).length : 0} dates`);
   const files = unzipSync(bytes, { filter: (f) => NEEDED.includes(f.name) });
   const decoder = new TextDecoder("utf-8");
@@ -660,7 +665,9 @@ async function main() {
     const file = `day-${key}.json`;
     if (!existsSync(join(args.out, file))) {
       const body = args.previous ? await previousFile(args.previous, file) : null;
-      if (!body) continue;
+      // A day the archive has but can't hand over: fail rather than deploy
+      // a manifest without it, which the next build would take as final.
+      if (!body) throw new Error(`couldn't carry ${date} forward: ${file} didn't download`);
       writeFileSync(join(args.out, file), body);
     }
     days[date] = key;

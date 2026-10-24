@@ -48,7 +48,7 @@ What's live, and where it differs from the rest of this document:
   from the moment its `Date` header ticks over (requests every 80 ms), which
   pins it to about half a round trip.
 - **The engine.** Rust on sonido in one AudioWorklet, SIMD and scalar
-  builds, 810 KB (280 KB gzipped). Departures from this document: the
+  builds, 814 kB (281 kB gzipped). Departures from this document: the
   skyline oscillator is the engine's own (8 haze frames × 6 band limits, from
   the crest's DFT); the piano is 18 Salamander notes as MP3, decoded by
   symphonia in the engine itself; the modal voices use sonido's bar-physics
