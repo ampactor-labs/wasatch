@@ -14,6 +14,7 @@
     "preview": "vite preview --config web/vite.config.ts",
     "engine": "node tools/build-engine.ts",
     "gtfs": "node tools/gtfs/compile.ts",
+    "keys:check": "node conductor/src/keys.ts",
     "theme": "node tools/theme/build.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --config web/vite.config.ts && node --test 'tools/**/*.test.ts' 'conductor/**/*.test.ts'",

@@ -5,8 +5,8 @@
 // KSLC's METARs; the same clock.
 
 import type { Host } from "../engine/host.ts";
-import { Kind, encodeAlerts, encodePlanes, encodeRail, type Fleet } from "../engine/protocol.ts";
-import type { AlertRow, Grid, PlaneDot, PlaneRow, ServiceAlerts, Valley } from "../app/valley.ts";
+import { Kind, encodeAlerts, encodePlanes, encodeRail, encodeRoads, type Fleet, type RoadState } from "../engine/protocol.ts";
+import type { AlertRow, Grid, KeyedNow, PlaneDot, PlaneRow, RoadRow, ServiceAlerts, Valley } from "../app/valley.ts";
 import { DELAY_MS, STATIONS, type Baseband, type GroundFeed } from "./ground.ts";
 import type { Lake, Quake, Reading, River, SkyNow, Snow } from "./feeds.ts";
 import { utcNow } from "../engine/clock.ts";
@@ -26,6 +26,8 @@ interface WindowBody {
   alerts?: AlertRow[];
   alertsActive?: [number, number, number, number];
   due?: number;
+  roads?: RoadRow[];
+  roadState?: RoadState;
 }
 
 export class Conductor implements GroundFeed {
@@ -71,7 +73,7 @@ export class Conductor implements GroundFeed {
 
   /** The sky, the slow values and the fleet, before the first bar. */
   async prime(): Promise<void> {
-    await Promise.all([this.sky(), this.slow(), this.vehicles(), this.planes(), this.alerts()]);
+    await Promise.all([this.sky(), this.slow(), this.vehicles(), this.planes(), this.alerts(), this.keyed()]);
   }
 
   start(): void {
@@ -88,6 +90,7 @@ export class Conductor implements GroundFeed {
     every(10_000, () => this.vehicles());
     every(30_000, () => this.planes());
     every(5 * 60_000, () => this.alerts());
+    every(5 * 60_000, () => this.keyed());
   }
 
   stop(): void {
@@ -122,6 +125,13 @@ export class Conductor implements GroundFeed {
   private async alerts(): Promise<void> {
     const a = await this.get<ServiceAlerts>("/alerts.json");
     if (a) this.valley.conductorAlerts(a);
+  }
+
+  /** What the keyed sources read: the roads, the air measured, the
+   * avalanche forecast (each absent until its key is set). */
+  private async keyed(): Promise<void> {
+    const k = await this.get<KeyedNow>("/roads.json");
+    if (k) this.valley.conductorKeyed(k);
   }
 
   /** Every sealed window from just before the listening time to now. */
@@ -171,7 +181,17 @@ export class Conductor implements GroundFeed {
         alerts.map(([ms, kind, severe]) => ({ ms, kind, severe: severe === 1 })),
       ),
     );
-    this.valley.conductorEvents(planes, alerts, w.due ?? 0);
+    const roads = w.roads ?? [];
+    this.host.post(
+      Kind.ROADS,
+      encodeRoads(
+        w.start,
+        w.end,
+        w.roadState ?? { traction: [0, 0], plows: 0, closures: 0 },
+        roads.map(([ms, kind, road, lat, lon]) => ({ ms, kind, road, lat, lon })),
+      ),
+    );
+    this.valley.conductorEvents(planes, alerts, w.due ?? 0, roads);
     if (w.bikes.length) {
       this.valley.conductorBikes(w.bikes.map(([ms, lat, lon, delta, station]) => ({ ms, lat, lon, delta, station })));
     }

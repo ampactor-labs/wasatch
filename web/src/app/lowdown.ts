@@ -28,6 +28,8 @@ export type TopicId =
   | "planes"
   | "storm"
   | "grid"
+  | "roads"
+  | "avalanche"
   | "quakes"
   | "bikes"
   | "ground"
@@ -239,7 +241,7 @@ export const TOPICS: readonly Topic[] = [
     group: "valley",
     short: "Haze dulls the pad and the skyline. An inversion puts a low ceiling on the reverb and brings far-off sounds closer, as it does outside.",
     more:
-      "Under an inversion, warm air sits on cold, sound bends back toward the ground and carries: an event 30 km away comes about 10 dB closer. The reverb gets a low, dark ceiling. PM2.5 sets how much of the skyline you can see, from every ridge on a clean day to the outline in thick haze; it never muddies the sound.",
+      "Under an inversion, warm air sits on cold, sound bends back toward the ground and carries: an event 30 km away comes about 10 dB closer. The reverb gets a low, dark ceiling. PM2.5 sets how much of the skyline you can see, from every ridge on a clean day to the outline in thick haze; it never muddies the sound. It's the model's, or, with AirNow's key, what the valley's monitors measured in the hour before.",
     plays: "the reverb's ceiling and the haze",
     source: { name: "Open-Meteo, with Copernicus CAMS", href: "https://open-meteo.com/en/docs/air-quality-api" },
     now: (c) => {
@@ -251,7 +253,9 @@ export const TOPICS: readonly Topic[] = [
       const down = sky.value.tempC;
       const measured =
         up !== null && up !== undefined && Number.isFinite(down) ? ` · Snowbird ${Math.round(up)}°F, the valley ${Math.round((down * 9) / 5 + 32)}°F${up - ((down * 9) / 5 + 32 - 17.6) > 4 ? ": inverted" : ""}` : "";
-      return { value: `PM2.5 ${sky.value.pm25.toFixed(0)} µg/m³ · ${sky.value.inversionC.toFixed(1)} °C warmer aloft (model)${measured}`, receipt: receipt(sky) };
+      const air = c.valley.keyed?.airnow;
+      const pm = air && c.valley.keyed?.measured.air ? `AQI ${air.aqi}, ${air.category.toLowerCase()} (measured at ${air.area})` : `PM2.5 ${sky.value.pm25.toFixed(0)} µg/m³ (model)`;
+      return { value: `${pm} · ${sky.value.inversionC.toFixed(1)} °C warmer aloft (model)${measured}`, receipt: receipt(sky) };
     },
   },
   {
@@ -260,11 +264,13 @@ export const TOPICS: readonly Topic[] = [
     group: "valley",
     short: "Ridge gusts play an Aeolian harp: the faster the wind, the higher the string it sounds, always on a note of the chord.",
     more:
-      "Wind across a wire sheds vortices at a frequency set by its speed (about 200 Hz for every metre a second across a 1 mm string). That picks the register, and the harp plays the nearest chord tone, never the raw harmonic.",
+      "Wind across a wire sheds vortices at a frequency set by its speed (about 200 Hz for every metre a second across a 1 mm string). That picks the register, and the harp plays the nearest chord tone, never the raw harmonic. The wind is the forecast's at Alta, or, with UDOT's stations, the wind measured up the canyons in the hour before.",
     plays: "the harp",
-    source: { name: "Open-Meteo, at Alta", href: "https://open-meteo.com/" },
+    source: { name: "Open-Meteo at Alta; UDOT's stations, with its key", href: "https://open-meteo.com/" },
     now: (c) => {
       const sky = c.valley.sky;
+      const w = c.valley.keyed?.udot?.wind;
+      if (w && c.valley.keyed?.measured.wind) return { value: `gusts ${Math.round(w.gustMs * 2.237)} mph measured up the canyons (${w.stations.length} stations)`, receipt: "live" };
       return sky && Number.isFinite(sky.value.ridgeGustMs) ? { value: `gusts ${Math.round(sky.value.ridgeGustMs * 2.237)} mph at Alta (forecast)`, receipt: receipt(sky) } : null;
     },
   },
@@ -346,6 +352,39 @@ export const TOPICS: readonly Topic[] = [
       if (!g) return null;
       const pct = Math.round((g.value.energy - 1) * 100);
       return { value: `${g.value.mw.toLocaleString("en-US")} MW · ${pct >= 0 ? "+" : ""}${pct}% on the usual for the hour`, receipt: receipt(g) };
+    },
+  },
+  {
+    id: "roads",
+    title: "The roads",
+    group: "valley",
+    short: "A crash or closure on the valley's highways hangs the harmony until it clears; avalanche control booms up the canyon; traction law is a low brass pedal; plows in a storm are brushes.",
+    more:
+      "UDOT's traffic feed: incidents on I-15, I-80, I-215, Bangerter and the valley's other highways (roadwork isn't news) suspend the chord in the bar they open, hold the tension up while they stand, and bring the harmony home in the bar they clear; they slow the fleet's flow too. Closures for avalanche control on SR-210 or SR-190 are a low boom far into that canyon's echo. Traction law up a canyon is a pedal on home from there, a phrase at a time. Snowplows out in the valley while it snows play brushes on the off-beats, more the more plows. UDOT's weather stations up the canyons give the harp the wind as measured.",
+    plays: "the harmony's suspense, a boom, a pedal and brushes",
+    source: { name: "UDOT Traffic", href: "https://www.udottraffic.utah.gov/" },
+    now: (c) => {
+      const u = c.valley.keyed?.udot;
+      if (!c.valley.keyed) return null;
+      if (!u) return { value: "waiting for UDOT's key", receipt: "off" };
+      const t = u.state.traction;
+      const traction = t[0] || t[1] ? ` · traction law up ${t[0] && t[1] ? "both Cottonwoods" : t[0] ? "Little Cottonwood" : "Big Cottonwood"}` : "";
+      return { value: `${u.state.closures ? `${u.state.closures} incident${u.state.closures === 1 ? "" : "s"} on the highways` : "the highways clear"}${traction} · ${u.state.plows} plows out`, receipt: "live" };
+    },
+  },
+  {
+    id: "avalanche",
+    title: "Avalanche danger",
+    group: "valley",
+    short: "The Utah Avalanche Center's forecast for the Salt Lake mountains, read each morning: the day's danger, on the board and here.",
+    more:
+      "The forecast is issued between 5 and 8 AM; the conductor looks every 15 minutes then, as the center asks, and no more. Its danger rose rates every aspect and elevation; the board shows the worst of it. What it plays will come once its real forecasts have been heard through a season.",
+    source: { name: "Utah Avalanche Center", href: "https://utahavalanchecenter.org/forecast/salt-lake" },
+    now: (c) => {
+      if (!c.valley.keyed) return null;
+      const a = c.valley.keyed.uac;
+      if (!a) return { value: "waiting for the center's token", receipt: "off" };
+      return { value: `${["no rating", "low", "moderate", "considerable", "high", "extreme"][a.danger] ?? "?"} · ${a.issued}`, receipt: "live" };
     },
   },
   {
@@ -523,6 +562,9 @@ export const FAMILY_TOPIC: Record<string, TopicId> = {
   storm: "storm",
   grid: "grid",
   due: "frontrunner",
+  road: "roads",
+  traction: "roads",
+  plows: "roads",
 };
 
 /** Which topic a sticker explains. */
@@ -616,6 +658,13 @@ export function conditions(c: LowdownCtx): Condition[] {
   }
   if (sky && Number.isFinite(sky.value.ridgeGustMs)) add("wind", "Ridges", `${Math.round(sky.value.ridgeGustMs * 2.237)} mph`, receipt(sky));
   if (v.river) add("river", "River", `${Math.round(v.river.value.cfs)} cfs`, receipt(v.river));
+  const keyed = v.keyed;
+  if (keyed?.udot && !v.shift) {
+    const s = keyed.udot.state;
+    const parts = [s.closures ? `${s.closures} incident${s.closures === 1 ? "" : "s"}` : "clear", s.traction[0] || s.traction[1] ? "traction law" : "", s.plows ? `${s.plows} plows` : ""].filter(Boolean);
+    add("roads", "Roads", parts.join(" · "), "live");
+  }
+  if (keyed?.uac) add("avalanche", "Avalanche", ["no rating", "low", "moderate", "considerable", "high", "extreme"][keyed.uac.danger] ?? "?", "live");
   if (v.grid) {
     const pct = Math.round((v.grid.value.energy - 1) * 100);
     add("grid", "Grid", `${v.grid.value.mw.toLocaleString("en-US")} MW · ${pct >= 0 ? "+" : ""}${pct}%`, receipt(v.grid));

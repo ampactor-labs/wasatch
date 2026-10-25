@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSyn
 import { join } from "node:path";
 import type { AlertCounts, AlertRow } from "./alerts.ts";
 import type { PlaneRow } from "./planes.ts";
+import type { RoadRow, RoadState } from "./udot.ts";
 
 export const WINDOW_MS = 30_000;
 /** A window opens at `start` and is sealed at `start + SEAL_MS`. */
@@ -49,6 +50,10 @@ export interface WindowBody {
   /** When the next FrontRunner was due to leave Salt Lake Central as it
    * sealed, UTC ms (0 none). */
   due: number;
+  /** Things on the roads (with UDOT's key). */
+  roads: RoadRow[];
+  /** What stood on them as it sealed. */
+  roadState: RoadState;
 }
 
 interface Open {
@@ -120,7 +125,21 @@ export class Windows {
     let w = this.open.get(start);
     if (!w) {
       w = {
-        body: { v: 1, start, end: start + WINDOW_MS, rail: [], bikes: [], quakes: [], ground: [], planes: [], alerts: [], alertsActive: [0, 0, 0, 0], due: 0 },
+        body: {
+          v: 1,
+          start,
+          end: start + WINDOW_MS,
+          rail: [],
+          bikes: [],
+          quakes: [],
+          ground: [],
+          planes: [],
+          alerts: [],
+          alertsActive: [0, 0, 0, 0],
+          due: 0,
+          roads: [],
+          roadState: { traction: [0, 0], plows: 0, closures: 0 },
+        },
         ground: new Map(),
         groundMeta: new Map(),
       };
@@ -163,6 +182,11 @@ export class Windows {
     w.body.alerts.push([Math.max(row[0], w.body.start), ...row.slice(1)] as AlertRow);
   }
 
+  addRoad(row: RoadRow, now: number): void {
+    const w = this.home(row[0], now);
+    w.body.roads.push([Math.max(row[0], w.body.start), ...row.slice(1)] as RoadRow);
+  }
+
   addGround(band: number, meta: { lat: number; lon: number; level: number }, t: number, i: number, q: number, now: number): void {
     const start = Windows.startOf(t);
     if (start < Windows.firstOpen(now)) return;
@@ -199,6 +223,7 @@ export class Windows {
       w.body.quakes.sort((a, b) => a[0] - b[0]);
       w.body.planes.sort((a, b) => a[0] - b[0]);
       w.body.alerts.sort((a, b) => a[0] - b[0]);
+      w.body.roads.sort((a, b) => a[0] - b[0]);
       const text = JSON.stringify(w.body);
       this.sealed.set(start, text);
       this.open.delete(start);

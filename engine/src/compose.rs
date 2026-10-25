@@ -191,6 +191,13 @@ pub enum FeatureKind {
     Grid = 20,
     /// FrontRunner due at Salt Lake Central (value: minutes; event_ms when).
     Due = 21,
+    /// Something on the roads (route: 0 an incident, 1 cleared, 2 avalanche
+    /// control; stop: 0 the valley, 1 Little Cottonwood, 2 Big Cottonwood).
+    Road = 22,
+    /// Traction law up a canyon (value: 1 Little Cottonwood, 2 Big, 3 both).
+    Traction = 23,
+    /// Snowplows out in the valley (value: how many).
+    Plows = 24,
 }
 
 /// A captioned moment.
@@ -304,6 +311,36 @@ pub struct AlertEvent {
     pub severe: bool,
 }
 
+/// Something on the roads, from UDOT.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RoadEvent {
+    /// When it sounds, listening-time UTC ms.
+    pub ms: f64,
+    /// 0 an incident on a valley highway, 1 one cleared, 2 avalanche control.
+    pub kind: u8,
+    /// 0 the valley, 1 Little Cottonwood, 2 Big Cottonwood.
+    pub road: u8,
+    /// Where.
+    pub lat: f32,
+    /// Where.
+    pub lon: f32,
+}
+
+/// What stood on the roads when a conductor's window was sealed.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct RoadWindow {
+    /// The window's start, listening-time UTC ms.
+    pub from_ms: f64,
+    /// Its end.
+    pub to_ms: f64,
+    /// Traction law up Little and Big Cottonwood.
+    pub traction: [bool; 2],
+    /// Snowplows out in the valley.
+    pub plows: u16,
+    /// Crashes and full closures standing on the valley's highways.
+    pub closures: u16,
+}
+
 /// The service alerts in effect when a conductor's window was sealed.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct AlertWindow {
@@ -391,6 +428,10 @@ pub struct Valley<'a> {
     pub alerts: &'a [AlertEvent],
     /// The service alerts in effect, window by window.
     pub alert_windows: &'a [AlertWindow],
+    /// Things on the roads, by time.
+    pub roads: &'a [RoadEvent],
+    /// What stood on the roads, window by window.
+    pub road_windows: &'a [RoadWindow],
 }
 
 impl<'a> Valley<'a> {
@@ -411,6 +452,17 @@ impl<'a> Valley<'a> {
             planes: &[],
             alerts: &[],
             alert_windows: &[],
+            roads: &[],
+            road_windows: &[],
+        }
+    }
+
+    /// What stood on the roads at `ms`, from the window covering it.
+    pub fn roads_at(&self, ms: f64) -> RoadWindow {
+        let i = self.road_windows.partition_point(|w| w.from_ms <= ms);
+        match i.checked_sub(1).map(|i| self.road_windows[i]) {
+            Some(w) if ms < w.to_ms => w,
+            _ => RoadWindow::default(),
         }
     }
 
@@ -585,6 +637,9 @@ pub(crate) struct BarCtx {
     /// cadence, the cadence bar's start: its approach is the dominant, its
     /// cadence lands home, and the horn lands with it.
     pub arrival: Option<f64>,
+    /// An incident on the valley's highways opening in this bar (0: the
+    /// chord hangs suspended) or clearing (1: it comes home).
+    pub road: Option<u8>,
 }
 
 impl BarCtx {
@@ -594,6 +649,7 @@ impl BarCtx {
             tension: sec.tension,
             storm: 0.0,
             arrival: None,
+            road: None,
         }
     }
 }
@@ -623,14 +679,27 @@ pub(crate) fn bar_ctx(sec: &Section, bar: u32, valley: &Valley<'_>) -> BarCtx {
     let start = sec.start_ms + f64::from(bar) * bar_ms;
     let active = valley.alerts_in_effect(start);
     let rail_alert = active[1] > 0 || active[2] > 0;
+    // A crash or a closure standing on the highways holds it up too, until
+    // the road clears.
+    let closed = valley.roads_at(start).closures > 0;
+    let mut tension = sec.tension;
+    if rail_alert {
+        tension = tension.max(0.5);
+    }
+    if closed {
+        tension = tension.max(0.45);
+    }
+    let lo = valley.roads.partition_point(|r| r.ms < start);
+    let road = valley.roads[lo..]
+        .iter()
+        .take_while(|r| r.ms < start + bar_ms)
+        .find(|r| r.kind < 2 && r.road == 0)
+        .map(|r| r.kind);
     BarCtx {
-        tension: if rail_alert {
-            sec.tension.max(0.5)
-        } else {
-            sec.tension
-        },
+        tension,
         storm: storm_at(valley, start),
         arrival: cadence_arrival(sec, bar, valley),
+        road,
     }
 }
 
@@ -729,6 +798,12 @@ pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>, ctx: &BarC
         Color::Triad
     };
     let chord = Chord::new(key, deg, color);
+    // A road clearing comes home; one closing hangs.
+    match ctx.road {
+        Some(1) => return Chord::new(key, 0, color),
+        Some(_) => return chord.suspended(),
+        None => {}
+    }
     // A storm on its way holds the harmony in suspense.
     if ctx.storm > 0.3 && sec.rng.stream(0x57).chance(u64::from(bar), 0.6 * ctx.storm) {
         return chord.suspended();
@@ -1234,6 +1309,9 @@ pub fn compose(
         planes(sec, bar, valley, state, out);
     }
 
+    // The roads.
+    roads(sec, bar, valley, kit_on, state, out);
+
     // Bikes: marimba plucks on scale degrees picked by latitude.
     if mix.bikes > 0.0 {
         let lo = valley.bikes.partition_point(|b| b.ms < start);
@@ -1386,7 +1464,8 @@ pub fn compose(
         let late_s = valley.schedule.system_late_s(start);
         let bus_rate = valley.schedule.bus_rate(start);
         let storm_mm = valley.sky.at_or_default(start - OBS_LAG_MS).storm_or_none();
-        let mut notables = [FeatureKind::Snow; 6];
+        let road_now = valley.roads_at(start);
+        let mut notables = [FeatureKind::Snow; 8];
         let mut n_notable = 0;
         for (on, kind) in [
             (snowing > 0.0, FeatureKind::Snow),
@@ -1398,6 +1477,10 @@ pub fn compose(
                 FeatureKind::Air,
             ),
             (late_s >= 120.0, FeatureKind::Late),
+            (
+                road_now.traction[0] || road_now.traction[1],
+                FeatureKind::Traction,
+            ),
         ] {
             if on {
                 notables[n_notable] = kind;
@@ -1441,12 +1524,23 @@ pub fn compose(
         } else {
             turn(slot)
         };
+        // Snow falling with the plows out: the plows' card says both.
+        let kind = if kind == FeatureKind::Snow && road_now.plows >= 5 {
+            FeatureKind::Plows
+        } else {
+            kind
+        };
         let (value, stop) = match kind {
             FeatureKind::Due => (
                 ((due.unwrap_or(start) - start) / 60_000.0).round() as f32,
                 valley.network.slc_central.unwrap_or(0),
             ),
             FeatureKind::Storm => (storm_mm, 0),
+            FeatureKind::Traction => (
+                f32::from(u8::from(road_now.traction[0]) | (u8::from(road_now.traction[1]) << 1)),
+                0,
+            ),
+            FeatureKind::Plows => (f32::from(road_now.plows), 0),
             FeatureKind::Grid => (valley.slow.energy_or_usual(), 0),
             FeatureKind::Snow => (snowing, 0),
             FeatureKind::Wind => (hour.ridge_gust_ms, 0),
@@ -1477,6 +1571,111 @@ pub fn compose(
     }
 
     out.notes.sort_by(|a, b| a.at_ms.total_cmp(&b.at_ms));
+}
+
+/// The canyon roads' places: partway up Little and Big Cottonwood.
+fn canyon_road(road: u8) -> (f32, f32) {
+    match road {
+        1 => RouteKind::Ski(5).canyon_point(),
+        _ => RouteKind::Ski(6).canyon_point(),
+    }
+}
+
+/// A bar's roads: an incident's card (its sound is the harmony's, in
+/// `chord_for`); avalanche control, a distant boom in the canyon's echo;
+/// traction law up a canyon, a low brass pedal there, a phrase at a time;
+/// snowplows out in a storm, brushes in the drums.
+fn roads(
+    sec: &Section,
+    bar: u32,
+    valley: &Valley<'_>,
+    kit_on: bool,
+    state: &mut ComposeState,
+    out: &mut Bar,
+) {
+    let bar_ms = sec.bar_ms();
+    let start = sec.start_ms + f64::from(bar) * bar_ms;
+    let step_ms = bar_ms / 16.0;
+    let key = sec.key;
+    let lo = valley.roads.partition_point(|r| r.ms < start);
+    for r in valley.roads[lo..]
+        .iter()
+        .take_while(|r| r.ms < start + bar_ms)
+    {
+        let step = (((r.ms - start) / step_ms).round() as u32).min(15);
+        let at = start + f64::from(step) * step_ms;
+        out.features.push(Feature {
+            at_ms: at,
+            kind: FeatureKind::Road,
+            route: r.kind,
+            stop: u16::from(r.road),
+            event_ms: r.ms,
+            late_s: 0,
+            observed: true,
+            value: 0.0,
+        });
+        state.phrase_featured = true;
+        if r.kind == 2 {
+            let (lat, lon) = canyon_road(r.road);
+            let f = (out.features.len() - 1) as u16;
+            for (i, m) in [28, 26].iter().enumerate() {
+                out.notes.push(Note {
+                    at_ms: at + f64::from(i as u32) * 3.0 * step_ms,
+                    inst: Inst::Tom,
+                    midi: *m as f32,
+                    vel: if i == 0 { 0.7 } else { 0.45 },
+                    dur_ms: 1800.0,
+                    variant: 4,
+                    lat,
+                    lon,
+                    feature: if i == 0 { f } else { NO_FEATURE },
+                });
+            }
+        }
+    }
+    let now = valley.roads_at(start);
+    let bip = bar % 8;
+    // Traction law: a pedal on home, low, breathing a phrase at a time, from
+    // the canyon that has it.
+    if bip == 0 && (now.traction[0] || now.traction[1]) {
+        let road = if now.traction[0] { 1 } else { 2 };
+        let (lat, lon) = canyon_road(road);
+        let len = (f64::from(phrase_len(sec, bar / 8)) * bar_ms).min(sec.end_ms() - start);
+        out.notes.push(Note {
+            at_ms: start,
+            inst: Inst::Swell,
+            midi: at_or_above(key.tonic_pc(), 38) as f32,
+            vel: 0.4,
+            dur_ms: len as f32,
+            variant: 128 | ((3 - 1) << 4),
+            lat,
+            lon,
+            feature: NO_FEATURE,
+        });
+    }
+    // Plows out while it snows: brushes, more of them the more plows.
+    let hour = valley.sky.at_or_default(start);
+    let snowing = hour.snow_cm > 0.1 || hour.mtn_snow_cm > 0.3;
+    if kit_on && snowing && now.plows >= 5 {
+        let steps: &[u32] = if now.plows >= 30 {
+            &[2, 6, 10, 14]
+        } else {
+            &[6, 14]
+        };
+        for &s in steps {
+            out.notes.push(Note {
+                at_ms: start + f64::from(s) * step_ms,
+                inst: Inst::Snare,
+                midi: 38.0,
+                vel: 0.16,
+                dur_ms: 250.0,
+                variant: 0,
+                lat: f32::NAN,
+                lon: f32::NAN,
+                feature: NO_FEATURE,
+            });
+        }
+    }
 }
 
 /// Planes heard at most this often.
@@ -2437,6 +2636,115 @@ mod tests {
             "{ups} departures rose, {downs} arrivals fell"
         );
         assert!(captions > 3);
+    }
+
+    #[test]
+    fn the_roads_hang_the_harmony_and_bring_it_home_boom_in_the_canyon_and_brush_the_drums() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let slow = Slow::default();
+        let snowing = sky_with(&schedule, |h| h.mtn_snow_cm = 1.0);
+        let sec = *chain
+            .sections
+            .iter()
+            .find(|s| s.kind == SectionKind::Groove && s.activity > 0.3 && s.bars() >= 16)
+            .unwrap();
+        let bar_at = |b: u32| sec.start_ms + f64::from(b) * sec.bar_ms();
+        let roads = [
+            RoadEvent {
+                ms: bar_at(2) + 100.0,
+                kind: 0,
+                road: 0,
+                lat: 40.75,
+                lon: -111.9,
+            },
+            RoadEvent {
+                ms: bar_at(4) + 100.0,
+                kind: 1,
+                road: 0,
+                lat: 40.75,
+                lon: -111.9,
+            },
+            RoadEvent {
+                ms: bar_at(9) + 100.0,
+                kind: 2,
+                road: 1,
+                lat: 40.57,
+                lon: -111.7,
+            },
+        ];
+        let windows = [RoadWindow {
+            from_ms: sec.start_ms,
+            to_ms: sec.end_ms(),
+            traction: [true, false],
+            plows: 41,
+            closures: 1,
+        }];
+        let valley = Valley {
+            roads: &roads,
+            road_windows: &windows,
+            ..Valley::quiet(&schedule, &network, &snowing, &slow)
+        };
+        let mut state = ComposeState::default();
+        let mut bar = Bar::default();
+        let (mut pedals, mut brushes, mut booms, mut cards) = (0, 0, 0, 0);
+        for b in 0..16 {
+            compose(&sec, b, &valley, &mut state, &mut bar);
+            let ctx = bar_ctx(&sec, b, &valley);
+            assert!(ctx.tension >= 0.45, "a closure standing holds tension");
+            let chord = bar.harmony[0].chord;
+            match b {
+                2 => assert!(
+                    matches!(chord.color, Color::Sus2 | Color::Sus4) || chord.suspended() == chord,
+                    "{}",
+                    chord.symbol()
+                ),
+                4 => assert_eq!(chord.degree, 0, "it clears, and comes home"),
+                _ => {}
+            }
+            for n in &bar.notes {
+                match n.inst {
+                    Inst::Swell if n.variant & 128 != 0 => {
+                        assert_eq!(
+                            (n.midi as i32).rem_euclid(12),
+                            i32::from(sec.key.tonic_pc())
+                        );
+                        assert!(n.midi >= 38.0 && n.midi < 50.0);
+                        assert_eq!(n.at_ms, bar.start_ms);
+                        pedals += 1;
+                    }
+                    Inst::Snare if n.vel < 0.2 => brushes += 1,
+                    Inst::Tom if n.variant == 4 => {
+                        assert!(n.lat > 40.5 && n.lat < 40.6, "up Little Cottonwood");
+                        booms += 1;
+                    }
+                    _ => {}
+                }
+            }
+            cards += bar
+                .features
+                .iter()
+                .filter(|f| f.kind == FeatureKind::Road)
+                .count();
+        }
+        assert_eq!(pedals, 2, "a pedal a phrase");
+        assert!(brushes >= 16 * 4, "{brushes} brushes");
+        assert_eq!(booms, 2);
+        assert_eq!(cards, 3);
+        // No snow, no brushes; no roads, no tension.
+        let dry = Sky::default();
+        let valley = Valley {
+            road_windows: &windows,
+            ..Valley::quiet(&schedule, &network, &dry, &slow)
+        };
+        compose(&sec, 5, &valley, &mut state, &mut bar);
+        assert!(
+            !bar.notes
+                .iter()
+                .any(|n| n.inst == Inst::Snare && n.vel < 0.2)
+        );
+        let quiet = Valley::quiet(&schedule, &network, &dry, &slow);
+        assert_eq!(bar_ctx(&sec, 5, &quiet).tension, sec.tension);
     }
 
     #[test]

@@ -43,7 +43,10 @@ export type Family =
   | "service"
   | "storm"
   | "grid"
-  | "due";
+  | "due"
+  | "road"
+  | "traction"
+  | "plows";
 
 /** The engine's feature kinds (engine/src/compose.rs FeatureKind), in order. */
 const FEATURE_FAMILY: Family[] = [
@@ -69,6 +72,9 @@ const FEATURE_FAMILY: Family[] = [
   "storm",
   "grid",
   "due",
+  "road",
+  "traction",
+  "plows",
 ];
 
 const INTROS: Partial<Record<Family, string>> = {
@@ -94,6 +100,9 @@ const INTROS: Partial<Record<Family, string>> = {
   storm: "A storm's on its way: the snow forecast at Alta holds the harmony in suspense, darkens the pad and pins the bass to home, until the snow starts falling.",
   grid: "The whole mix swells a little when the valley draws more power than usual for the hour, and eases off when it draws less.",
   due: "When FrontRunner's due into Salt Lake Central, the phrase it arrives in turns for home: its dominant, then home with the horn.",
+  road: "A crash or a closure on the valley's highways hangs the harmony and holds the tension up until the road clears; avalanche control up a canyon is a boom in its echo.",
+  traction: "Traction law up a canyon: a low brass pedal there, breathing a phrase at a time.",
+  plows: "Snowplows out in a storm: brushes in the drums, more of them the more plows.",
 };
 
 /** Formatting in Mountain time, whatever the listener's zone. */
@@ -154,7 +163,13 @@ export interface ValleyNow {
    * routes, headline]. */
   serviceAlert?(ms: number): [number, number, number, string, string] | undefined;
   grid?: { mw: number; usual: number; energy: number; observed: number; receipt: Receipt };
+  /** Something on the roads a window carried, by its time: [ms, kind, road,
+   * lat, lon, roadway, words]. */
+  road?(ms: number): [number, number, number, number, number, string, string] | undefined;
+  keyed?: { measured: { wind: boolean; air: boolean }; airnow: { aqi: number; category: string } | null; udot: { state: { plows: number } } | null } | null;
 }
+
+const CANYONS = ["the valley", "Little Cottonwood", "Big Cottonwood"];
 
 const SKI_ROUTE: Record<string, string> = {
   "972": "up Big Cottonwood to Solitude and Brighton",
@@ -276,7 +291,8 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
     }
     case "wind": {
       const mph = Math.round(f.v * 2.237);
-      return { ...base, text: `Gusts to ${mph} mph on the ridges, so the harp sounds higher`, receipt: valley.wind?.receipt ?? "live", observed: valley.wind?.observed };
+      const where = valley.keyed?.measured.wind ? "measured up the canyons" : "on the ridges";
+      return { ...base, text: `Gusts to ${mph} mph ${where}, so the harp sounds higher`, receipt: valley.wind?.receipt ?? "live", observed: valley.wind?.observed };
     }
     case "snow":
       return { ...base, text: `Snow falling in the Cottonwoods: the sparkle`, receipt: valley.snow?.receipt ?? "live", observed: valley.snow?.observed };
@@ -285,6 +301,10 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
     case "air": {
       const air = valley.air;
       if (!air || !Number.isFinite(air.pm25)) return null;
+      const measured = valley.keyed?.measured.air && valley.keyed.airnow;
+      if (measured && air.inversionC < 4) {
+        return { ...base, text: `AQI ${measured.aqi}, ${measured.category.toLowerCase()}, measured at the valley's monitors: ${air.pm25 >= 12 ? "haze on the pad" : "every ridge in the skyline"}`, receipt: air.receipt, observed: air.observed };
+      }
       const pm = Math.round(air.pm25);
       const inversion = air.inversionC >= 4;
       const text = inversion
@@ -348,6 +368,23 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
       const pct = Math.round((g.energy - 1) * 100);
       const how = pct >= 2 ? `${pct}% above usual for the hour, so the mix swells` : pct <= -2 ? `${-pct}% below usual for the hour, so the mix eases off` : "about usual for the hour";
       return { ...base, text: `The grid's drawing ${g.mw.toLocaleString("en-US")} MW, ${how}`, receipt: g.receipt, observed: g.observed };
+    }
+    case "road": {
+      const row = valley.road?.(f.ev);
+      const where = row?.[5] ? row[5] : CANYONS[f.stop] ?? "the valley";
+      const words = row?.[6] ? `: ${row[6]}` : "";
+      if (f.route === 2) return { ...base, text: `Avalanche control up ${CANYONS[f.stop] ?? "the canyon"}: a boom in its echo`, receipt: "live", observed: f.ev };
+      if (f.route === 1) return { ...base, text: `Cleared on ${where}, and the harmony comes home`, receipt: "live", observed: f.ev };
+      return { ...base, text: `Trouble on ${where}${words}`, receipt: "live", observed: f.ev };
+    }
+    case "traction": {
+      const v = Math.round(f.v);
+      const up = v === 3 ? "Little and Big Cottonwood" : v === 2 ? "Big Cottonwood" : "Little Cottonwood";
+      return { ...base, text: `Traction law up ${up}: a low brass pedal from the canyon`, receipt: "live" };
+    }
+    case "plows": {
+      const n = Math.round(f.v);
+      return { ...base, text: `${n} snowplows out in the valley while it snows: brushes in the drums`, receipt: "live" };
     }
     case "due": {
       const min = Math.max(1, Math.round(f.v));

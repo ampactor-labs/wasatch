@@ -75,6 +75,22 @@ export type PlaneRow = [number, number, number, number, number, number, number, 
 export type PlaneDot = [number, number, number, number, number, number, string | null];
 /** A new service alert a window carried: [ms, kind, severe, routes, headline]. */
 export type AlertRow = [number, number, number, string, string];
+/** Something on the roads a window carried: [ms, kind, road, lat, lon,
+ * roadway, words]. */
+export type RoadRow = [number, number, number, number, number, string, string];
+
+/** What the conductor's keyed sources read, when their keys are set. */
+export interface KeyedNow {
+  udot: {
+    incidents: { road: string; words: string }[];
+    state: { traction: [number, number]; plows: number; closures: number };
+    wind: { ms: number; gustMs: number; stations: string[] } | null;
+  } | null;
+  airnow: { aqi: number; category: string; pm25: number; area: string; hour: number } | null;
+  uac: { danger: number; rose: number[]; issued: string; bottomLine: string } | null;
+  /** Whether this hour's ridge wind and PM2.5 are measured (not the models'). */
+  measured: { wind: boolean; air: boolean };
+}
 
 export interface ServiceAlerts {
   /** Headlines in effect: buses, TRAX and the S-Line, FrontRunner, ski buses. */
@@ -106,6 +122,10 @@ export class Valley {
   /** Planes and new alerts the windows carried lately, for the captions. */
   planeRows: PlaneRow[] = [];
   alertRows: AlertRow[] = [];
+  roadRows: RoadRow[] = [];
+  /** The keyed sources' readings: the roads, the air measured, the
+   * avalanche forecast. */
+  keyed: KeyedNow | null = null;
   /** The planes in the air near SLC, for the map. */
   planesNow: { t: number; planes: PlaneDot[] } | null = null;
   /** UTA's service alerts in effect. */
@@ -228,14 +248,19 @@ export class Valley {
     this.changed();
   }
 
-  /** A window's planes and new alerts, kept an hour for the captions. */
-  conductorEvents(planes: PlaneRow[], alerts: AlertRow[], due: number): void {
+  /** A window's planes, new alerts and roads, kept an hour for the captions. */
+  conductorEvents(planes: PlaneRow[], alerts: AlertRow[], due: number, roads: RoadRow[] = []): void {
     const cutoff = this.now() - 60 * MIN;
     const keep = <T extends [number, ...unknown[]]>(old: T[], add: T[]) =>
       [...old.filter((r) => r[0] >= cutoff && !add.some((a) => a[0] === r[0])), ...add].sort((a, b) => a[0] - b[0]);
     this.planeRows = keep(this.planeRows, planes);
     this.alertRows = keep(this.alertRows, alerts);
+    this.roadRows = keep(this.roadRows, roads);
     if (due) this.frontRunnerDue = due;
+  }
+
+  conductorKeyed(keyed: KeyedNow): void {
+    this.keyed = keyed;
   }
 
   conductorPlanes(snapshot: { t: number; planes: PlaneDot[] }): void {
@@ -414,6 +439,8 @@ export class Valley {
       busesOut: this.liveFleet() ? { count: this.liveFleet()!.counts.buses, observed: this.liveFleet()!.t } : undefined,
       plane: (ms) => this.planeRows.find((r) => r[0] === ms),
       serviceAlert: (ms) => this.alertRows.find((r) => r[0] === ms),
+      road: (ms) => this.roadRows.find((r) => r[0] === ms),
+      keyed: this.keyed,
       grid: this.grid ? { ...this.grid.value, observed: this.grid.observed, receipt: this.grid.receipt } : undefined,
     };
   }

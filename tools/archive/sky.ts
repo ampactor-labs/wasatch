@@ -13,7 +13,8 @@
 // and the models' last 92 days.
 //
 // What only the conductor knows of an hour (the fleet's flow, the snow
-// forecast it froze) comes from its /slots.json, exactly as it served them;
+// forecast it froze, and with its keys the wind measured up the canyons and
+// the PM2.5 at the monitors) comes from its /slots.json, exactly as served;
 // a day sealed while the conductor can't be reached goes without, and the
 // phones take those from the live sky instead.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -67,13 +68,13 @@ async function previousFile(src: string, name: string): Promise<string | null> {
 
 /** The conductor's frozen hours since `from`, by hour; empty if it can't be
  * reached. */
-async function conductorSlots(from: number): Promise<Map<number, Pick<SkyHour, "flow" | "stormMm">>> {
+async function conductorSlots(from: number): Promise<Map<number, Partial<Pick<SkyHour, "flow" | "stormMm" | "ridgeMs" | "ridgeGustMs" | "pm25">>>> {
   try {
     const config = JSON.parse(readFileSync(join(REPO, "web/public/config.json"), "utf8")) as { conductor?: string | null };
     if (!config.conductor) return new Map();
     const res = await fetch(`${config.conductor.replace(/\/$/, "")}/slots.json?from=${from}`, { signal: AbortSignal.timeout(20_000) });
     if (!res.ok) return new Map();
-    const body = (await res.json()) as Record<string, { flow?: number; stormMm?: number }>;
+    const body = (await res.json()) as Record<string, { flow?: number; stormMm?: number; ridgeMs?: number; ridgeGustMs?: number; pm25?: number }>;
     return new Map(Object.entries(body).map(([at, v]) => [Number(at), v]));
   } catch {
     return new Map();

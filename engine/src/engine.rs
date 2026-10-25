@@ -17,7 +17,7 @@ use crate::audio::voices::{
 };
 use crate::compose::{
     AlertEvent, AlertWindow, Bar, BikeEvent, ComposeState, Feature, Harmony, Inst, Mix, Note,
-    PlaneEvent, QuakeEvent, Slow, Valley, compose,
+    PlaneEvent, QuakeEvent, RoadEvent, RoadWindow, Slow, Valley, compose,
 };
 use crate::listener::{self, SoloNote};
 use crate::music::midi_hz;
@@ -56,6 +56,10 @@ pub struct Inputs {
     pub alerts: Vec<AlertEvent>,
     /// The service alerts in effect, window by window.
     pub alert_windows: Vec<AlertWindow>,
+    /// Things on the roads, by time.
+    pub roads: Vec<RoadEvent>,
+    /// What stood on the roads, window by window.
+    pub road_windows: Vec<RoadWindow>,
     version: u64,
 }
 
@@ -71,6 +75,8 @@ impl Inputs {
             planes: &self.planes,
             alerts: &self.alerts,
             alert_windows: &self.alert_windows,
+            roads: &self.roads,
+            road_windows: &self.road_windows,
         }
     }
 }
@@ -150,8 +156,9 @@ pub struct Engine {
     grains: Vec<ModalVoice<2>>,
     quake_bells: Vec<ModalVoice<2>>,
     horns: Vec<HornVoice>,
-    /// Planes' swells: two voices a plane, two planes' worth.
-    swells: [SwellVoice; 4],
+    /// Planes' swells: two voices a plane, two planes' worth; and the canyon
+    /// road's pedal while traction law stands.
+    swells: [SwellVoice; 5],
     harp: Vec<HarpString>,
     air: Air,
     ground: [Upconverter<64>; 4],
@@ -285,6 +292,27 @@ impl Engine {
     /// A conductor's window of planes taking off and landing.
     pub fn set_planes(&mut self, from_ms: f64, to_ms: f64, planes: Vec<PlaneEvent>) {
         merge_window(&mut self.inputs.planes, from_ms, to_ms, planes, |p| p.ms);
+    }
+
+    /// A conductor's window of things on the roads, and what stood on them as
+    /// it was sealed.
+    pub fn set_roads(&mut self, window: RoadWindow, roads: Vec<RoadEvent>) {
+        merge_window(
+            &mut self.inputs.roads,
+            window.from_ms,
+            window.to_ms,
+            roads,
+            |r| r.ms,
+        );
+        if window.to_ms <= window.from_ms {
+            return;
+        }
+        let windows = &mut self.inputs.road_windows;
+        windows.retain(|w| w.to_ms <= window.from_ms || w.from_ms >= window.to_ms);
+        windows.push(window);
+        windows.sort_by(|a, b| a.from_ms.total_cmp(&b.from_ms));
+        let horizon = window.to_ms - 6.0 * 3_600_000.0;
+        windows.retain(|w| w.to_ms > horizon);
     }
 
     /// A conductor's window of new service alerts, and the alerts in effect
@@ -930,7 +958,11 @@ impl Engine {
                 }
             }
             Inst::Swell => {
-                let i = usize::from(n.variant & 3);
+                let i = if n.variant & 128 != 0 {
+                    4
+                } else {
+                    usize::from(n.variant & 3)
+                };
                 if n.variant & 4 != 0 {
                     // A voice moving: only one already sounding (a phone
                     // that joined mid-swell missed its start).
@@ -1057,8 +1089,10 @@ impl Engine {
                         canyon: 0.0,
                     }
                 };
-                if n.variant == 1 {
-                    place.canyon = 0.45;
+                // 1: a ski bus's drums up its canyon; 4: avalanche control
+                // there, further into the echo.
+                if n.variant == 1 || n.variant == 4 {
+                    place.canyon = if n.variant == 4 { 0.7 } else { 0.45 };
                     self.pulse(frame, &n, &place);
                 }
                 let i = pick(&mut self.rr[7], self.drums.iter().map(|v| v.is_active()));

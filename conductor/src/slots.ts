@@ -4,6 +4,10 @@
 //
 // The fleet's flow is the conductor's own observation; the snow forecast at
 // Alta is a forecast, frozen so that what it colors is the same everywhere.
+// With UDOT's and AirNow's keys, the wind measured up the canyons and the
+// PM2.5 measured at the valley's monitors take the models' place: each read
+// in an hour's second half and frozen for the hour after, so every phone has
+// it before that hour plays.
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { SkyHour } from "../../web/src/engine/protocol.ts";
@@ -11,7 +15,13 @@ import type { SkyHour } from "../../web/src/engine/protocol.ts";
 export interface SlotValues {
   flow?: number;
   stormMm?: number;
+  /** Measured, in place of the models'. */
+  ridgeMs?: number;
+  ridgeGustMs?: number;
+  pm25?: number;
 }
+
+const FIELDS = ["flow", "stormMm", "ridgeMs", "ridgeGustMs", "pm25"] as const;
 
 const HOUR = 3_600_000;
 const KEEP_MS = 14 * 86_400_000;
@@ -54,8 +64,16 @@ export class Slots {
   apply(hours: SkyHour[]): SkyHour[] {
     return hours.map((h) => {
       const v = this.slots.get(h.at);
-      return v ? { ...h, ...(v.flow !== undefined && { flow: v.flow }), ...(v.stormMm !== undefined && { stormMm: v.stormMm }) } : h;
+      if (!v) return h;
+      const out = { ...h };
+      for (const k of FIELDS) if (v[k] !== undefined) out[k] = v[k];
+      return out;
     });
+  }
+
+  /** Whether the hour at `at` has a measured `field`, for the receipts. */
+  measured(at: number, field: "ridgeGustMs" | "pm25"): boolean {
+    return this.slots.get(at)?.[field] !== undefined;
   }
 
   /** Every frozen hour from `from` on, for the archive. */

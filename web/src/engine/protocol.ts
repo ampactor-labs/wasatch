@@ -22,6 +22,7 @@ export const Kind = {
   RAIL: 17,
   PLANES: 18,
   ALERTS: 19,
+  ROADS: 20,
 } as const;
 export type KindCode = (typeof Kind)[keyof typeof Kind];
 
@@ -341,6 +342,31 @@ export interface AlertEvent {
   ms: number;
   kind: number;
   severe: boolean;
+}
+
+/** Something on the roads: 0 an incident on a valley highway, 1 one
+ * cleared, 2 avalanche control; on 0 the valley, 1 Little Cottonwood, 2 Big. */
+export interface RoadEvent {
+  ms: number;
+  kind: number;
+  road: number;
+  lat: number;
+  lon: number;
+}
+
+/** What stood on the roads as a window sealed. */
+export interface RoadState {
+  traction: [number, number];
+  plows: number;
+  closures: number;
+}
+
+export function encodeRoads(from: number, to: number, state: RoadState, roads: RoadEvent[]): Uint8Array {
+  const w = new Writer();
+  w.f64(from).f64(to).u8(state.traction[0] ? 1 : 0).u8(state.traction[1] ? 1 : 0);
+  w.u16(Math.min(65_535, state.plows)).u16(Math.min(65_535, state.closures)).u16(0).u32(roads.length);
+  for (const r of roads) w.f64(r.ms).u8(r.kind).u8(r.road).u16(0).f32(r.lat).f32(r.lon);
+  return w.bytes();
 }
 
 /** ALERTS: a window's new alerts, and how many of each kind were in effect

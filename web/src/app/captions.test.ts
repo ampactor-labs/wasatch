@@ -48,6 +48,7 @@ describe("the feed reads like sentences and covers the whole valley", () => {
     serviceAlert: (ms) =>
       ms === 7 ? [7, 0, 0, "126", "Pioneer Road Closure"] : ms === 8 ? [8, 1, 1, "Blue Line", "Single-tracking at Gallivan Plaza"] : undefined,
     grid: { mw: 6120, usual: 5885, energy: 1.04, observed: 0, receipt: "live" },
+    road: (ms) => (ms === 11 ? [11, 0, 0, 40.76, -111.9, "I-15", "Crash on I-15 NB at 600 S"] : undefined),
   };
   const key = { c: 0, r: 1 };
   const card = (k: number, extra: Partial<Parameters<typeof featureCaption>[0]> = {}) =>
@@ -76,6 +77,14 @@ describe("the feed reads like sentences and covers the whole valley", () => {
     expect(card(19, { v: 280 })).toBe("11 in of snow forecast at Alta in the next day: the harmony holds in suspense until it falls");
     expect(card(20, { v: 1.04 })).toBe("The grid's drawing 6,120 MW, 4% above usual for the hour, so the mix swells");
     expect(card(21, { v: 3 })).toBe("FrontRunner due at Salt Lake Central in 3 min: the phrase it pulls in on turns for home");
+  });
+
+  test("the roads, with UDOT's key", () => {
+    expect(card(22, { ev: 11 })).toBe("Trouble on I-15: Crash on I-15 NB at 600 S");
+    expect(card(22, { ev: 11, route: 1 })).toBe("Cleared on I-15, and the harmony comes home");
+    expect(card(22, { route: 2, stop: 1 })).toBe("Avalanche control up Little Cottonwood: a boom in its echo");
+    expect(card(23, { v: 3 })).toBe("Traction law up Little and Big Cottonwood: a low brass pedal from the canyon");
+    expect(card(24, { v: 41 })).toBe("41 snowplows out in the valley while it snows: brushes in the drums");
   });
 
   test("both rivers", () => {

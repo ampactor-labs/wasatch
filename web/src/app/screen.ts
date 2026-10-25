@@ -484,12 +484,13 @@ export class PlayScreen {
     this.root.querySelector(".play__map")?.classList.toggle("play__map--live", !!fleet);
     const u = this.u;
     const edge = 9 * u;
-    const inside = (x: number, y: number) => x >= 0 && y >= 0 && x <= proj.width && y <= proj.height;
+    // Wholly inside the frame, glyph and all.
+    const inside = (x: number, y: number, r: number) => x >= r && y >= r && x <= proj.width - r && y <= proj.height - r;
     // Every bus out, faintly, under the trains.
     const buses = (fleet?.buses ?? [])
       .map(([lat, lon]) => {
         const [x, y] = proj.project(lat, lon);
-        return inside(x, y) ? `<circle cx="${n(x)}" cy="${n(y)}" r="${n(1.5 * u)}"/>` : "";
+        return inside(x, y, 2.5 * u) ? `<circle cx="${n(x)}" cy="${n(y)}" r="${n(1.5 * u)}"/>` : "";
       })
       .join("");
     // Planes in the air near SLC, carried along their track since they
@@ -502,7 +503,7 @@ export class PlayScreen {
         const la = lat + (m * Math.cos((track * Math.PI) / 180)) / 111_320;
         const lo = lon + (m * Math.sin((track * Math.PI) / 180)) / (111_320 * Math.cos((lat * Math.PI) / 180));
         const [x, y] = proj.project(la, lo);
-        if (!inside(x, y)) return "";
+        if (!inside(x, y, 7 * u)) return "";
         const fade = Math.max(0.3, 1 - age / 300) * (ft > 18_000 ? 0.55 : 1);
         return `<path d="M5 0L-4 -3.6L-2 0L-4 3.6Z" transform="translate(${n(x)} ${n(y)}) rotate(${n(track - 90)}) scale(${n(u)})" opacity="${fade.toFixed(2)}"/>`;
       })

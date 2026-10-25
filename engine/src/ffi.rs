@@ -13,7 +13,7 @@
 #![allow(unsafe_code)]
 
 use crate::audio::voices::PianoSample;
-use crate::compose::{AlertEvent, BikeEvent, PlaneEvent, QuakeEvent, Slow};
+use crate::compose::{AlertEvent, BikeEvent, PlaneEvent, QuakeEvent, RoadEvent, RoadWindow, Slow};
 use crate::engine::Engine;
 use crate::plan::SkyHour;
 use crate::schedule::{Network, RouteKind, ServiceDay, Stop};
@@ -72,6 +72,12 @@ pub mod kind {
     /// buses), `u32 n`, then rows of `f64 ms, u8 kind 0–3, u8 flags (1
     /// severe), u16 0`.
     pub const ALERTS: u32 = 19;
+    /// A conductor's window of the roads: `f64 from, f64 to, u8 traction[2]`
+    /// (up Little and Big Cottonwood), `u16 plows, u16 closures, u16 0, u32
+    /// n`, then rows of `f64 ms, u8 kind (0 an incident, 1 cleared, 2
+    /// avalanche control), u8 road (0 the valley, 1 Little Cottonwood, 2
+    /// Big), u16 0, f32 lat, f32 lon`.
+    pub const ROADS: u32 = 20;
 }
 
 /// A little-endian reader that never panics: short reads return zeros.
@@ -409,6 +415,38 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
                 })
                 .collect();
             with_engine(|e| e.set_alerts(from, to, active, alerts))
+        }
+        kind::ROADS => {
+            let from_ms = r.f64();
+            let to_ms = r.f64();
+            let traction = [r.u8() == 1, r.u8() == 1];
+            let plows = r.u16();
+            let closures = r.u16();
+            let _ = r.u16();
+            let n = r.count(20);
+            let roads = (0..n)
+                .map(|_| {
+                    let ms = r.f64();
+                    let kind = r.u8().min(2);
+                    let road = r.u8().min(2);
+                    let _ = r.u16();
+                    RoadEvent {
+                        ms,
+                        kind,
+                        road,
+                        lat: r.f32(),
+                        lon: r.f32(),
+                    }
+                })
+                .collect();
+            let window = RoadWindow {
+                from_ms,
+                to_ms,
+                traction,
+                plows,
+                closures,
+            };
+            with_engine(|e| e.set_roads(window, roads))
         }
         kind::TWELVE => {
             let date = r.u32();
@@ -813,5 +851,27 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].active, [126, 1, 0, 0]);
         assert_eq!(post(kind::ALERTS, &alerts[..19]), 0);
+
+        // The roads.
+        let mut roads = Vec::new();
+        roads.extend_from_slice(&from.to_le_bytes());
+        roads.extend_from_slice(&to.to_le_bytes());
+        roads.extend_from_slice(&[1, 0]);
+        roads.extend_from_slice(&41u16.to_le_bytes());
+        roads.extend_from_slice(&2u16.to_le_bytes());
+        roads.extend_from_slice(&0u16.to_le_bytes());
+        roads.extend_from_slice(&1u32.to_le_bytes());
+        roads.extend_from_slice(&(at + 9_000.0).to_le_bytes());
+        roads.extend_from_slice(&[2, 1, 0, 0]);
+        f32s(&mut roads, &[40.57, -111.7]);
+        assert_eq!(post(kind::ROADS, &roads), 0);
+        let (events, windows) =
+            with_engine(|e| (e.inputs.roads.clone(), e.inputs.road_windows.clone())).unwrap();
+        assert_eq!((events.len(), events[0].kind, events[0].road), (1, 2, 1));
+        assert_eq!(
+            (windows[0].traction, windows[0].plows, windows[0].closures),
+            ([true, false], 41, 2)
+        );
+        assert_eq!(post(kind::ROADS, &roads[..23]), 0);
     }
 }

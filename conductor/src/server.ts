@@ -20,17 +20,21 @@
 //   GET /vehicles.json   every train and bus where it is, and how many are out
 //   GET /planes.json     the planes in the air near SLC, for the map
 //   GET /alerts.json     UTA's service alerts in effect
+//   GET /roads.json      what's on the roads (UDOT), the air measured (AirNow),
+//                        the avalanche forecast (UAC), each with its key
 //   GET /health          what it's doing
 //
 // Environment: PORT (8080), SCHEDULE (where the compiled schedule is served,
 // https://ampactor.dev/wasatch/schedule), DATA_DIR (keep sealed windows and
 // frozen hours on disk across restarts; optional), ADSB_URL (a receiver's
 // aircraft.json, read every 5 s instead of adsb.lol every 4 min; optional),
-// EIA_KEY (the grid, instead of EIA's shared demo key; optional).
+// EIA_KEY (the grid, instead of EIA's shared demo key; optional), UDOT_KEY,
+// AIRNOW_KEY, UAC_TOKEN (each source is off until its key is set).
 
 import { chownSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { AirNowSource } from "./airnow.ts";
 import { Alerts, type RouteInfo } from "./alerts.ts";
 import { Flow } from "./flow.ts";
 import { decodeFeed } from "./gtfsrt.ts";
@@ -38,6 +42,8 @@ import { fetchAltaSnow, fetchGrid, type Grid } from "./outlook.ts";
 import { KSLC, Planes, RADIUS_NM, type Aircraft } from "./planes.ts";
 import { Slots } from "./slots.ts";
 import { Transit, readSchedule } from "./transit.ts";
+import { Uac } from "./uac.ts";
+import { Udot } from "./udot.ts";
 import { WINDOW_MS, Windows } from "./windows.ts";
 import { BikeWatch, fetchLake, fetchQuakes, fetchRiver, fetchSkyRaw, fetchSnow, obsFromMetar, skyFrom, type Metar } from "../../web/src/data/feeds.ts";
 import { GroundSource, STATIONS } from "../../web/src/data/ground.ts";
@@ -92,6 +98,9 @@ const alerts = new Alerts();
 const planes = new Planes();
 const flow = new Flow(DATA_DIR ? join(DATA_DIR, "usual.json") : null);
 const slots = new Slots(DATA_DIR ? join(DATA_DIR, "slots.json") : null);
+const udot = new Udot();
+const airnow = new AirNowSource();
+const uac = new Uac();
 let skyBase: (ReturnType<typeof skyFrom> & { source: string }) | null = null;
 let sky: string | null = null;
 let slowParts: Record<string, unknown> | null = null;
@@ -120,7 +129,15 @@ windows.onSeal = (w) => {
   for (const row of transit.untracked(w.start, w.end)) w.rail.push(row);
   w.alertsActive = alerts.counts();
   w.due = transit.due(Date.now());
+  w.roadState = { ...udot.state, traction: [...udot.state.traction] };
 };
+
+/** A measured value for the hour after this one, read in this hour's
+ * second half: frozen then, so every phone has it before that hour plays. */
+function freezeNext(now: number, field: "ridgeMs" | "ridgeGustMs" | "pm25", value: number): void {
+  const hour = Math.floor(now / HOUR) * HOUR;
+  if (now - hour >= 30 * 60_000 && slots.freeze(hour + HOUR, field, value, now)) publishSky();
+}
 
 /** The sky as served: its hours with what's frozen for them. */
 function publishSky(): void {
@@ -157,6 +174,7 @@ every(15_000, "vehicles", async () => {
     fresh.map((v) => v.speed),
     transit.stats.medianLateS,
     Date.now(),
+    udot.state.closures,
   );
   if (closed && slots.freeze(closed.slot, "flow", closed.flow)) publishSky();
 });
@@ -219,6 +237,35 @@ every(30 * 60_000, "grid", async () => {
   grid = await fetchGrid();
   publishSlow();
 });
+
+// The keyed sources: each off until its key is set on the service.
+if (udot.on) {
+  every(60_000, "udot events", async () => {
+    const now = Date.now();
+    for (const row of await udot.pollEvents(now)) windows.addRoad(row, now);
+  });
+  every(10 * 60_000, "udot roads", () => udot.pollConditions());
+  every(2 * 60_000, "udot plows", () => udot.pollPlows(Date.now()));
+  every(5 * 60_000, "udot wind", async () => {
+    await udot.pollWind();
+    if (udot.wind) {
+      freezeNext(Date.now(), "ridgeMs", udot.wind.ms);
+      freezeNext(Date.now(), "ridgeGustMs", udot.wind.gustMs);
+    }
+  });
+}
+if (airnow.on) {
+  every(20 * 60_000, "airnow", async () => {
+    const a = await airnow.poll();
+    if (a && Number.isFinite(a.pm25)) freezeNext(Date.now(), "pm25", a.pm25);
+  });
+}
+if (uac.on) {
+  setInterval(() => {
+    if (uac.due(Date.now())) uac.poll().catch((err: unknown) => (errors.uac = err instanceof Error ? err.message : String(err)));
+  }, 60_000);
+  void uac.poll().catch((err: unknown) => (errors.uac = err instanceof Error ? err.message : String(err)));
+}
 ground.connect(Date.now() - 120_000).catch((err) => log("ground:", err));
 setInterval(() => {
   const now = Date.now();
@@ -262,6 +309,20 @@ const server = createServer((req, res) => {
   if (url.pathname === "/vehicles.json") return vehicles ? send(res, 200, vehicles, "public, max-age=5") : send(res, 503, '{"error":"warming up"}', "no-store");
   if (url.pathname === "/planes.json") return send(res, 200, JSON.stringify(planes.snapshot()), "public, max-age=15");
   if (url.pathname === "/alerts.json") return send(res, 200, JSON.stringify({ counts: alerts.counts(), alerts: alerts.list().slice(0, 60) }), "public, max-age=60");
+  if (url.pathname === "/roads.json") {
+    const hour = Math.floor(Date.now() / HOUR) * HOUR;
+    return send(
+      res,
+      200,
+      JSON.stringify({
+        udot: udot.on ? udot.summary() : null,
+        airnow: airnow.on ? airnow.latest : null,
+        uac: uac.on ? uac.latest : null,
+        measured: { wind: slots.measured(hour, "ridgeGustMs"), air: slots.measured(hour, "pm25") },
+      }),
+      "public, max-age=60",
+    );
+  }
   if (url.pathname === "/slots.json") {
     const from = Number(url.searchParams.get("from") ?? 0);
     return send(res, 200, JSON.stringify(slots.since(Number.isFinite(from) ? from : 0)), "public, max-age=300");
@@ -279,7 +340,16 @@ const server = createServer((req, res) => {
       alerts: alerts.stats,
       planes: { ...planes.stats, source: ADSB_URL ? "receiver" : "adsb.lol" },
       grid,
-      keys: { eia: process.env.EIA_KEY ? "set" : "demo key" },
+      keys: {
+        udot: udot.status,
+        airnow: airnow.status,
+        uac: uac.status,
+        eia: process.env.EIA_KEY ? "set" : "demo key",
+        adsb: ADSB_URL ? "receiver" : "adsb.lol",
+      },
+      roads: udot.on ? { ...udot.state, incidents: udot.summary().incidents.length, wind: udot.wind } : null,
+      air: airnow.latest,
+      avalanche: uac.latest && { danger: uac.latest.danger, issued: uac.latest.issued },
       ground: STATIONS.map((s, b) => ({ station: s.code, level: Number(ground.level(b).toFixed(2)), fresh: ground.freshAt(b, Date.now() - 30_000) })),
       errors,
     };
