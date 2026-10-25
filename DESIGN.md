@@ -81,11 +81,46 @@ What's live, and where it differs from the rest of this document:
   render the same numbers as a laptop. CI listens to five dayparts and a
   whole day in twelve minutes on every push, and plays every menu feature in
   headless Chrome.
-- **Not built yet:** planes (they need our own ADS-B receiver), UDOT's roads
-  and plows (a key), the grid, UTA's service alerts, the resorts' own voices,
-  sampled strings and brass (the pad and the horn are synthesized), rooms
-  recorded on location (the vantages use modeled early reflections), and
-  keeping old engines for Rewind's "as broadcast" playback.
+- **The valley's events and outlook** (Oct 24). The conductor's windows
+  now carry planes, UTA's service alerts and, with its key, the roads; its
+  sky carries hours it froze (the fleet's flow, the snow forecast at Alta,
+  and with keys the wind measured up the canyons and the PM2.5 at the
+  monitors), served to the phones and copied into each sealed day.
+  - *Planes* come from adsb.lol's open feed every four minutes, until our
+    own receiver is up (`ADSB_URL`; see "Bikes, planes, the grid"). One at
+    a time into the windows, twenty seconds apart at least: a swell of
+    synthesized brass and strings (three saws through a low-pass that opens
+    as it grows, strings an octave up), two chord tones set by the plane's
+    height and size and led through the harmony, sounding from where it is.
+  - *UTA's service alerts*: a new headline is a fill at the end of its
+    phrase (a cymbal swell where the drums are out); one standing on the
+    trains holds the approach chords' tension up.
+  - *A storm on its way*: suspensions, a darker pad, the lake's drone
+    swelled, a pedal bass and fills, from two inches forecast at Alta to a
+    foot, all let go once snow is falling. Falling pressure (the METARs' A
+    group, so live and archive agree) adds tension to the plan.
+  - *The fleet's flow* nudges the tempo up to 4 BPM; *the temperature*
+    colors the master (neutral from 5 to 20 °C); *the grid* swells the mix
+    −2 to +1.5 dB after the compressor.
+  - *FrontRunner at Central*: when it leaves around a phrase's cadence the
+    approach is the mode's dominant seventh and the cadence lands home with
+    the horn on it; a card says when it's due.
+  - *More gauges*: Little Cottonwood Creek beside the Jordan, and four
+    SNOTEL stations (Snowbird, Brighton, Thaynes Canyon, Mill-D North).
+  - *Keyed, off until their keys are set*: UDOT (incidents, avalanche
+    control, traction law, plows, canyon wind), AirNow (measured PM2.5),
+    the Utah Avalanche Center (the day's danger, shown, not yet played).
+    `npm run keys:check` reads each with the keys it has.
+  - The crash after a section-ending fill now plays (the composer's state
+    had been reset at every section, losing it), and a phone joining at a
+    boundary hears it too.
+- **Not built yet:** our own ADS-B receiver (adsb.lol stands in), travel
+  times on UDOT's signs and canyon traffic (to confirm against the API with
+  a key), what the avalanche forecast plays, the resorts' own voices,
+  sampled strings and brass (the pad, the horn and the planes' swells are
+  synthesized), rooms recorded on location (the vantages use modeled early
+  reflections), and keeping old engines for Rewind's "as broadcast"
+  playback.
 
 ## The idea
 
@@ -426,6 +461,16 @@ now every listener hears the ceiling, and the day the lake rises past 4,195 ft
 the piece starts to come home. Nobody has to know this to enjoy it; the
 mappings view says it plainly for whoever looks.
 
+One cadence the lake doesn't get to leave open: a train coming home. When
+FrontRunner leaves Salt Lake Central around a phrase's cadence, the approach
+is the mode's dominant seventh (V7 in Ionian, II7 in Lydian, IV7 in Dorian,
+♭VII7 in Aeolian; Mixolydian's only dominant is home itself, so its approach
+stays) and the cadence lands home with the horn on its downbeat. In the
+lake's own sections the lake still decides. The engine keys this off the
+departure itself, which the conductor's windows carry a minute ahead of the
+listener, not off the prediction, so there's never a dominant without its
+horn.
+
 ### The theme
 
 The piece's identity is the **Wasatch skyline as a melody**: the range's
@@ -699,6 +744,16 @@ the minutes UDOT's signs display.
 | Canyon traffic on powder mornings | Canyon tom density, from the ski buses and UDOT's canyon events | |
 | Snowplows in service (UDOT service vehicles) | Brushed noise texture in winter storms | "41 plows out" |
 
+As built (Oct 24), off until UDOT's key is set: crashes and full closures
+on the valley's highways suspend the chord in the bar they open, hold the
+tension up while they stand (and take up to 0.3 off the hour's `flow`), and
+bring the harmony home in the bar they clear; avalanche control on SR-210 or
+SR-190 is a low boom far into that canyon's echo; traction law there is a
+pedal on home from the canyon, breathing a phrase at a time; plows out in
+the valley while it snows play brushes on the off-beats. The stations up
+the canyons give the harp measured wind. Travel times and canyon traffic
+wait until the API can be seen with a key.
+
 ### Water
 
 | Data | Music | Caption |
@@ -841,7 +896,7 @@ the same bytes for every phone, and the worklet only up-converts.
 |---|---|---|
 | GREENbike dock changes (station status diffs) | Marimba plucks on chord tones; the dock's latitude picks the degree | "GREENbike · a bike out at 200 S & 300 E" |
 | Flights at SLC (our own receiver; see below) | Long brass swells: departures rise, arrivals fall; altitude sets register | "DL1784 departing, climbing" |
-| Grid demand (EIA, PacifiCorp East) | The slowest swell: master dynamics ±3 dB | |
+| Grid demand (EIA, PacifiCorp East) | The slowest swell: master dynamics, −2 to +1.5 dB after the compressor | "The grid's drawing 6,120 MW, 4% above usual for the hour" |
 
 GREENbike publishes station status only (72 stations, GBFS 1.1 with 2.1
 alongside, cached 60 s), so the conductor polls it once a minute. Status shows
@@ -862,6 +917,18 @@ Raspberry Pi with a view of the approaches, decoding locally with readsb. The
 planes are then measured by the valley's own antenna (principle 8), every
 second instead of every few minutes, and feeding adsb.lol and OpenSky from it
 earns their APIs as backups.
+
+As built (Oct 24), adsb.lol's open data (ODbL, credited) stands in until the
+receiver is up: the conductor reads it every four minutes, about 360 times a
+day, inside what it allows without a key, and reads the receiver's
+`aircraft.json` every five seconds once `ADSB_URL` is set. A plane is heard
+climbing out of SLC (within 25 nm, below 18,000 ft, 500 ft/min up, heading
+away) or coming down to it (below 14,000 ft, 400 ft/min down, heading in),
+once a leg, and released into the windows one every 20 s, placed where it
+has got to. The engine holds the spacing without memory: a plane sounds if
+it's the first in its 20 s and the first in the 20 s before came at least 20
+s earlier. Airline flights (by their ICAO prefix) are named; N-numbers and
+everything else are never named.
 
 ## Vantage: where you're listening from
 

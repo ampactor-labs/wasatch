@@ -9,12 +9,18 @@ the valley is in right now. Then the live piece fades in under it:
 | What's happening in the valley | What you hear |
 |---|---|
 | A TRAX train leaves a station | A bell on its line's chord tone (Blue root, Red fifth, Green third) |
-| FrontRunner at Salt Lake Central | A horn in the rhythm of a grade crossing |
+| FrontRunner at Salt Lake Central | A horn in the rhythm of a grade crossing, and the phrase it arrives in comes home |
 | Buses everywhere | The groove's density: hats and shakers in Euclidean patterns |
-| The Jordan River running high | A walking bass |
+| The buses and trains stuck in traffic, or flying | The tempo, a few BPM either way |
+| A UTA service alert | A drum fill into the next phrase; one on the trains holds the tension up |
+| A plane taking off from SLC, or coming in to land | A slow swell of brass and strings from where it is in the sky |
+| The Jordan and Little Cottonwood Creek running high | A walking bass |
 | A ski bus heads up a canyon | Drums in that canyon's own echo |
 | Great Salt Lake's level | The drone under everything; below 4,198 ft, phrases don't always come home |
 | The sky over the valley | How bright the mode is, Lydian through minor |
+| A storm on its way to Alta | The harmony held in suspense, a darker pad, until the snow starts |
+| A hot day, a bitter one | A little warmth on the whole mix, or a glassier top |
+| The grid drawing more power than usual | The whole mix swells a decibel or so |
 | Wind on the ridges | An Aeolian harp, each string picked by the wind's shedding frequency |
 | Snow falling in the Cottonwoods | Grains of sparkle, as light as the powder is |
 | Smog and an inversion | Haze over the pad, a low ceiling on the reverb |
@@ -52,8 +58,10 @@ Everything else is in the menu, all optional:
 
 While it plays, a conditions board under the clock shows every live
 reading at once, the way a ski area posts its own: trains and buses out,
-how late the trains run, the lake, the air, the sky, new snow, the ridge
-wind, the river, the ground, quakes and bikes.
+how late the trains run, UTA's alerts, the planes near SLC, the lake, the
+air, the sky and its pressure, new snow, a storm's forecast, the ridge
+wind, the river, the grid, the ground, quakes and bikes. The map draws
+every bus and plane too.
 
 Anything on screen that comes from the valley explains itself: tap a word
 in the status lines, a card in the feed, the key, a sticker, the dial or
@@ -91,11 +99,14 @@ sync, and why each choice was made.
   scheduled train, the harmony dial as a ski-lift bullwheel, and captions on
   routed-wood trail signs.
 - **The conductor** ([`conductor/`](conductor/)), on Railway, is a small
-  Node server that reads what a browser can't (UTA's realtime, KSLC's
-  METARs), holds the one connection to the seismometers, and seals it all
-  into 30-second windows every phone reads alike: the bells ring when the
-  trains actually leave, and a late one lays back behind the beat. If it's
-  ever unreachable, the site plays from the schedule and the open feeds.
+  Node server that reads what a browser can't (UTA's realtime and service
+  alerts, KSLC's METARs, the planes over SLC from adsb.lol, EIA's grid, the
+  snow forecast at Alta), holds the one connection to the seismometers, and
+  seals it all into 30-second windows every phone reads alike: the bells
+  ring when the trains actually leave, and a late one lays back behind the
+  beat. With their keys it reads UDOT's roads, AirNow's monitors and the
+  Utah Avalanche Center too. If it's ever unreachable, the site plays from
+  the schedule and the open feeds.
 - **The archive.** Each daily build compiles against the deployed site, so
   every earlier day carries forward with its schedule and its sealed sky.
 
@@ -120,6 +131,7 @@ npm test                                  # vitest and the tools' node tests
 node tools/render/check.ts                # loudness, true peak, silence, determinism, a day in 12 minutes
 node tools/e2e/smoke.ts                   # headless Chrome against dist/, every menu feature
 npm run conductor                         # the conductor on :8080; open the site with ?conductor=http://localhost:8080
+npm run keys:check                        # read UDOT, AirNow, the avalanche center and EIA with the keys this shell has
 node tools/render/render.ts 2026-10-23 17:40 60 rush.wav
 ```
 
@@ -132,7 +144,7 @@ voice.
 ```
 engine/          the Rust engine (plan, compose, voicing, audio, FFI)
 web/             the page: src/engine (worklet host), src/app, src/art, src/data
-conductor/       the optional server: realtime trains, sealed windows, a clock
+conductor/       the optional server: realtime trains, planes, alerts, roads, sealed windows, a clock
 tools/gtfs/      UTA GTFS → the score's schedule files (and the archive)
 tools/archive/   sealing each finished day's sky
 tools/render/    offline renders and the quality check

@@ -28,22 +28,72 @@ exactly the same thing, and what the browser can't do on its own:
   train where it is (one per trip, however many cars report), and how many
   trains and buses are out, counted by trip. Phones draw the trains there
   and say the counts are live; a position over two minutes old is left out.
+- **UTA's service alerts.** Read every minute; a new headline (however
+  many routes and directions it's filed for) goes into the windows, and
+  each window carries how many stand, by kind, as it sealed.
+- **Planes.** adsb.lol's open feed (ODbL) every four minutes, or a
+  receiver of our own every five seconds once `ADSB_URL` is set. A plane
+  climbing out of SLC or coming down to it is queued and released into the
+  windows one every 20 s, placed where it got to, named only if it's an
+  airline's. `/planes.json` is what's in the air, for the map.
+- **FrontRunner due at Central.** Each window carries the next predicted
+  departure from Salt Lake Central as it sealed.
+- **Frozen hours.** What only the conductor knows of an hour is worked out
+  once and never revised, kept on disk (`DATA_DIR/slots.json`), served in
+  `/sky.json` and `/slots.json`, and copied by the archive into each sealed
+  day: the fleet's flow (its moving speed against the usual for the hour,
+  learned in `DATA_DIR/usual.json`, with the trains' lateness), the snow
+  forecast at Alta (NWS's grid), and with their keys the wind measured up
+  the canyons and the PM2.5 measured at the monitors (each read in an
+  hour's second half and frozen for the next).
+- **The grid.** PacifiCorp East's demand from EIA, hourly, against the same
+  hour the week before, in `/slow.json`.
+- **Keyed sources, off until their keys are set.** UDOT (incidents on the
+  valley's highways, avalanche control, traction law, plows, the canyons'
+  weather stations; about two calls a minute of the ten allowed), AirNow
+  (PM2.5 at the valley's monitors) and the Utah Avalanche Center (the day's
+  danger, read every 15 minutes from 5 to 8 AM as the center asks).
 - **A clock.** An uncached `/time`, read eight times, keeping the fastest
   round trip.
 
 ```
 GET /time            {"t": UTC ms}, never cached
-GET /w/<start>.json  a sealed window: rail, bikes, quakes, the ground's baseband
-GET /sky.json        the sky's hours, by the phones' slot rules
-GET /slow.json       the lake, the river, the snow
-GET /vehicles.json   every train where it is, and how many trains and buses are out
+GET /w/<start>.json  a sealed window: rail (and FrontRunner's due time), bikes,
+                     quakes, the ground's baseband, planes, service alerts, roads
+GET /sky.json        the sky's hours, by the phones' slot rules, with the frozen hours
+GET /slots.json      the frozen hours since ?from= (UTC ms), for the archive
+GET /slow.json       the lake, the rivers, the snow, the grid
+GET /vehicles.json   every train and bus where it is, and how many are out
+GET /planes.json     the planes in the air near SLC
+GET /alerts.json     UTA's service alerts in effect, by headline
+GET /roads.json      the keyed sources: UDOT's roads, AirNow, the avalanche forecast
 GET /health          what it's doing
 ```
 
 `/health` says how long it's been up, the commit it was built from, its
 sealed windows and whether they're kept on disk, what realtime it's
-tracking, the fleet's counts and age, each seismometer's level, and any
-feed that's failing.
+tracking, the fleet's counts and age, the hour's flow, the alerts and
+planes it's seen, the grid, each key's state (`missing`, `set`, `ok` or
+`error`), each seismometer's level, and any feed that's failing.
+
+## Keys
+
+Each keyed source is off until its variable is set on the service, which
+redeploys it:
+
+```sh
+railway variable set UDOT_KEY=… --service wasatch --environment production
+```
+
+`UDOT_KEY` (udottraffic.utah.gov, Developers), `AIRNOW_KEY`
+(docs.airnowapi.org), `UAC_TOKEN` (utahavalanchecenter.org/api-access),
+`EIA_KEY` (eia.gov/opendata; EIA's shared demo key until then), and
+`ADSB_URL` (a readsb receiver's `aircraft.json`). To see what each reads
+with the service's keys, without printing them:
+
+```sh
+railway run --service wasatch --environment production -- npm run keys:check
+```
 
 ## Run it
 
@@ -58,7 +108,8 @@ the page's feed, ground and schedule code.
 
 Environment: `PORT` (8080), `SCHEDULE` (where the compiled schedule is
 served; default `https://ampactor.dev/wasatch/schedule`), `DATA_DIR` (keep
-sealed windows on disk across restarts; `/data` on Railway).
+sealed windows and frozen hours on disk across restarts; `/data` on
+Railway), and the keys above.
 
 ## Deploy it (Railway)
 
