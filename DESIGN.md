@@ -114,6 +114,35 @@ What's live, and where it differs from the rest of this document:
   - The crash after a section-ending fill now plays (the composer's state
     had been reset at every section, losing it), and a phone joining at a
     boundary hears it too.
+- **The keys, in** (Oct 28). AirNow's and EIA's keys are set on the
+  conductor, and UTA's token.
+  - *The air, measured.* AirNow retired the service the conductor first
+    called on Sept 30, 2026; it now reads the three that replaced it:
+    every Utah DEQ monitor in the valley's box with its raw hourly PM2.5,
+    PM10, ozone, NO₂, CO and SO₂, the reporting area's NowCast AQI by
+    pollutant, and the forecast by day with its action days. The haze is
+    frozen three ways each hour, as the design's vantages ask: the
+    monitors' median for the map and the canyon (no monitor stands in
+    Little Cottonwood), Hawthorne's downtown, the Beach station's at
+    Saltair, so from Saltair you hear Saltair's air. The sky wire format
+    grew two fields at its tail (`pm25Downtown`, `pm25Lake`); an older
+    engine reads the ones it knows. Ozone, PM10, the AQI and the forecast
+    are shown on the Air card, the board and the lowdown and never played
+    (a forecast only colors); a mandatory action day earns a sticker. The
+    data are preliminary and the page says so, crediting Utah DEQ and EPA
+    AirNow as the guidelines ask.
+  - *The grid, with its key.* The shared demo key allowed ten requests an
+    hour, which the conductor's two fit and nothing more would. The key
+    adds the day-ahead forecast (demand against it, and the peak ahead)
+    and what the power was made from by source, which PacifiCorp East
+    reports as a daily batch, a day behind; both shown, neither played.
+    Only the demand moves the mix, as before.
+  - *UTA's token.* The only keyed UTA API on record is the SIRI service
+    (`VehicleMonitor/ByRoute`, `StopMonitor`), whose documented host now
+    serves the UTA website and answers 404; `keys:check` probes it (and
+    `UTA_SIRI` points it elsewhere) so the moment it answers, a vehicle's
+    `VehicleAtStop`, its distance to the next stop and its lateness class
+    can replace the inference of departures from trip updates.
 - **Not built yet:** our own ADS-B receiver (adsb.lol stands in), travel
   times on UDOT's signs and canyon traffic (to confirm against the API with
   a key), what the avalanche forecast plays, the resorts' own voices,
@@ -1549,19 +1578,20 @@ Each one ends with something in someone's hands, per DAY.md.
 | Source | Endpoint | Auth | Browser CORS | Cadence | Sample reading |
 |---|---|---|---|---|---|
 | UTA schedule | `gtfsfeed.rideuta.com/GTFS.zip` | none | n/a (build time) | weekly | 86 routes; 243,304 weekday stop events |
-| UTA realtime | `apps.rideuta.com/tms/gtfs/{TripUpdate,Vehicle,Alert}` | none | no | ~10 s | 353 vehicles with trip, position and timestamp only (median 12 s old); 361 trip updates, passed stops dropped, no delay field |
+| UTA realtime | `apps.rideuta.com/tms/gtfs/{TripUpdate,Vehicle,Alert}` | none | no | ~10 s | 353 vehicles with trip, position and timestamp only (median 12 s old); 361 trip updates, passed stops dropped, no delay field. Oct 28: positions carry bearing and speed too; still no `current_status`, stop or occupancy |
+| UTA SIRI | `api.rideuta.com/SIRI/SIRI.svc/{VehicleMonitor/ByRoute, StopMonitor}` | developer token (`UTA_TOKEN`) | unknown | cached 10 s | Documented 2011–2016 (`VehicleAtStop`, `Distance` to the next stop, `EstimatedDepartureTime`, `ProgressRate` lateness class, `LastGPSFix`); on Oct 28, 2026 every UTA host answered the website's 404 page and developer.rideuta.com no longer resolved |
 | Great Salt Lake | USGS Water Data API, `ogcapi/v1/collections/latest-continuous`, `USGS-10010000`, parameter 62614 | key beyond a few queries an hour | yes | 15 min | 4,189.8 ft (provisional) |
 | Rivers | USGS `collections/continuous`, e.g. `USGS-10171000`, parameter 00060; normals from `statistics/v0/observationNormals` (day of year, p5–p95) | as above | yes | 15 min | Jordan River at 1700 S 151–160 cfs; Little Cottonwood 117 cfs |
 | Earthquakes | USGS FDSN event query, Utah bounding box | none | yes | minutes | 69 events in 3 days |
 | Snowpack | NRCS AWDB `services/v1/data`, `duration=HOURLY`, stations 766 Snowbird, 366 Brighton, 814 Thaynes Canyon, 628 Mill-D North | none | yes | hourly (depth skips some hours; times in UTC−8) | Snowbird depth 0 → 3 → 9 in Oct 12–13, 0 by Oct 19; newest value 36 min old |
 | Mountain forecast | NWS `gridpoints/SLC/108,167` (Alta) | none (User-Agent) | yes | hourly | Gusts 61 km/h (38 mph) on the morning of Oct 23 |
 | Inversion | Open-Meteo forecast API, pressure-level temperatures for SLC; the SLC balloon soundings | none | yes | hourly; soundings twice a day | Not tested |
-| Air | Open-Meteo air-quality API | none | yes | hourly | PM2.5 2.3, AQI 40 |
+| Air | Open-Meteo air-quality API; with a key, AirNow `aq/data/` (hourly by monitoring site in a bounding box, raw concentrations), `aq/observation/current/ziplatlong/` and `aq/forecast/current/` (the services AirNow retired on Sept 30, 2026 answer 410) | none; AirNow a free key, about 500 requests an hour | yes; AirNow by the conductor | hourly, 10–30 min past the hour | PM2.5 2.3, AQI 40 (model); Oct 28: 12 monitors, Hawthorne 9.7 µg/m³, the Beach station at Saltair 2.9, AQI 52 |
 | Weather | Open-Meteo forecast; NWS KSLC observations | none | yes | hourly | |
 | GREENbike | `gbfs.bcycle.com/bcycle_greenbikeslc/` (GBFS 1.1; 2.1 alongside) | none | yes | cached 60 s | 72 stations; status only |
 | Seismometers | EarthScope `rtserve.earthscope.org`: SeedLink 4 on port 18000, TLS on 18500, `wss://rtserve.earthscope.org/seedlink`; network UU | none; 5 connections, about 1 h of history | yes (WebSocket) | continuous | 685 UU streams from 170 stations; newest sample a median 18.6 s old |
 | Flights | Our own receiver (readsb); adsb.lol and OpenSky as feeder-earned backups | — | n/a | 1 s | To build |
-| Grid | EIA v2 `electricity/rto/region-data`, PACE | free key | yes | hourly | Works with DEMO_KEY |
+| Grid | EIA v2 `electricity/rto/region-data` (D and DF) and `fuel-type-data`, PACE | free key (the shared DEMO_KEY allows 10 requests an hour) | yes | demand hourly, about an hour behind; the forecast a day ahead; generation by source a daily batch, a day behind | 6,215 MW against a 5,988 MW forecast; coal 39%, wind 34%, solar 12%, gas 12% on Oct 27 |
 | Roads | UDOT `udottraffic.utah.gov/api/v2/get/{event, messagesigns, mountainpasses, alerts, servicevehicles, weatherstations}`; v3 `roadconditions` | free key, 10 calls a minute | unknown | live | No speed or travel-time endpoint |
 | Wind | UDOT weather stations; the NWS forecast for the ridges; Synoptic's ridge-top stations once it consents | key; none; consent | unknown | 5–15 min | Not tested (needs keys) |
 | Avalanche | Utah Avalanche Center API, e.g. `/forecast/salt-lake/json` | token after a data-access policy, 12 months | no | daily plus observations | 401 without a token |

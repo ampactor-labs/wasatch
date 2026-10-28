@@ -23,7 +23,7 @@ the valley is in right now. Then the live piece fades in under it:
 | The grid drawing more power than usual | The whole mix swells a decibel or so |
 | Wind on the ridges | An Aeolian harp, each string picked by the wind's shedding frequency |
 | Snow falling in the Cottonwoods | Grains of sparkle, as light as the powder is |
-| Smog and an inversion | Haze over the pad, a low ceiling on the reverb |
+| Smog and an inversion | Haze over the pad, as the monitor nearest where you listen measures it; a low ceiling on the reverb |
 | The ground under downtown | Four seismometers, moved up onto the chord |
 | An earthquake in Utah | A deep bell |
 | A GREENbike checked out | A marimba pluck |
@@ -104,8 +104,9 @@ sync, and why each choice was made.
   snow forecast at Alta), holds the one connection to the seismometers, and
   seals it all into 30-second windows every phone reads alike: the bells
   ring when the trains actually leave, and a late one lays back behind the
-  beat. With their keys it reads UDOT's roads, AirNow's monitors and the
-  Utah Avalanche Center too. If it's ever unreachable, the site plays from
+  beat. With its keys it reads Utah DEQ's air monitors through AirNow (the haze
+  each vantage hears, the AQI and the day's forecast), EIA's demand forecast
+  and fuel mix, UDOT's roads and the Utah Avalanche Center too. If it's ever unreachable, the site plays from
   the schedule and the open feeds.
 - **The archive.** Each daily build compiles against the deployed site, so
   every earlier day carries forward with its schedule and its sealed sky.
@@ -157,8 +158,11 @@ docs/            the first design, for the record
 
 Data: Utah Transit Authority (GTFS), U.S. Geological Survey, National Weather
 Service, Open-Meteo (CC BY 4.0) with Copernicus CAMS, USDA NRCS SNOTEL,
-BCycle/GREENbike (GBFS), and the University of Utah Seismograph Stations via
-EarthScope. The crest is from USGS 3DEP elevations.
+BCycle/GREENbike (GBFS), the University of Utah Seismograph Stations via
+EarthScope, adsb.lol (ODbL), the U.S. Energy Information Administration, and
+EPA AirNow with the Utah Department of Environmental Quality (air quality
+observations that are preliminary and not yet validated). The crest is from
+USGS 3DEP elevations.
 
 The piano is the Salamander Grand Piano by Alexander Holm (CC BY 3.0). The
 type is Shrikhand, Rubik and Space Mono (SIL Open Font License).

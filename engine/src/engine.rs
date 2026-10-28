@@ -1188,7 +1188,14 @@ impl Engine {
         } else {
             energy_db(self.inputs.slow.energy_or_usual())
         });
-        self.haze = ((hour.pm25 - 6.0) / 40.0).clamp(0.0, 1.0);
+        // The haze where the listener stands: downtown's or the lake's PM2.5
+        // where the monitors there reported, else the valley's.
+        let pm25 = match self.vantage {
+            Vantage::Downtown if hour.pm25_downtown.is_finite() => hour.pm25_downtown,
+            Vantage::Lake if hour.pm25_lake.is_finite() => hour.pm25_lake,
+            _ => hour.pm25,
+        };
+        self.haze = ((pm25 - 6.0) / 40.0).clamp(0.0, 1.0);
         let inv = (hour.inversion_c / 8.0).clamp(0.0, 1.0);
         if (inv - self.inversion).abs() > 0.05 {
             self.inversion = inv;

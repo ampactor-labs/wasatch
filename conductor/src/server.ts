@@ -20,8 +20,9 @@
 //   GET /vehicles.json   every train and bus where it is, and how many are out
 //   GET /planes.json     the planes in the air near SLC, for the map
 //   GET /alerts.json     UTA's service alerts in effect
-//   GET /roads.json      what's on the roads (UDOT), the air measured (AirNow),
-//                        the avalanche forecast (UAC), each with its key
+//   GET /roads.json      what's on the roads (UDOT), the air measured at the
+//                        monitors with its forecast (AirNow), the avalanche
+//                        forecast (UAC), each with its key
 //   GET /health          what it's doing
 //
 // Environment: PORT (8080), SCHEDULE (where the compiled schedule is served,
@@ -29,7 +30,9 @@
 // frozen hours on disk across restarts; optional), ADSB_URL (a receiver's
 // aircraft.json, read every 5 s instead of adsb.lol every 4 min; optional),
 // EIA_KEY (the grid, instead of EIA's shared demo key; optional), UDOT_KEY,
-// AIRNOW_KEY, UAC_TOKEN (each source is off until its key is set).
+// AIRNOW_KEY, UAC_TOKEN (each source is off until its key is set), UTA_TOKEN
+// and UTA_SIRI (UTA's SIRI API, probed by keys:check; nothing plays from it
+// until it answers).
 
 import { chownSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
@@ -38,7 +41,7 @@ import { AirNowSource } from "./airnow.ts";
 import { Alerts, type RouteInfo } from "./alerts.ts";
 import { Flow } from "./flow.ts";
 import { decodeFeed } from "./gtfsrt.ts";
-import { fetchAltaSnow, fetchGrid, type Grid } from "./outlook.ts";
+import { fetchAltaSnow, fetchGrid, fetchMix, type Grid, type Mix } from "./outlook.ts";
 import { KSLC, Planes, RADIUS_NM, type Aircraft } from "./planes.ts";
 import { Slots } from "./slots.ts";
 import { Transit, readSchedule } from "./transit.ts";
@@ -106,6 +109,7 @@ let sky: string | null = null;
 let slowParts: Record<string, unknown> | null = null;
 let slow: string | null = null;
 let grid: Grid | null = null;
+let mix: Mix | null = null;
 let vehicles: string | null = null;
 let fleetStats: { t: number; trains: number; buses: number } | null = null;
 const errors: Record<string, string> = {};
@@ -134,7 +138,7 @@ windows.onSeal = (w) => {
 
 /** A measured value for the hour after this one, read in this hour's
  * second half: frozen then, so every phone has it before that hour plays. */
-function freezeNext(now: number, field: "ridgeMs" | "ridgeGustMs" | "pm25", value: number): void {
+function freezeNext(now: number, field: "ridgeMs" | "ridgeGustMs" | "pm25" | "pm25Downtown" | "pm25Lake", value: number): void {
   const hour = Math.floor(now / HOUR) * HOUR;
   if (now - hour >= 30 * 60_000 && slots.freeze(hour + HOUR, field, value, now)) publishSky();
 }
@@ -146,7 +150,7 @@ function publishSky(): void {
 }
 
 function publishSlow(): void {
-  if (slowParts) slow = JSON.stringify({ ...slowParts, grid: grid && { value: grid, observed: grid.hour, receipt: "live" } });
+  if (slowParts) slow = JSON.stringify({ ...slowParts, grid: grid && { value: { ...grid, mix }, observed: grid.hour, receipt: "live" } });
 }
 
 every(60 * 60_000, "schedule", async () => {
@@ -233,8 +237,13 @@ every(15 * 60_000, "slow", async () => {
   slowParts = { lake, river, snow };
   publishSlow();
 });
-every(30 * 60_000, "grid", async () => {
+every(15 * 60_000, "grid", async () => {
   grid = await fetchGrid();
+  publishSlow();
+});
+// What the power was made from: PacifiCorp East reports it a day behind.
+every(2 * HOUR, "grid mix", async () => {
+  mix = await fetchMix();
   publishSlow();
 });
 
@@ -255,9 +264,15 @@ if (udot.on) {
   });
 }
 if (airnow.on) {
+  // The monitors' PM2.5, frozen three ways: the valley's median, downtown's
+  // and the lake's, so each vantage hears the haze where it stands.
   every(20 * 60_000, "airnow", async () => {
     const a = await airnow.poll();
-    if (a && Number.isFinite(a.pm25)) freezeNext(Date.now(), "pm25", a.pm25);
+    if (!a) return;
+    const now = Date.now();
+    freezeNext(now, "pm25", a.pm25);
+    if (a.downtown) freezeNext(now, "pm25Downtown", Math.max(0, a.downtown.pm25));
+    if (a.lake) freezeNext(now, "pm25Lake", Math.max(0, a.lake.pm25));
   });
 }
 if (uac.on) {
@@ -318,7 +333,12 @@ const server = createServer((req, res) => {
         udot: udot.on ? udot.summary() : null,
         airnow: airnow.on ? airnow.latest : null,
         uac: uac.on ? uac.latest : null,
-        measured: { wind: slots.measured(hour, "ridgeGustMs"), air: slots.measured(hour, "pm25") },
+        measured: {
+          wind: slots.measured(hour, "ridgeGustMs"),
+          air: slots.measured(hour, "pm25"),
+          airDowntown: slots.measured(hour, "pm25Downtown"),
+          airLake: slots.measured(hour, "pm25Lake"),
+        },
       }),
       "public, max-age=60",
     );
@@ -339,16 +359,28 @@ const server = createServer((req, res) => {
       flow: flow.stats,
       alerts: alerts.stats,
       planes: { ...planes.stats, source: ADSB_URL ? "receiver" : "adsb.lol" },
-      grid,
+      grid: grid && { ...grid, mix: mix && { hour: mix.hour, share: mix.share } },
       keys: {
         udot: udot.status,
         airnow: airnow.status,
         uac: uac.status,
         eia: process.env.EIA_KEY ? "set" : "demo key",
+        uta: process.env.UTA_TOKEN ? "set" : "missing",
         adsb: ADSB_URL ? "receiver" : "adsb.lol",
       },
       roads: udot.on ? { ...udot.state, incidents: udot.summary().incidents.length, wind: udot.wind } : null,
-      air: airnow.latest,
+      air: airnow.latest && {
+        aqi: airnow.latest.aqi,
+        category: airnow.latest.category,
+        pollutant: airnow.latest.pollutant,
+        hour: airnow.latest.hour,
+        pm25: airnow.latest.pm25,
+        monitors: airnow.latest.monitors,
+        downtown: airnow.latest.downtown && { name: airnow.latest.downtown.name, pm25: airnow.latest.downtown.pm25 },
+        lake: airnow.latest.lake && { name: airnow.latest.lake.name, pm25: airnow.latest.lake.pm25 },
+        forecast: airnow.latest.forecast?.days.map((d) => `${d.date} ${d.parameter} ${d.category}${d.actionDay ? " action day" : ""}`) ?? null,
+        error: airnow.lastError,
+      },
       avalanche: uac.latest && { danger: uac.latest.danger, issued: uac.latest.issued },
       ground: STATIONS.map((s, b) => ({ station: s.code, level: Number(ground.level(b).toFixed(2)), fresh: ground.freshAt(b, Date.now() - 30_000) })),
       errors,

@@ -45,14 +45,24 @@ exactly the same thing, and what the browser can't do on its own:
   learned in `DATA_DIR/usual.json`, with the trains' lateness), the snow
   forecast at Alta (NWS's grid), and with their keys the wind measured up
   the canyons and the PM2.5 measured at the monitors (each read in an
-  hour's second half and frozen for the next).
+  hour's second half and frozen for the next). The air is frozen three
+  ways: the valley's median, Hawthorne's for downtown and the Beach
+  station's for Saltair, so each vantage hears the haze where it stands.
 - **The grid.** PacifiCorp East's demand from EIA, hourly, against the same
-  hour the week before, in `/slow.json`.
+  hour the week before, in `/slow.json`; with it the day-ahead forecast
+  (demand against it, and the peak ahead) and what the power was made from,
+  by source, which PacifiCorp East reports a day behind. Only the demand
+  plays; the rest is for the board and the lowdown.
 - **Keyed sources, off until their keys are set.** UDOT (incidents on the
   valley's highways, avalanche control, traction law, plows, the canyons'
   weather stations; about two calls a minute of the ten allowed), AirNow
-  (PM2.5 at the valley's monitors) and the Utah Avalanche Center (the day's
-  danger, read every 15 minutes from 5 to 8 AM as the center asks).
+  (every monitor in the valley's box with its raw PM2.5, PM10, ozone, NO₂,
+  CO and SO₂, the reporting area's AQI by pollutant and the forecast with
+  its action days, about nine requests an hour of the 500 a key is allowed;
+  preliminary data, shown as such and credited to Utah DEQ and EPA AirNow)
+  and the Utah Avalanche Center (the day's danger, read every 15 minutes
+  from 5 to 8 AM as the center asks). UTA's SIRI token (`UTA_TOKEN`) is
+  probed by `keys:check` and plays nothing until its service answers.
 - **A clock.** An uncached `/time`, read eight times, keeping the fastest
   round trip.
 
@@ -66,7 +76,7 @@ GET /slow.json       the lake, the rivers, the snow, the grid
 GET /vehicles.json   every train and bus where it is, and how many are out
 GET /planes.json     the planes in the air near SLC
 GET /alerts.json     UTA's service alerts in effect, by headline
-GET /roads.json      the keyed sources: UDOT's roads, AirNow, the avalanche forecast
+GET /roads.json      the keyed sources: UDOT's roads, AirNow's monitors and forecast, the avalanche forecast
 GET /health          what it's doing
 ```
 
@@ -87,8 +97,11 @@ railway variable set UDOT_KEY=… --service wasatch --environment production
 
 `UDOT_KEY` (udottraffic.utah.gov, Developers), `AIRNOW_KEY`
 (docs.airnowapi.org), `UAC_TOKEN` (utahavalanchecenter.org/api-access),
-`EIA_KEY` (eia.gov/opendata; EIA's shared demo key until then), and
-`ADSB_URL` (a readsb receiver's `aircraft.json`). To see what each reads
+`EIA_KEY` (eia.gov/opendata; EIA's shared demo key until then, which allows
+ten requests an hour), `UTA_TOKEN` (UTA's SIRI developer token, with
+`UTA_SIRI` naming its host if UTA moves it from api.rideuta.com, where it
+stopped answering by Oct 2026), and `ADSB_URL` (a readsb receiver's
+`aircraft.json`). To see what each reads
 with the service's keys, without printing them:
 
 ```sh

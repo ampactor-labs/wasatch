@@ -605,6 +605,9 @@ export class PlayScreen {
     const nowHour = sky?.hours.find((h) => h.at === Math.floor(Date.now() / 3_600_000) * 3_600_000);
     if (newIn >= 6) earned.push("POW DAY");
     if (sky && sky.inversionC >= 5 && sky.pm25 >= 12) earned.push("INVERSION");
+    // Utah DEQ's forecast calls today a mandatory action day (with AirNow's key).
+    const today = mountainDate(v.now());
+    if (!v.shift && v.keyed?.airnow?.forecast?.days.some((d) => d.date === today && d.actionDay)) earned.push("ACTION DAY");
     if (nowHour && nowHour.cloud <= 0.1 && hour > 7 && hour < 18 && newIn >= 2) earned.push("BLUEBIRD");
     if (winter && hour >= 8.5 && hour < 9.5) earned.push("FIRST CHAIR");
     if (winter && hour >= 15.5 && hour < 16.5) earned.push("LAST CHAIR");

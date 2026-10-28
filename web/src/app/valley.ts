@@ -60,12 +60,67 @@ export interface GroundState {
   observed: number;
 }
 
-/** The grid's demand, as the conductor reads it from EIA. */
+/** The grid's demand, as the conductor reads it from EIA, and what it
+ * says around it: the day-ahead forecast and the generation by source
+ * (shown; only the demand plays). */
 export interface Grid {
   mw: number;
   usual: number;
   energy: number;
   hour: number;
+  /** The day-ahead forecast for the hour, and demand against it. */
+  forecast?: { mw: number; ratio: number } | null;
+  /** The forecast's peak over the day ahead. */
+  peak?: { hour: number; mw: number } | null;
+  /** What the power was made from, a day behind: MW by source in the
+   * latest hour reported, and each source's share of that day. */
+  mix?: { hour: number; mw: Record<string, number>; share: Record<string, number>; dayMwh: number } | null;
+}
+
+/** A monitor's latest hour, as AirNow reports it through the conductor
+ * (conductor/src/airnow.ts); a reading it doesn't take is null. */
+export interface AirSite {
+  id: string;
+  name: string;
+  lat: number | null;
+  lon: number | null;
+  hour: number;
+  pm25: number | null;
+  pm10: number | null;
+  o3: number | null;
+  no2: number | null;
+  co: number | null;
+  so2: number | null;
+  aqi: number | null;
+}
+
+export interface AirForecastDay {
+  date: string;
+  parameter: string;
+  aqi: number | null;
+  category: string;
+  categoryNumber: number;
+  actionDay: boolean;
+  discussion: string;
+}
+
+/** The air as the valley's monitors measure it: the reporting area's AQI,
+ * each monitor, the one each vantage hears, and the forecast. Preliminary
+ * data, by AirNow's guidelines, and said so. */
+export interface AirNow {
+  aqi: number | null;
+  category: string;
+  pollutant: string;
+  area: string;
+  hour: number;
+  pm25: number | null;
+  monitors: number;
+  sites: AirSite[];
+  downtown: AirSite | null;
+  lake: AirSite | null;
+  pollutants: { parameter: string; aqi: number; category: string }[];
+  forecast: { issued: string; area: string; days: AirForecastDay[] } | null;
+  preliminary: true;
 }
 
 /** A plane a window carried: [ms, lat, lon, 0 departing / 1 landing, size,
@@ -86,10 +141,11 @@ export interface KeyedNow {
     state: { traction: [number, number]; plows: number; closures: number };
     wind: { ms: number; gustMs: number; stations: string[] } | null;
   } | null;
-  airnow: { aqi: number; category: string; pm25: number; area: string; hour: number } | null;
+  airnow: AirNow | null;
   uac: { danger: number; rose: number[]; issued: string; bottomLine: string } | null;
-  /** Whether this hour's ridge wind and PM2.5 are measured (not the models'). */
-  measured: { wind: boolean; air: boolean };
+  /** Whether this hour's ridge wind and PM2.5 are measured (not the
+   * models'), and whether downtown's and the lake's own are. */
+  measured: { wind: boolean; air: boolean; airDowntown?: boolean; airLake?: boolean };
 }
 
 export interface ServiceAlerts {
@@ -100,7 +156,7 @@ export interface ServiceAlerts {
 
 /** The fields only the conductor knows of an hour: a sealed hour without
  * them takes them from the live sky (they're frozen there, never revised). */
-const CONDUCTOR_FIELDS = ["flow", "pressureTend", "stormMm"] as const;
+const CONDUCTOR_FIELDS = ["flow", "pressureTend", "stormMm", "pm25Downtown", "pm25Lake"] as const;
 
 export function withConductorFields(sealed: SkyHour, live: SkyHour | undefined): SkyHour {
   if (!live) return sealed;

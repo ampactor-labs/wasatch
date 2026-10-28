@@ -7,7 +7,9 @@
 // With UDOT's and AirNow's keys, the wind measured up the canyons and the
 // PM2.5 measured at the valley's monitors take the models' place: each read
 // in an hour's second half and frozen for the hour after, so every phone has
-// it before that hour plays.
+// it before that hour plays. The air comes three ways: the valley's (the
+// monitors' median), downtown's (Hawthorne) and the lake's (the station at
+// Saltair), so each vantage hears the haze where it stands.
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { SkyHour } from "../../web/src/engine/protocol.ts";
@@ -19,9 +21,14 @@ export interface SlotValues {
   ridgeMs?: number;
   ridgeGustMs?: number;
   pm25?: number;
+  pm25Downtown?: number;
+  pm25Lake?: number;
 }
 
-const FIELDS = ["flow", "stormMm", "ridgeMs", "ridgeGustMs", "pm25"] as const;
+const FIELDS = ["flow", "stormMm", "ridgeMs", "ridgeGustMs", "pm25", "pm25Downtown", "pm25Lake"] as const;
+
+/** The fields that stand for a measurement, for the receipts. */
+export type Measured = "ridgeGustMs" | "pm25" | "pm25Downtown" | "pm25Lake";
 
 const HOUR = 3_600_000;
 const KEEP_MS = 14 * 86_400_000;
@@ -72,7 +79,7 @@ export class Slots {
   }
 
   /** Whether the hour at `at` has a measured `field`, for the receipts. */
-  measured(at: number, field: "ridgeGustMs" | "pm25"): boolean {
+  measured(at: number, field: Measured): boolean {
     return this.slots.get(at)?.[field] !== undefined;
   }
 

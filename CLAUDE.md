@@ -40,53 +40,63 @@ CI runs the same; a push to `main` deploys the site (Pages) and, if it touches
 `conductor/**`, `web/src/data/**`, `web/src/engine/protocol.ts`, `Dockerfile`
 or `package.json`, the conductor (Railway waits for CI first).
 
-## State as of Oct 25, 2026
+## State as of Oct 28, 2026
 
 Built and live: planes (adsb.lol), UTA service alerts, the fleet's flow
 nudging tempo, a storm on its way (Alta forecast, pressure), temperature
-warmth, the grid's swell (EIA), FrontRunner coming home at Central, two river
-gauges and four SNOTEL stations, buses and planes on the map, and the keyed
-sources UDOT / AirNow / UAC (code and tests done, off until their keys are
-set).
+warmth, the grid's swell (EIA, with its key: the day-ahead forecast and the
+fuel mix shown), FrontRunner coming home at Central, two river gauges and
+four SNOTEL stations, buses and planes on the map, and the air measured at
+Utah DEQ's monitors through AirNow (the haze by vantage: the valley's median,
+Hawthorne's downtown, the Beach station's at Saltair; AQI, ozone, PM10 and
+the forecast shown; an action day earns a sticker). UDOT and UAC are coded
+and tested, off until their keys are set.
 
 ### Keys
 
 | Variable | Status |
 |---|---|
-| `AIRNOW_KEY` | Owner has the key. Check `/health` → `keys.airnow`; if `missing`, the owner hasn't set it on Railway yet. |
-| `EIA_KEY` | Owner has the key (`/health` → `keys.eia` is `demo key` until it's set). |
+| `AIRNOW_KEY` | Set on Railway Oct 28. AirNow retired its first services on Sept 30, 2026; `conductor/src/airnow.ts` reads the replacements (`aq/data/`, `aq/observation/current/ziplatlong/`, `aq/forecast/current/`). About nine requests an hour of the 500 allowed. |
+| `EIA_KEY` | Set Oct 28. The demo key allowed 10 requests an hour; the conductor now polls demand every 15 min and the mix every 2 h. |
+| `UTA_TOKEN` | Set Oct 28, for UTA's SIRI API, whose documented host (api.rideuta.com) answers the website's 404 page; `keys:check` probes it, `UTA_SIRI` renames the host. Nothing plays from it. The owner is asking UTA what the token is for. |
 | `UDOT_KEY` | Awaiting UDOT's approval. |
-| `UAC_TOKEN` | Awaiting the avalanche center's approval. |
+| `UAC_TOKEN` | The avalanche center asked the owner for more information first. |
 
-The owner was handling Railway admin before continuing.
+Railway skipped the redeploy it made when the variables were set (watch
+paths); the push that carried the Oct 28 work deployed them.
 
 ### Next steps, in order
 
-1. `curl https://wasatch-production.up.railway.app/health` and read `keys`,
-   `errors`, `commit`. Confirm the commit matches `git log -1` on `main`.
-2. For each key that shows `set`: run
-   `~/.railway/bin/railway run --service wasatch --environment production -- npm run keys:check`
-   (the CLI isn't on PATH in agent shells). Compare what it parsed with the
-   fixtures in `conductor/src/keyed.test.ts`; fix the parser if the real
-   shape differs, add the real shape as a fixture, push, and watch the deploy.
-   - **AirNow:** check `pm25` appears in `/sky.json` hours (frozen in an
-     hour's second half for the next) and the Air card says "measured".
-   - **EIA:** `/slow.json` `grid` should stop saying the demo key.
-3. When UDOT's key arrives: `keys:check` prints each endpoint's fields. UDOT's
+1. `curl https://wasatch-production.up.railway.app/health`: `keys.airnow`
+   should read `ok`, `air` should list the monitors' PM2.5 and the forecast,
+   `grid` should carry `forecast`, `peak` and `mix`. From an hour's second
+   half, `/sky.json` hours carry `pm25`, `pm25Downtown` and `pm25Lake` for
+   the next hour, and `/roads.json` `measured.air` turns true.
+2. `~/.railway/bin/railway run --service wasatch --environment production -- npm run keys:check`
+   (the CLI isn't on PATH in agent shells) prints every monitor, the vantage
+   picks, the forecast, EIA's forecast and mix, and the SIRI probe.
+3. UTA: when the owner learns which service the token is for, point
+   `UTA_SIRI` at it (or build for a different API), confirm with the probe,
+   read the real XML, then design: `VehicleAtStop` transitions as observed
+   departures and arrivals, `Distance` to Central as a countdown for the
+   cadence, `ProgressRate` as lateness. Ask the owner before any new sound.
+4. When UDOT's key arrives: `keys:check` prints each endpoint's fields. UDOT's
    field names are matched case-insensitively in `conductor/src/udot.ts`; the
    highway list, canyon names (SR-210, SR-190) and the traction-law wording
    were written from the documented schema and need checking against live
    data. Travel times on message signs and canyon traffic are not built; look
    at the real API first.
-4. When UAC's token arrives: `conductor/src/uac.ts` sends the token both as
+5. When UAC's token arrives: `conductor/src/uac.ts` sends the token both as
    `?token=` and a Bearer header because their docs don't say which. Find out
    which works, keep only that one, and read the real JSON to confirm
    `overall_danger_rose` / `date_issued` / `bottom_line`. What the forecast
    *plays* is undecided (DESIGN.md: "a rare, soft, settling sound"); it is
    shown on the board and lowdown only. Ask the owner before adding sound.
-5. Still unbuilt: our own ADS-B receiver (`ADSB_URL`; adsb.lol stands in,
+6. Still unbuilt: our own ADS-B receiver (`ADSB_URL`; adsb.lol stands in,
    about 360 reads a day), a recorded FrontRunner horn to replace the
    synthesized one (the owner will supply a file), sampled strings and brass.
+   Air that could play but doesn't yet, pending the owner's ear: ozone in
+   summer, PM10 dust off the lakebed, the fuel mix in replays.
 
 ## Things that bite
 

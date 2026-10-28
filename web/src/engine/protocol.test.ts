@@ -59,7 +59,7 @@ describe("the engine's messages", () => {
     expect(v.getInt32(10 + 4 + 16, true)).toBe(1);
   });
 
-  test("SKY is twelve floats an hour, then the three added since, NaN where unknown", () => {
+  test("SKY is twelve floats an hour, then the five added since, NaN where unknown", () => {
     const h: SkyHour = {
       at: 1792800000000,
       cloud: Number.NaN,
@@ -75,17 +75,19 @@ describe("the engine's messages", () => {
       ridgeGustMs: 12,
       mtnSnowCm: 0.2,
     };
-    const b = encodeSky([h, { ...h, at: h.at + 3_600_000, flow: -0.4, pressureTend: -2.5, stormMm: 180 }]);
-    expect(b.length).toBe(4 + 2 * (8 + 12 * 4) + 4 + 2 * 3 * 4);
+    const b = encodeSky([h, { ...h, at: h.at + 3_600_000, flow: -0.4, pressureTend: -2.5, stormMm: 180, pm25Downtown: 11.1 }]);
+    expect(b.length).toBe(4 + 2 * (8 + 12 * 4) + 4 + 2 * 5 * 4);
     const v = view(b);
     expect(v.getFloat64(4, true)).toBe(h.at);
     expect(Number.isNaN(v.getFloat32(12, true))).toBe(true);
     expect(v.getFloat32(12 + 11 * 4, true)).toBeCloseTo(0.2, 6);
     const tail = 4 + 2 * 56;
-    expect(v.getUint32(tail, true)).toBe(3);
-    // The first hour's are unknown; the second's follow in order.
+    expect(v.getUint32(tail, true)).toBe(5);
+    // The first hour's are unknown; the second's follow in order, the lake's
+    // PM2.5 unknown.
     expect(Number.isNaN(v.getFloat32(tail + 4, true))).toBe(true);
-    expect([16, 20, 24].map((o) => v.getFloat32(tail + o, true))).toEqual([Math.fround(-0.4), -2.5, 180]);
+    expect([24, 28, 32, 36].map((o) => v.getFloat32(tail + o, true))).toEqual([Math.fround(-0.4), -2.5, 180, Math.fround(11.1)]);
+    expect(Number.isNaN(v.getFloat32(tail + 40, true))).toBe(true);
   });
 
   test("SLOW and RAIL carry what was added at the end", () => {

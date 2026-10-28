@@ -1230,6 +1230,9 @@ a {
 .cond__dot--waiting {
   border: 1.5px solid var(--granite);
 }
+.cond__dot--forecast {
+  border: 1.5px dashed var(--sand);
+}
 @media (min-width: 900px) {
   .play__conditions {
     grid-area: conditions;

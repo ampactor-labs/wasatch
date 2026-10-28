@@ -9,7 +9,8 @@
 //   railway run --service wasatch --environment production -- npm run keys:check
 
 import { AirNowSource } from "./airnow.ts";
-import { fetchGrid } from "./outlook.ts";
+import { fetchGrid, fetchMix } from "./outlook.ts";
+import { probeSiri } from "./siri.ts";
 import { Uac, DANGER } from "./uac.ts";
 import { Udot, canyonWind, heard, parseEvents, plowsOut, traction } from "./udot.ts";
 
@@ -18,6 +19,8 @@ const fields = (body: unknown) => {
   return first && typeof first === "object" ? Object.keys(first).join(", ") : String(first);
 };
 const n = (body: unknown) => (Array.isArray(body) ? body.length : "not a list");
+const at = (ms: number) => (Number.isFinite(ms) ? new Date(ms).toISOString().slice(11, 16) + "Z" : "?");
+const num = (v: number, digits = 1) => (Number.isFinite(v) ? v.toFixed(digits) : "–");
 
 async function check(name: string, key: string | undefined, run: () => Promise<string[]>): Promise<boolean> {
   if (!key) {
@@ -65,7 +68,25 @@ const results = [
   await check("AirNow", process.env.AIRNOW_KEY, async () => {
     const a = new AirNowSource();
     const r = await a.poll();
-    return [r ? `PM2.5 AQI ${r.aqi} (${r.category}) at ${r.area}: ${r.pm25} µg/m³, observed ${new Date(r.hour).toISOString()}` : "no PM2.5 among the observations"];
+    if (!r) return ["answered, but no monitors or reporting area in range"];
+    const out = [
+      `${r.area}: AQI ${r.aqi} ${r.category.toLowerCase()}, ${r.pollutant} leads, observed ${at(r.hour)} (${r.pollutants.map((p) => `${p.parameter} ${p.aqi}`).join(", ")})`,
+      `${r.sites.length} monitors in the box; ${r.monitors} reported PM2.5 for ${at(r.hour)}: the valley's median ${num(r.pm25)} µg/m³`,
+    ];
+    for (const s of r.sites) {
+      const parts = [`PM2.5 ${num(s.pm25)}`, Number.isFinite(s.pm10) ? `PM10 ${num(s.pm10, 0)}` : "", Number.isFinite(s.o3) ? `ozone ${num(s.o3, 0)} ppb` : "", Number.isFinite(s.no2) ? `NO2 ${num(s.no2)}` : ""].filter(Boolean);
+      out.push(`  ${s.name} (${s.id}) ${at(s.hour)}: ${parts.join(" · ")}`);
+    }
+    out.push(`downtown hears ${r.downtown ? `${r.downtown.name}: ${num(r.downtown.pm25)} µg/m³` : "nothing yet"}; the lake hears ${r.lake ? `${r.lake.name}: ${num(r.lake.pm25)} µg/m³` : "nothing yet"}`);
+    if (r.forecast) out.push(`forecast issued ${r.forecast.issued}: ${r.forecast.days.map((d) => `${d.date} ${d.parameter} ${d.category}${Number.isFinite(d.aqi) ? ` (${d.aqi})` : ""}${d.actionDay ? " ACTION DAY" : ""}`).join(", ")}${r.forecast.days.find((d) => d.discussion)?.discussion ? `\n  "${r.forecast.days.find((d) => d.discussion)!.discussion.slice(0, 160)}"` : ""}`);
+    else out.push("no forecast read");
+    return out;
+  }),
+  await check("UTA (SIRI)", process.env.UTA_TOKEN, async () => {
+    const probes = await probeSiri(process.env.UTA_TOKEN!);
+    const lines = probes.map((p) => `${p.url}: ${p.status ?? "no answer"} ${p.type}${p.siri ? ` SIRI ${p.note}` : p.note ? ` · ${p.note}` : ""}`);
+    if (!probes.some((p) => p.siri)) throw new Error(`nothing answered as SIRI (set UTA_SIRI to the host UTA names)\n  ${lines.join("\n  ")}`);
+    return lines;
   }),
   await check("Utah Avalanche Center", process.env.UAC_TOKEN, async () => {
     const u = new Uac();
@@ -74,7 +95,19 @@ const results = [
   }),
   await check("EIA", process.env.EIA_KEY ?? "DEMO_KEY", async () => {
     const g = await fetchGrid();
-    return [g ? `PacifiCorp East ${g.mw} MW at ${new Date(g.hour).toISOString()}, usual ${g.usual}: ${g.energy}${process.env.EIA_KEY ? "" : " (the shared demo key)"}` : "no rows"];
+    if (!g) return ["no rows"];
+    const out = [`PacifiCorp East ${g.mw} MW at ${new Date(g.hour).toISOString()}, usual ${g.usual}: ${g.energy}${process.env.EIA_KEY ? "" : " (the shared demo key)"}`];
+    out.push(g.forecast ? `day-ahead forecast for that hour ${g.forecast.mw} MW (demand ${g.forecast.ratio} of it)` : "no day-ahead forecast for that hour");
+    out.push(g.peak ? `forecast peak ${g.peak.mw} MW at ${new Date(g.peak.hour).toISOString()}` : "no forecast ahead");
+    const m = await fetchMix();
+    if (m) {
+      const shares = Object.entries(m.share)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${k} ${Math.round(v * 100)}%`)
+        .join(", ");
+      out.push(`made from, in the day to ${new Date(m.hour).toISOString()}: ${shares} (${m.dayMwh.toLocaleString("en-US")} MWh)`);
+    } else out.push("no generation by source");
+    return out;
   }),
 ];
 process.exit(results.every(Boolean) ? 0 : 1);

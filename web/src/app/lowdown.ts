@@ -7,7 +7,7 @@ import type { BarEvent, Heard } from "../engine/host.ts";
 import type { Conductor } from "../data/conductor.ts";
 import { STATIONS } from "../data/ground.ts";
 import { clockEstimate } from "../engine/clock.ts";
-import { mountainTime, receiptText } from "./captions.ts";
+import { mountainDate, mountainTime, receiptText } from "./captions.ts";
 import { keyName } from "./music.ts";
 import type { Schedule } from "./schedule.ts";
 import { daypartName, transitPhrase, type Valley } from "./valley.ts";
@@ -239,11 +239,11 @@ export const TOPICS: readonly Topic[] = [
     id: "air",
     title: "Air and the inversion",
     group: "valley",
-    short: "Haze dulls the pad and the skyline. An inversion puts a low ceiling on the reverb and brings far-off sounds closer, as it does outside.",
+    short: "Haze dulls the pad and the skyline, measured at the valley's monitors: from Saltair you hear Saltair's air, downtown Hawthorne's. An inversion puts a low ceiling on the reverb and brings far-off sounds closer, as it does outside.",
     more:
-      "Under an inversion, warm air sits on cold, sound bends back toward the ground and carries: an event 30 km away comes about 10 dB closer. The reverb gets a low, dark ceiling. PM2.5 sets how much of the skyline you can see, from every ridge on a clean day to the outline in thick haze; it never muddies the sound. It's the model's, or, with AirNow's key, what the valley's monitors measured in the hour before.",
+      "Under an inversion, warm air sits on cold, sound bends back toward the ground and carries: an event 30 km away comes about 10 dB closer. The reverb gets a low, dark ceiling. PM2.5 sets how much of the skyline you can see, from every ridge on a clean day to the outline in thick haze; it never muddies the sound. With AirNow's key it's what Utah DEQ's monitors measured in the hour before, frozen by the conductor so every phone hears the same air: the valley's median for the map and the canyon, Hawthorne's downtown, the Beach station's at Saltair. Ozone, PM10 and the day's forecast with its action days are shown here and on the board and never played: a forecast only colors. AirNow's readings are preliminary, not yet validated. Without the key it's Open-Meteo's model.",
     plays: "the reverb's ceiling and the haze",
-    source: { name: "Open-Meteo, with Copernicus CAMS", href: "https://open-meteo.com/en/docs/air-quality-api" },
+    source: { name: "Utah DEQ's monitors via EPA AirNow (preliminary); Open-Meteo's model without the key", href: "https://www.airnow.gov/?city=Salt%20Lake%20City&state=UT&country=USA" },
     now: (c) => {
       const sky = c.valley.sky;
       if (!sky || !Number.isFinite(sky.value.pm25)) return null;
@@ -251,11 +251,24 @@ export const TOPICS: readonly Topic[] = [
       // fall of about 3.6 °F a thousand feet (17.6 °F between them).
       const up = c.valley.snow?.value.upHighF;
       const down = sky.value.tempC;
-      const measured =
+      const inverted =
         up !== null && up !== undefined && Number.isFinite(down) ? ` · Snowbird ${Math.round(up)}°F, the valley ${Math.round((down * 9) / 5 + 32)}°F${up - ((down * 9) / 5 + 32 - 17.6) > 4 ? ": inverted" : ""}` : "";
       const air = c.valley.keyed?.airnow;
-      const pm = air && c.valley.keyed?.measured.air ? `AQI ${air.aqi}, ${air.category.toLowerCase()} (measured at ${air.area})` : `PM2.5 ${sky.value.pm25.toFixed(0)} µg/m³ (model)`;
-      return { value: `${pm} · ${sky.value.inversionC.toFixed(1)} °C warmer aloft (model)${measured}`, receipt: receipt(sky) };
+      const num = (v: number | null | undefined): v is number => v !== null && v !== undefined && Number.isFinite(v);
+      let pm = `PM2.5 ${sky.value.pm25.toFixed(0)} µg/m³ (model)`;
+      if (air && c.valley.keyed?.measured.air) {
+        const bits = [num(air.aqi) ? `AQI ${air.aqi}, ${air.category.toLowerCase()}${air.pollutant ? ` (${air.pollutant})` : ""}` : `PM2.5 ${sky.value.pm25.toFixed(0)} µg/m³`];
+        const where = [air.downtown && num(air.downtown.pm25) ? `PM2.5 ${Math.max(0, air.downtown.pm25).toFixed(0)} downtown` : "", air.lake && num(air.lake.pm25) ? `${Math.max(0, air.lake.pm25).toFixed(0)} at Saltair` : ""].filter(Boolean).join(", ");
+        if (where) bits.push(where);
+        const o3 = num(air.downtown?.o3) ? air.downtown!.o3 : air.sites.find((x) => num(x.o3))?.o3;
+        if (num(o3)) bits.push(`ozone ${o3.toFixed(0)} ppb`);
+        if (num(air.downtown?.pm10)) bits.push(`PM10 ${air.downtown!.pm10!.toFixed(0)}`);
+        bits.push(`${air.monitors} monitors, preliminary`);
+        const today = air.forecast?.days.find((d) => d.date === mountainDate(c.valley.now()) && d.parameter === "PM2.5") ?? air.forecast?.days[0];
+        if (today) bits.push(`forecast ${today.category.toLowerCase()}${today.actionDay ? ", an action day" : ""}`);
+        pm = bits.join(" · ");
+      }
+      return { value: `${pm} · ${sky.value.inversionC.toFixed(1)} °C warmer aloft (model)${inverted}`, receipt: receipt(sky) };
     },
   },
   {
@@ -344,14 +357,27 @@ export const TOPICS: readonly Topic[] = [
     group: "valley",
     short: "When the valley draws more power than usual for the hour, the whole mix swells a little; when it draws less, it eases off.",
     more:
-      "The U.S. Energy Information Administration publishes PacifiCorp East's demand hour by hour. The latest hour is set against the same hour on the week's days before it: about a decibel for every 10% over or under, from −2 to +1.5, gliding over a few minutes and applied after the compressor so it isn't squeezed out.",
+      "The U.S. Energy Information Administration publishes PacifiCorp East's demand hour by hour. The latest hour is set against the same hour on the week's days before it: about a decibel for every 10% over or under, from −2 to +1.5, gliding over a few minutes and applied after the compressor so it isn't squeezed out. EIA also carries the utility's day-ahead forecast, so the board can say how the valley is running against what was expected and when the evening peak is due, and what the power was made from, coal to solar, which PacifiCorp East reports a day behind. Those are shown and never played: only the demand moves the mix.",
     plays: "the whole mix's level",
-    source: { name: "EIA, PacifiCorp East demand", href: "https://www.eia.gov/electricity/gridmonitor/dashboard/electric_overview/balancing_authority/PACE" },
+    source: { name: "EIA, PacifiCorp East demand, forecast and generation by source", href: "https://www.eia.gov/electricity/gridmonitor/dashboard/electric_overview/balancing_authority/PACE" },
     now: (c) => {
       const g = c.valley.grid;
       if (!g) return null;
       const pct = Math.round((g.value.energy - 1) * 100);
-      return { value: `${g.value.mw.toLocaleString("en-US")} MW · ${pct >= 0 ? "+" : ""}${pct}% on the usual for the hour`, receipt: receipt(g) };
+      const signed = (p: number) => `${p >= 0 ? "+" : ""}${p}%`;
+      const parts = [`${g.value.mw.toLocaleString("en-US")} MW · ${signed(pct)} on the usual for the hour`];
+      if (g.value.forecast) parts.push(`${signed(Math.round((g.value.forecast.ratio - 1) * 100))} on the day-ahead forecast`);
+      if (g.value.peak) parts.push(`peak expected ${g.value.peak.mw.toLocaleString("en-US")} MW at ${mountainTime(g.value.peak.hour)}`);
+      const mix = g.value.mix;
+      if (mix) {
+        const shares = Object.entries(mix.share)
+          .filter(([, v]) => v >= 0.005)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${k} ${Math.round(v * 100)}%`)
+          .join(", ");
+        if (shares) parts.push(`made from ${shares} (the day to ${mountainTime(mix.hour)}, reported a day behind)`);
+      }
+      return { value: parts.join(" · "), receipt: receipt(g) };
     },
   },
   {
@@ -642,7 +668,17 @@ export function conditions(c: LowdownCtx): Condition[] {
   const planes = v.livePlanes();
   if (planes) add("planes", "Planes", `${planes.planes.length} near SLC`, `live ${mountainTime(planes.t)}`);
   if (v.lake) add("lake", "Lake", `${v.lake.value.ft.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ft`, receipt(v.lake));
-  if (sky && Number.isFinite(sky.value.pm25)) add("air", "Air", `PM2.5 ${Math.round(sky.value.pm25)}${sky.value.inversionC >= 4 ? " · lid" : ""}`, receipt(sky));
+  const airNow = v.keyed?.airnow;
+  const measuredAir = !v.shift && v.keyed?.measured.air && airNow ? airNow : null;
+  if (sky && Number.isFinite(sky.value.pm25)) {
+    const lid = sky.value.inversionC >= 4 ? " · lid" : "";
+    if (measuredAir) {
+      const aqi = measuredAir.aqi !== null && Number.isFinite(measuredAir.aqi) ? `AQI ${measuredAir.aqi} · ` : "";
+      add("air", "Air", `${aqi}PM2.5 ${Math.round(sky.value.pm25)}${lid}`, `live ${mountainTime(measuredAir.hour)}`);
+    } else add("air", "Air", `PM2.5 ${Math.round(sky.value.pm25)}${lid}`, receipt(sky));
+  }
+  const airForecast = measuredAir?.forecast?.days.find((d) => d.date === mountainDate(v.now()) && d.parameter === "PM2.5") ?? measuredAir?.forecast?.days[0];
+  if (airForecast && (airForecast.actionDay || airForecast.categoryNumber >= 2)) add("air", "Air forecast", `${airForecast.category}${airForecast.actionDay ? " · action day" : ""}`, "forecast");
   if (sky) {
     const f = Number.isFinite(sky.value.tempC) ? `${Math.round((sky.value.tempC * 9) / 5 + 32)}°F` : "";
     add("sky", "Sky", [sky.value.description, f].filter(Boolean).join(" ") || "—", receipt(sky));

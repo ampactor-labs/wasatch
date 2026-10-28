@@ -162,11 +162,15 @@ export interface ValleyNow {
   /** A new service alert a window carried, by its time: [ms, kind, severe,
    * routes, headline]. */
   serviceAlert?(ms: number): [number, number, number, string, string] | undefined;
-  grid?: { mw: number; usual: number; energy: number; observed: number; receipt: Receipt };
+  grid?: { mw: number; usual: number; energy: number; forecast?: { mw: number; ratio: number } | null; observed: number; receipt: Receipt };
   /** Something on the roads a window carried, by its time: [ms, kind, road,
    * lat, lon, roadway, words]. */
   road?(ms: number): [number, number, number, number, number, string, string] | undefined;
-  keyed?: { measured: { wind: boolean; air: boolean }; airnow: { aqi: number; category: string } | null; udot: { state: { plows: number } } | null } | null;
+  keyed?: {
+    measured: { wind: boolean; air: boolean };
+    airnow: { aqi: number | null; category: string; downtown?: { pm25: number | null } | null; lake?: { pm25: number | null } | null } | null;
+    udot: { state: { plows: number } } | null;
+  } | null;
 }
 
 const CANYONS = ["the valley", "Little Cottonwood", "Big Cottonwood"];
@@ -303,7 +307,10 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
       if (!air || !Number.isFinite(air.pm25)) return null;
       const measured = valley.keyed?.measured.air && valley.keyed.airnow;
       if (measured && air.inversionC < 4) {
-        return { ...base, text: `AQI ${measured.aqi}, ${measured.category.toLowerCase()}, measured at the valley's monitors: ${air.pm25 >= 12 ? "haze on the pad" : "every ridge in the skyline"}`, receipt: air.receipt, observed: air.observed };
+        const num = (v: number | null | undefined): v is number => v !== null && v !== undefined && Number.isFinite(v);
+        const where = [measured.downtown && num(measured.downtown.pm25) ? `PM2.5 ${Math.round(Math.max(0, measured.downtown.pm25))} downtown` : "", measured.lake && num(measured.lake.pm25) ? `${Math.round(Math.max(0, measured.lake.pm25))} at Saltair` : ""].filter(Boolean).join(", ");
+        const aqi = num(measured.aqi) ? `AQI ${measured.aqi}, ${measured.category.toLowerCase()}, ` : "";
+        return { ...base, text: `${aqi}measured by Utah DEQ${where ? `: ${where}` : " at the valley's monitors"}: ${air.pm25 >= 12 ? "haze on the pad" : "every ridge in the skyline"}`, receipt: air.receipt, observed: air.observed };
       }
       const pm = Math.round(air.pm25);
       const inversion = air.inversionC >= 4;
@@ -367,7 +374,9 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
       if (!g) return null;
       const pct = Math.round((g.energy - 1) * 100);
       const how = pct >= 2 ? `${pct}% above usual for the hour, so the mix swells` : pct <= -2 ? `${-pct}% below usual for the hour, so the mix eases off` : "about usual for the hour";
-      return { ...base, text: `The grid's drawing ${g.mw.toLocaleString("en-US")} MW, ${how}`, receipt: g.receipt, observed: g.observed };
+      const f = g.forecast ? Math.round((g.forecast.ratio - 1) * 100) : null;
+      const vs = f === null ? "" : Math.abs(f) < 2 ? ", as forecast" : f > 0 ? `, ${f}% over the day-ahead forecast` : `, ${-f}% under the day-ahead forecast`;
+      return { ...base, text: `The grid's drawing ${g.mw.toLocaleString("en-US")} MW, ${how}${vs}`, receipt: g.receipt, observed: g.observed };
     }
     case "road": {
       const row = valley.road?.(f.ev);

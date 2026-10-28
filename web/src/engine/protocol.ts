@@ -181,11 +181,16 @@ export interface SkyHour {
   /** Snow forecast at Alta over the next day, mm, frozen for the hour by
    * the conductor. A forecast: it only colors bars. */
   stormMm?: number;
+  /** PM2.5 measured downtown (Hawthorne) and at the lake (the Beach station
+   * by Saltair), µg/m³, frozen for the hour by the conductor with AirNow's
+   * key: the haze each vantage hears. Absent, a vantage hears `pm25`. */
+  pm25Downtown?: number;
+  pm25Lake?: number;
 }
 
 /** The fields added to an hour since the first twelve, in the order the
- * engine reads them. */
-const SKY_MORE = ["flow", "pressureTend", "stormMm"] as const;
+ * engine reads them (append only: an older engine reads the ones it knows). */
+const SKY_MORE = ["flow", "pressureTend", "stormMm", "pm25Downtown", "pm25Lake"] as const;
 
 /** SKY: `u32 n`, n hours of `f64 at` and twelve floats, then `u32 k` and k
  * more floats an hour (an engine older than them reads only the rows). */

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Flow, bucket, flowOf, movingMedian } from "./flow.ts";
 import { Slots } from "./slots.ts";
-import { gridFrom, snowAhead, validSpan } from "./outlook.ts";
+import { gridFrom, mixFrom, snowAhead, validSpan } from "./outlook.ts";
 
 const HOUR = 3_600_000;
 
@@ -89,4 +89,40 @@ test("the grid: the latest hour against the same hour the week before", () => {
   assert.equal(g.usual, 5980);
   assert.equal(g.energy, Math.round((6600 / 5980) * 1000) / 1000);
   assert.equal(gridFrom(rows.slice(0, 2)), null, "too few days to know the usual");
+});
+
+test("the grid: demand against its day-ahead forecast, and the peak ahead", () => {
+  const latest = Date.parse("2026-10-28T19:00:00Z");
+  const period = (ms: number) => new Date(ms).toISOString().slice(0, 13);
+  const rows: { period: string; value: string; type?: string }[] = [{ period: period(latest), value: "6226", type: "D" }];
+  for (let d = 1; d <= 7; d++) rows.push({ period: period(latest - d * 24 * HOUR), value: "6164", type: "D" });
+  for (let h = -2; h <= 12; h++) rows.push({ period: period(latest + h * HOUR), value: String(5988 + (h === 7 ? 300 : h * 10)), type: "DF" });
+  const g = gridFrom(rows)!;
+  assert.equal(g.mw, 6226);
+  assert.equal(g.hour, latest);
+  assert.deepEqual(g.forecast, { mw: 5988, ratio: 1.04 });
+  assert.deepEqual(g.peak, { hour: latest + 7 * HOUR, mw: 6288 });
+  const noForecast = gridFrom(rows.filter((r) => r.type === "D"))!;
+  assert.equal(noForecast.forecast, null);
+  assert.equal(noForecast.peak, null);
+});
+
+test("the grid's mix: the latest hour with its sources, and the day's shares", () => {
+  const rows: { period: string; fueltype: string; value: string }[] = [];
+  const t = Date.parse("2026-10-28T05:00:00Z");
+  const period = (ms: number) => new Date(ms).toISOString().slice(0, 13);
+  for (let h = 0; h < 30; h++) {
+    const at = period(t - h * HOUR);
+    rows.push({ period: at, fueltype: "COL", value: "3000" }, { period: at, fueltype: "NG", value: "1000" }, { period: at, fueltype: "WND", value: "500" }, { period: at, fueltype: "SUN", value: h % 2 ? "500" : "-1" }, { period: at, fueltype: "OTH", value: "100" });
+  }
+  // A later hour reported with one source only isn't the latest.
+  rows.push({ period: period(t + HOUR), fueltype: "COL", value: "3100" });
+  const m = mixFrom(rows)!;
+  assert.equal(m.hour, t);
+  assert.deepEqual(m.mw, { coal: 3000, gas: 1000, wind: 500, solar: -1, other: 100 });
+  // 24 hours: coal 72,000, gas 24,000, wind 12,000, solar 12 × 500, other 2,400.
+  assert.equal(m.dayMwh, 72_000 + 24_000 + 12_000 + 6_000 + 2_400);
+  assert.equal(m.share.coal, Math.round((72_000 / m.dayMwh) * 1000) / 1000);
+  assert.equal(m.share.solar, Math.round((6_000 / m.dayMwh) * 1000) / 1000);
+  assert.equal(mixFrom([]), null);
 });

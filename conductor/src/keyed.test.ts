@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseAirNow, pm25FromAqi } from "./airnow.ts";
+import { DOWNTOWN_SITES, LAKE_SITES, localHour, parseCurrent, parseForecast, parseSites, pickSite, valleyPm25 } from "./airnow.ts";
+import { siriElements } from "./siri.ts";
 import { parseAdvisory } from "./uac.ts";
 import { Udot, canyonOf, canyonWind, heard, parseEvents, plowsOut, traction } from "./udot.ts";
 
@@ -76,20 +77,115 @@ test("UDOT: traction law, plows and the canyons' wind", () => {
   assert.equal(w.stations.length, 2);
 });
 
-test("AirNow: PM2.5 from the AQI, at the hour it was observed", () => {
-  assert.equal(pm25FromAqi(0), 0);
-  assert.equal(pm25FromAqi(50), 9);
-  assert.equal(pm25FromAqi(100), 35.4);
-  assert.equal(pm25FromAqi(75), 22);
-  const a = parseAirNow([
-    { DateObserved: "2026-12-01 ", HourObserved: 8, LocalTimeZone: "MST", ReportingArea: "Salt Lake City", ParameterName: "O3", AQI: 30, Category: { Number: 1, Name: "Good" } },
-    { DateObserved: "2026-12-01 ", HourObserved: 8, LocalTimeZone: "MST", ReportingArea: "Salt Lake City", ParameterName: "PM2.5", AQI: 112, Category: { Number: 3, Name: "Unhealthy for Sensitive Groups" } },
-  ]);
+// Shaped like AirNow's answers on Oct 28, 2026 (the web services that
+// replaced the ones retired that September).
+const DEQ = "Utah Department of Environmental Quality";
+const CURRENT = [
+  { dateObserved: "2026-10-28", hourObserved: "14:00", localTimeZone: "MDT", reportingAreaName: "Salt Lake City", siteID: "490353006", siteName: "Hawthorne", parameterName: "PM2.5", nowcastAQI: 52, aqiCategoryName: "Moderate", reportingAgency: DEQ },
+  { dateObserved: "2026-10-28", hourObserved: "14:00", localTimeZone: "MDT", reportingAreaName: "Salt Lake City", siteID: "490353006", siteName: "Hawthorne", parameterName: "OZONE", nowcastAQI: 30, aqiCategoryName: "Good", reportingAgency: DEQ },
+  { dateObserved: "2026-10-28", hourObserved: "14:00", localTimeZone: "MDT", reportingAreaName: "Salt Lake City", siteID: "490353006", siteName: "Hawthorne", parameterName: "PM10", nowcastAQI: 17, aqiCategoryName: "Good", reportingAgency: DEQ },
+];
+const row = (site: [string, string, number, number], utc: string, parameter: string, unit: string, value: number, raw: number, aqi: number) => ({
+  Latitude: site[2],
+  Longitude: site[3],
+  UTC: utc,
+  Parameter: parameter,
+  Unit: unit,
+  Value: value,
+  RawConcentration: raw,
+  AQI: aqi,
+  Category: 1,
+  SiteName: site[1],
+  AgencyName: DEQ,
+  FullAQSCode: site[0],
+  IntlAQSCode: `840${site[0]}`.slice(-12),
+});
+const BEACH: [string, string, number, number] = ["490352004", "Beach", 40.735001, -112.210999];
+const HAWTHORNE: [string, string, number, number] = ["490353006", "Hawthorne", 40.733501, -111.871696];
+const MAGNA: [string, string, number, number] = ["840490351007", "MA", 40.712064, -112.111122];
+const RED_BUTTE: [string, string, number, number] = ["840490353018", "Red Butte", 40.76652, -111.82835];
+const DATA = [
+  row(BEACH, "2026-10-28T18:00", "OZONE", "PPB", 35, 40, 32),
+  row(BEACH, "2026-10-28T18:00", "PM2.5", "UG/M3", 3.1, 2.7, 17),
+  row(BEACH, "2026-10-28T18:00", "NO2", "PPB", 1.5, 1.5, 1),
+  row(HAWTHORNE, "2026-10-28T17:00", "PM2.5", "UG/M3", 9.5, 9.0, 40),
+  row(HAWTHORNE, "2026-10-28T18:00", "PM2.5", "UG/M3", 10.4, 11.1, 43),
+  row(HAWTHORNE, "2026-10-28T18:00", "PM10", "UG/M3", 24, 26, 22),
+  row(HAWTHORNE, "2026-10-28T18:00", "OZONE", "PPB", 31, 34, 29),
+  row(MAGNA, "2026-10-28T18:00", "PM2.5", "UG/M3", 3.4, -0.4, 19),
+  // A site that measures ozone alone, and one whose reading is missing.
+  row(RED_BUTTE, "2026-10-28T18:00", "OZONE", "PPB", 38, 41, 35),
+  row(["490353010", "Rose Park", 40.7955, -111.9309], "2026-10-28T18:00", "PM2.5", "UG/M3", -999, -999, -999),
+];
+const FORECAST = [
+  { dateIssue: "2026-10-28", dateValid: "2026-10-29", reportingArea: "Salt Lake City", reportingAreaCode: "ut001", stateCode: "UT", parameterName: "PM2.5", aqi: -1, forecastAgency: DEQ, categoryNumber: 1, categoryName: "Good", actionDay: false, discussion: "" },
+  { dateIssue: "2026-10-28", dateValid: "2026-10-28", reportingArea: "Salt Lake City", reportingAreaCode: "ut001", stateCode: "UT", parameterName: "PM2.5", aqi: 55, forecastAgency: DEQ, categoryNumber: 2, categoryName: "Moderate", actionDay: true, discussion: "  An inversion holds\n  through Thursday. " },
+];
+
+test("AirNow: the reporting area's AQI, by pollutant, at the hour it was observed", () => {
+  const a = parseCurrent(CURRENT);
   assert.ok(a);
-  assert.equal(a.aqi, 112);
-  assert.equal(a.pm25, 40);
-  assert.equal(a.hour, Date.parse("2026-12-01T15:00:00Z"));
-  assert.equal(parseAirNow([]), null);
+  assert.equal(a.area, "Salt Lake City");
+  assert.equal(a.aqi, 52);
+  assert.equal(a.category, "Moderate");
+  assert.equal(a.pollutant, "PM2.5");
+  assert.deepEqual(
+    a.pollutants.map((p) => [p.parameter, p.aqi]),
+    [
+      ["PM2.5", 52],
+      ["ozone", 30],
+      ["PM10", 17],
+    ],
+  );
+  assert.equal(a.hour, Date.parse("2026-10-28T20:00:00Z"));
+  assert.equal(localHour("2026-12-01", 8, "MST"), Date.parse("2026-12-01T15:00:00Z"));
+  assert.equal(parseCurrent([]), null);
+  assert.equal(parseCurrent({ WebServiceError: [{ Message: "Invalid Request." }] }), null);
+});
+
+test("AirNow: each monitor's latest hour, raw, and what each vantage hears", () => {
+  const sites = parseSites(DATA);
+  assert.deepEqual(
+    sites.map((s) => s.name),
+    ["Beach", "Hawthorne", "MA", "Red Butte", "Rose Park"],
+  );
+  const hawthorne = sites.find((s) => s.name === "Hawthorne")!;
+  assert.equal(hawthorne.hour, Date.parse("2026-10-28T18:00:00Z"), "the latest hour, not the first");
+  assert.equal(hawthorne.pm25, 11.1, "the raw hourly reading, not the NowCast value");
+  assert.equal(hawthorne.pm10, 26);
+  assert.equal(hawthorne.o3, 34);
+  assert.ok(Number.isNaN(hawthorne.no2));
+  assert.equal(hawthorne.aqi, 43);
+  assert.ok(Number.isNaN(sites.find((s) => s.name === "Red Butte")!.pm25));
+  assert.ok(Number.isNaN(sites.find((s) => s.name === "Rose Park")!.pm25), "-999 is missing");
+  assert.equal(pickSite(sites, DOWNTOWN_SITES)?.name, "Hawthorne");
+  assert.equal(pickSite(sites, LAKE_SITES)?.name, "Beach");
+  assert.equal(pickSite(sites, ["490353010", "840490353018"]), null, "neither reported PM2.5");
+  // Beach 2.7, Hawthorne 11.1, Magna −0.4 (drift: clean air): the median.
+  assert.deepEqual(valleyPm25(sites), { pm25: 2.7, monitors: 3 });
+  assert.deepEqual(valleyPm25([]), { pm25: Number.NaN, monitors: 0 });
+  assert.deepEqual(parseSites({ WebServiceError: [] }), []);
+});
+
+test("AirNow: the forecast by day, with its action days", () => {
+  const f = parseForecast(FORECAST);
+  assert.ok(f);
+  assert.equal(f.issued, "2026-10-28");
+  assert.equal(f.area, "Salt Lake City");
+  assert.deepEqual(
+    f.days.map((d) => [d.date, d.category, d.actionDay, d.aqi]),
+    [
+      ["2026-10-28", "Moderate", true, 55],
+      ["2026-10-29", "Good", false, Number.NaN],
+    ],
+  );
+  assert.equal(f.days[0]!.discussion, "An inversion holds through Thursday.");
+  assert.equal(parseForecast([]), null);
+});
+
+test("UTA's SIRI: the elements that matter, counted", () => {
+  const xml = `<Siri version="1.3"><VehicleMonitoringDelivery><VehicleActivity><MonitoredVehicleJourney><MonitoredCall><VehicleAtStop>false</VehicleAtStop><Extensions><Distance>6368.0</Distance></Extensions></MonitoredCall></MonitoredVehicleJourney></VehicleActivity><VehicleActivity/></VehicleMonitoringDelivery></Siri>`;
+  assert.deepEqual(siriElements(xml), { VehicleActivity: 1, MonitoredCall: 1, VehicleAtStop: 1, Distance: 1 });
 });
 
 test("UAC: the day's danger from the overall rose", () => {

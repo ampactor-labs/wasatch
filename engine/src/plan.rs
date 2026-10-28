@@ -131,6 +131,13 @@ pub struct SkyHour {
     /// Snow forecast at Alta over the next day, mm; NaN unknown. A forecast,
     /// frozen for the hour by the conductor: it only colors bars.
     pub storm_mm: f32,
+    /// PM2.5 measured downtown (Hawthorne), µg/m³; NaN unknown, and then
+    /// `pm25` stands for it. Frozen for the hour by the conductor from
+    /// AirNow's monitors: the haze the downtown vantage hears.
+    pub pm25_downtown: f32,
+    /// PM2.5 measured at the lake (the station by Saltair), µg/m³; NaN
+    /// unknown, and then `pm25` stands for it. The haze the lake vantage hears.
+    pub pm25_lake: f32,
 }
 
 impl Default for SkyHour {
@@ -151,6 +158,8 @@ impl Default for SkyHour {
             flow: f32::NAN,
             pressure_tend: f32::NAN,
             storm_mm: f32::NAN,
+            pm25_downtown: f32::NAN,
+            pm25_lake: f32::NAN,
         }
     }
 }

@@ -239,14 +239,20 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
             let k = r.u32() as usize;
             if (1..=64).contains(&k) && r.remaining() >= n * k * 4 {
                 for (_, h) in &mut hours {
-                    let mut more = [f32::NAN; 3];
+                    let mut more = [f32::NAN; 5];
                     for i in 0..k {
                         let v = r.f32();
                         if let Some(m) = more.get_mut(i) {
                             *m = v;
                         }
                     }
-                    [h.flow, h.pressure_tend, h.storm_mm] = more;
+                    [
+                        h.flow,
+                        h.pressure_tend,
+                        h.storm_mm,
+                        h.pm25_downtown,
+                        h.pm25_lake,
+                    ] = more;
                 }
             }
             with_engine(|e| {
@@ -771,12 +777,26 @@ mod tests {
         // Cut short: unknown, never zero.
         assert_eq!(post(kind::SKY, &new[..new.len() - 2]), 0);
         assert!(with_engine(sky).unwrap().flow.is_nan());
+        // Five: the air measured downtown and at the lake.
+        let mut five = old.clone();
+        five.extend_from_slice(&5u32.to_le_bytes());
+        f32s(&mut five, &[0.4, -2.5, 120.0, 11.1, 2.7]);
+        assert_eq!(post(kind::SKY, &five), 0);
+        let h = with_engine(sky).unwrap();
+        assert_eq!(
+            (h.storm_mm, h.pm25_downtown, h.pm25_lake),
+            (120.0, 11.1, 2.7)
+        );
         // A page newer than this engine: the fields it knows.
         let mut newer = old.clone();
-        newer.extend_from_slice(&5u32.to_le_bytes());
-        f32s(&mut newer, &[0.4, -2.5, 120.0, 9.0, 9.0]);
+        newer.extend_from_slice(&7u32.to_le_bytes());
+        f32s(&mut newer, &[0.4, -2.5, 120.0, 9.0, 9.0, 1.0, 2.0]);
         assert_eq!(post(kind::SKY, &newer), 0);
-        assert_eq!(with_engine(sky).unwrap().storm_mm, 120.0);
+        let h = with_engine(sky).unwrap();
+        assert_eq!(
+            (h.storm_mm, h.pm25_downtown, h.pm25_lake),
+            (120.0, 9.0, 9.0)
+        );
 
         // Slow values without the grid: as usual.
         let mut slow = Vec::new();

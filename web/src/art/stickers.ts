@@ -27,7 +27,8 @@ export type StickerKind =
   | "LISTEN LOCAL"
   | "THE LAKE IS LOW"
   | "FIRST CHAIR"
-  | "LAST CHAIR";
+  | "LAST CHAIR"
+  | "ACTION DAY";
 
 export const STICKER_KINDS: readonly StickerKind[] = [
   "801",
@@ -40,6 +41,7 @@ export const STICKER_KINDS: readonly StickerKind[] = [
   "THE LAKE IS LOW",
   "FIRST CHAIR",
   "LAST CHAIR",
+  "ACTION DAY",
 ];
 
 const DISPLAY = `font-family="Shrikhand, 'Bowlby One', 'Arial Black', sans-serif"`;
@@ -184,6 +186,13 @@ function spec(kind: StickerKind): Spec {
         face: `<circle cx="56" cy="72" r="30" fill="${MOON}" stroke="${INK}" stroke-width="3"/>${iconAt("chairlift", 56, 72, 46)}
           <circle cx="104" cy="40" r="2" fill="${SUN}"/><circle cx="200" cy="44" r="1.6" fill="${SUN}"/><circle cx="190" cy="112" r="1.8" fill="${SUN}"/>
           ${word("LAST", 146, 70, 27, SUN, 5)}${word("CHAIR", 146, 102, 27, SUN, 5)}`,
+      };
+    case "ACTION DAY":
+      // Utah DEQ's call for a mandatory action day: leave the car, ride.
+      return {
+        w: 240, h: 150, shape: ticket(120, 75, 206, 104, 12), fill: SUN, tilt: 3, title: "Action day",
+        face: `<circle cx="54" cy="72" r="30" fill="${WHITE}" stroke="${INK}" stroke-width="3"/>${iconAt("bus", 54, 72, 44)}
+          ${word("ACTION", 150, 66, 25, WHITE, 5)}${word("DAY", 150, 98, 29, WHITE, 5)}${small("RIDE, DON'T DRIVE", 150, 122, 10, INK)}`,
       };
   }
 }
