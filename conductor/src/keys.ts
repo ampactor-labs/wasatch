@@ -12,7 +12,7 @@ import { AirNowSource } from "./airnow.ts";
 import { fetchGrid, fetchMix } from "./outlook.ts";
 import { probeSiri } from "./siri.ts";
 import { Uac, DANGER } from "./uac.ts";
-import { Udot, canyonWind, heard, parseEvents, plowsOut, traction } from "./udot.ts";
+import { Udot, canyonWind, heard, parseEvents, parseRoadForecast, parseSigns, plowsOut, traction } from "./udot.ts";
 
 const fields = (body: unknown) => {
   const first = Array.isArray(body) ? body[0] : body;
@@ -48,16 +48,24 @@ const results = [
       return h ? [`${h.kind} (${["valley", "Little Cottonwood", "Big Cottonwood"][h.road]}): ${e.roadway}: ${e.words}`] : [];
     });
     out.push(`  heard: ${valley.length ? valley.slice(0, 6).join(" | ") : "nothing on the valley's highways now"}`);
-    for (const [what, read] of [
-      ["roadconditions", (b: unknown) => `traction law up Little / Big Cottonwood: ${traction(b).join(" / ")}`],
-      ["servicevehicles", (b: unknown) => `plows out in the valley: ${plowsOut(b, now)}`],
-      ["weatherstations", (b: unknown) => {
-        const w = canyonWind(b);
+    for (const [what, version, read] of [
+      ["roadconditions", "v3", (b: unknown) => `traction law up Little / Big Cottonwood: ${traction(b).join(" / ")}`],
+      ["servicevehicles", "v2", (b: unknown) => `plows out in the valley: ${plowsOut(b, now)}`],
+      ["weatherstations", "v2", (b: unknown) => {
+        const w = canyonWind(b, now);
         return w ? `canyon wind ${w.ms.toFixed(1)} m/s, gusts ${w.gustMs.toFixed(1)}, from ${w.stations.join(", ")}` : "no canyon stations matched";
+      }],
+      ["messagesigns", "v2", (b: unknown) => {
+        const signs = parseSigns(b);
+        return signs.length ? `minutes on the valley's signs: ${signs.slice(0, 8).map((t) => `${t.roadway} to ${t.to} ${t.minutes}`).join(", ")}${signs.length > 8 ? ` +${signs.length - 8}` : ""}` : "no valley sign shows minutes now";
+      }],
+      ["futuredrivingconditions", "v2", (b: unknown) => {
+        const f = parseRoadForecast(b);
+        return f.length ? `canyon roads ahead: ${f.map((x) => `${x.roadway} ${x.condition} (${x.reason}, ${x.timeframe})`).join("; ")}` : "no canyon road in the forecast";
       }],
     ] as const) {
       try {
-        const body = await u.get(what);
+        const body = await u.get(what, version);
         out.push(`${what}: ${n(body)} rows; fields: ${fields(body)}`, `  ${read(body)}`);
       } catch (err) {
         out.push(`${what}: FAILED ${err instanceof Error ? err.message : String(err)}`);

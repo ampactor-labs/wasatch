@@ -140,6 +140,11 @@ export interface KeyedNow {
     incidents: { road: string; words: string }[];
     state: { traction: [number, number]; plows: number; closures: number };
     wind: { ms: number; gustMs: number; stations: string[] } | null;
+    /** The minutes the overhead signs show, with their usual for the hour
+     * once learned. */
+    signs?: { name: string; roadway: string; to: string; minutes: number; usual: number | null }[];
+    /** UDOT's forecast for the canyon roads: shown, never played. */
+    forecast?: { roadway: string; timeframe: string; condition: string; reason: string }[];
   } | null;
   airnow: AirNow | null;
   uac: { danger: number; rose: number[]; issued: string; bottomLine: string } | null;

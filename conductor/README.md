@@ -55,7 +55,10 @@ exactly the same thing, and what the browser can't do on its own:
   plays; the rest is for the board and the lowdown.
 - **Keyed sources, off until their keys are set.** UDOT (incidents on the
   valley's highways, avalanche control, traction law, plows, the canyons'
-  weather stations; about two calls a minute of the ten allowed), AirNow
+  weather stations, the minutes on the overhead signs against their usual,
+  learned in `DATA_DIR/signs.json` and joining the fleet's flow, and the
+  canyon roads' forecast, shown; about two and a half calls a minute of the
+  ten allowed), AirNow
   (every monitor in the valley's box with its raw PM2.5, PM10, ozone, NO₂,
   CO and SO₂, the reporting area's AQI by pollutant and the forecast with
   its action days, about nine requests an hour of the 500 a key is allowed;

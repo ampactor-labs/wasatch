@@ -1,25 +1,38 @@
 // UDOT's traffic API (UDOT_KEY): what's happening on the valley's roads and
 // in its canyons. Off until the key is set.
 //
-//   event           crashes and closures on the valley's highways: one
-//                   standing holds the harmony's tension up, and it
-//                   resolves when the road clears; avalanche control in
-//                   Little or Big Cottonwood is a distant boom in the
-//                   canyon's echo
-//   roadconditions  traction law up a canyon: a low brass pedal there
-//   servicevehicles snowplows out in a storm: brushes in the drums
-//   weatherstations the wind measured up the canyons, in place of the
-//                   forecast's, for the harp
+//   event                    crashes and closures on the valley's highways:
+//                            one standing holds the harmony's tension up,
+//                            and it resolves when the road clears;
+//                            avalanche control in Little or Big Cottonwood
+//                            is a distant boom in the canyon's echo
+//   roadconditions (v3)      traction law up a canyon: a low brass pedal there
+//   servicevehicles          snowplows out in a storm: brushes in the drums
+//   weatherstations          the wind measured up the canyons, in place of
+//                            the forecast's, for the harp
+//   messagesigns             the minutes the overhead signs show to downtown,
+//                            the airport and the valley's ends, against their
+//                            usual: part of the fleet's flow
+//   futuredrivingconditions  UDOT's forecast for the canyon roads, shown on
+//                            the board (a forecast only colors)
 //
-// https://www.udottraffic.utah.gov/developers/doc. At most 10 calls a
-// minute; this makes about two.
+// https://udottraffic.utah.gov/developers/doc (fields as documented there,
+// Oct 2026): ten calls a minute are allowed; this makes about two and a half.
+
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { bucket } from "./flow.ts";
 
 const BASE = "https://www.udottraffic.utah.gov/api";
 const UA = { "User-Agent": "wasatch-symphony conductor (github.com/ampactor-labs/wasatch)" };
+const HOUR = 3_600_000;
 
 /** The valley, for which incidents and plows count. */
 export const VALLEY = { south: 40.42, north: 40.95, west: -112.15, east: -111.62 };
 const inValley = (lat: number, lon: number) => lat >= VALLEY.south && lat <= VALLEY.north && lon >= VALLEY.west && lon <= VALLEY.east;
+/** The signs whose minutes the valley feels: the valley's, and Parleys
+ * Canyon's on the way in. */
+const SIGNS = { ...VALLEY, east: -111.5 };
+const inSignsBox = (lat: number, lon: number) => lat >= SIGNS.south && lat <= SIGNS.north && lon >= SIGNS.west && lon <= SIGNS.east;
 
 /** A road row for the windows: [ms, kind (0 an incident, 1 cleared, 2
  * avalanche control), road (0 the valley, 1 Little Cottonwood, 2 Big
@@ -48,6 +61,13 @@ const num = (o: Json, ...names: string[]) => {
   const v = Number(field(o, ...names));
   return Number.isFinite(v) ? v : Number.NaN;
 };
+/** UDOT's times are Unix seconds; be ready for milliseconds or a date. */
+const when = (v: unknown): number => {
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 1e12) return n;
+  if (Number.isFinite(n) && n > 1e9) return n * 1000;
+  return Date.parse(String(v ?? ""));
+};
 
 /** Which canyon road a roadway name is: SR-210 Little Cottonwood, SR-190
  * Big Cottonwood. */
@@ -71,6 +91,15 @@ export interface UdotEvent {
   words: string;
 }
 
+/** A description's first line: UDOT's run on with the project's history
+ * after a "---". */
+const firstLine = (description: string) =>
+  description
+    .split(/\n|-{3,}/)[0]!
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 140);
+
 export function parseEvents(body: unknown): UdotEvent[] {
   if (!Array.isArray(body)) return [];
   return body.flatMap((e: Json) => {
@@ -86,7 +115,7 @@ export function parseEvents(body: unknown): UdotEvent[] {
         lat,
         lon,
         roadway: str(e, "RoadwayName"),
-        words: str(e, "Description").replace(/\s+/g, " ").slice(0, 140),
+        words: firstLine(str(e, "Description")),
       },
     ];
   });
@@ -122,8 +151,7 @@ export function plowsOut(body: unknown, now: number): number {
   return (body as Json[]).filter((v) => {
     const lat = num(v, "Latitude");
     const lon = num(v, "Longitude");
-    const seen = Number(field(v, "LastUpdated"));
-    const at = seen > 1e12 ? seen : seen > 1e9 ? seen * 1000 : Date.parse(String(field(v, "LastUpdated") ?? ""));
+    const at = when(field(v, "LastUpdated"));
     return inValley(lat, lon) && Number.isFinite(at) && now - at < 10 * 60_000;
   }).length;
 }
@@ -133,15 +161,18 @@ export function plowsOut(body: unknown, now: number): number {
 const RIDGE_STATIONS = /alta|snowbird|cottonwood|brighton|solitude|guardsman|parleys summit|kessler/i;
 
 /** The wind measured up the canyons: the mean of the stations' averages and
- * the strongest gust, m/s; null with none reporting. */
-export function canyonWind(body: unknown): { ms: number; gustMs: number; stations: string[] } | null {
+ * the strongest gust, m/s; null with none reporting. A station that hasn't
+ * reported in two hours is left out. */
+export function canyonWind(body: unknown, now = Date.now()): { ms: number; gustMs: number; stations: string[] } | null {
   if (!Array.isArray(body)) return null;
   const mph = 0.44704;
   const read = (body as Json[]).flatMap((s) => {
     const name = str(s, "StationName", "Name");
     const avg = num(s, "WindSpeedAvg", "WindSpeed");
     const gust = num(s, "WindSpeedGust", "WindGust");
-    return RIDGE_STATIONS.test(name) && Number.isFinite(avg) ? [{ name, avg, gust: Number.isFinite(gust) ? gust : avg }] : [];
+    const at = when(field(s, "LastUpdated"));
+    const fresh = !Number.isFinite(at) || now - at < 2 * HOUR;
+    return RIDGE_STATIONS.test(name) && Number.isFinite(avg) && fresh ? [{ name, avg, gust: Number.isFinite(gust) ? gust : avg }] : [];
   });
   if (!read.length) return null;
   return {
@@ -151,17 +182,184 @@ export function canyonWind(body: unknown): { ms: number; gustMs: number; station
   };
 }
 
+// --- The signs' minutes ------------------------------------------------------
+
+/** The minutes an overhead sign shows to each place, from its rotating
+ * messages: a phase that opens "MINUTES TO" (or "TRAVEL TIME TO", "MIN
+ * TO"), then a line a place and its minutes. */
+export function travelTimes(messages: unknown): { to: string; minutes: number }[] {
+  const out: { to: string; minutes: number }[] = [];
+  const list = Array.isArray(messages) ? messages : typeof messages === "string" ? [messages] : [];
+  for (const m of list) {
+    for (const phase of String(m).split(/<\/?MSG>/i)) {
+      const lines = phase
+        .split(/<BR\s*\/?>/i)
+        .map((l) => l.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const head = lines.findIndex((l) => /^(MINUTES|MINS?|TRAVEL TIMES?|TIME)\s+TO\b/i.test(l));
+      if (head < 0) continue;
+      for (const l of lines.slice(head + 1)) {
+        const m2 = /^(.*?\S)\s+(\d{1,3})\s*(?:MINS?|MINUTES)?$/i.exec(l);
+        if (m2) out.push({ to: m2[1]!, minutes: Number(m2[2]) });
+      }
+    }
+  }
+  return out;
+}
+
+/** A sign's minutes to a place, now. */
+export interface SignTime {
+  /** `${sign id}|${place}`: one thing learned. */
+  key: string;
+  name: string;
+  roadway: string;
+  to: string;
+  minutes: number;
+  lat: number;
+  lon: number;
+}
+
+/** The valley's highway signs that show minutes, and what they show. */
+export function parseSigns(body: unknown): SignTime[] {
+  if (!Array.isArray(body)) return [];
+  return body.flatMap((s: Json) => {
+    const id = str(s, "Id", "ID");
+    const lat = num(s, "Latitude");
+    const lon = num(s, "Longitude");
+    const roadway = str(s, "Roadway", "RoadwayName");
+    if (!id || !inSignsBox(lat, lon) || !HIGHWAY.test(roadway)) return [];
+    return travelTimes(field(s, "Messages")).map((t) => ({ key: `${id}|${t.to}`, name: str(s, "Name"), roadway, to: t.to, minutes: t.minutes, lat, lon }));
+  });
+}
+
+interface Usual {
+  min: number;
+  n: number;
+}
+
+/** How fast the usual learns. */
+const ALPHA = 0.3;
+const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+
+/** The signs' minutes against their usual for the hour, learned sign by
+ * sign and place by place as the conductor runs (`DATA_DIR/signs.json`),
+ * the way the fleet's speed is. An hour's reading is the median of the
+ * signs' paces, −1 (twice the usual minutes or worse) to 1; it joins the
+ * fleet's speed in the flow. */
+export class Signs {
+  private readonly path: string | null;
+  private usual: Record<string, Record<string, Usual>> = {};
+  /** This hour's samples by key, and which hour they're for. */
+  private hour = -1;
+  private samples = new Map<string, number[]>();
+  latest: SignTime[] = [];
+  stats = { signs: 0, places: 0, pace: null as number | null };
+
+  constructor(path: string | null) {
+    this.path = path;
+    if (!path || !existsSync(path)) return;
+    try {
+      this.usual = JSON.parse(readFileSync(path, "utf8")) as Record<string, Record<string, Usual>>;
+    } catch {
+      // Unreadable: learn it again.
+    }
+  }
+
+  /** The usual minutes for `key` in the bucket of `ms`, once it's been seen
+   * three times. */
+  usualFor(key: string, ms: number): number | null {
+    const u = this.usual[key]?.[bucket(ms)];
+    return u && u.n >= 3 ? Math.round(u.min * 10) / 10 : null;
+  }
+
+  /** A read of the signs at `now`. */
+  sample(times: SignTime[], now: number): void {
+    const hour = Math.floor(now / HOUR) * HOUR;
+    if (hour !== this.hour) {
+      this.hour = hour;
+      this.samples = new Map();
+    }
+    for (const t of times) this.samples.set(t.key, [...(this.samples.get(t.key) ?? []), t.minutes]);
+    this.latest = times;
+    this.stats.signs = new Set(times.map((t) => t.name)).size;
+    this.stats.places = times.length;
+  }
+
+  /** Close the hour starting at `hour`: its pace against the usual (null
+   * until enough is known), learning the hour as the new usual. */
+  close(hour: number): number | null {
+    if (hour !== this.hour || !this.samples.size) return null;
+    const paces: number[] = [];
+    for (const [key, minutes] of this.samples) {
+      const m = median(minutes);
+      const u = this.usualFor(key, hour);
+      if (u !== null && u > 0) paces.push(clamp((u / m - 1) / 0.12, -1, 1));
+      const b = bucket(hour);
+      const was = this.usual[key]?.[b];
+      (this.usual[key] ??= {})[b] = was ? { min: was.min + ALPHA * (m - was.min), n: was.n + 1 } : { min: m, n: 1 };
+    }
+    this.samples = new Map();
+    this.save();
+    const pace = paces.length ? Math.round(median(paces) * 100) / 100 : null;
+    this.stats.pace = pace;
+    return pace;
+  }
+
+  /** What the signs show now, with the usual, for the page. */
+  summary(now = Date.now()): { name: string; roadway: string; to: string; minutes: number; usual: number | null }[] {
+    return this.latest.map((t) => ({ name: t.name, roadway: t.roadway, to: t.to, minutes: t.minutes, usual: this.usualFor(t.key, now) }));
+  }
+
+  private save(): void {
+    if (!this.path) return;
+    try {
+      writeFileSync(`${this.path}.tmp`, JSON.stringify(this.usual));
+      renameSync(`${this.path}.tmp`, this.path);
+    } catch {
+      // Kept in memory.
+    }
+  }
+}
+
+// --- The roads' forecast -----------------------------------------------------
+
+export interface RoadForecast {
+  roadway: string;
+  timeframe: string;
+  condition: string;
+  reason: string;
+}
+
+/** UDOT's forecast for the canyon roads and Parleys: the first timeframe
+ * of each (futuredrivingconditions). Shown; a forecast only colors. */
+export function parseRoadForecast(body: unknown): RoadForecast[] {
+  if (!Array.isArray(body)) return [];
+  return body.flatMap((r: Json) => {
+    const roadway = str(r, "Roadway", "RoadwayName");
+    if (!(canyonOf(roadway) || /parley|I-?80\b/i.test(roadway))) return [];
+    const info = field(r, "ForecastInfo");
+    const first = Array.isArray(info) ? (info[0] as Json | undefined) : undefined;
+    if (!first) return [];
+    return [{ roadway, timeframe: str(first, "Timeframe"), condition: str(first, "Condition"), reason: str(first, "ConditionReason") }];
+  });
+}
+
 export class Udot {
   private readonly key: string | null;
   private events = new Map<string, { kind: "incident" | "avalanche"; road: 0 | 1 | 2; ev: UdotEvent }>();
   private seeded = false;
   state: RoadState = { traction: [0, 0], plows: 0, closures: 0 };
   wind: ReturnType<typeof canyonWind> = null;
+  forecast: RoadForecast[] = [];
+  readonly signs: Signs;
   status: "missing" | "set" | "ok" | "error" = "missing";
   lastError: string | null = null;
 
-  constructor(key = process.env.UDOT_KEY || null) {
+  /** `signsPath`: where the signs' usual minutes are kept across restarts. */
+  constructor(key = process.env.UDOT_KEY || null, signsPath: string | null = null) {
     this.key = key;
+    this.signs = new Signs(signsPath);
     if (key) this.status = "set";
   }
 
@@ -206,23 +404,40 @@ export class Udot {
   }
 
   async pollConditions(): Promise<void> {
-    this.state.traction = traction(await this.get("roadconditions"));
+    this.state.traction = traction(await this.get("roadconditions", "v3"));
   }
 
   async pollPlows(now: number): Promise<void> {
     this.state.plows = plowsOut(await this.get("servicevehicles"), now);
   }
 
-  async pollWind(): Promise<void> {
-    this.wind = canyonWind(await this.get("weatherstations"));
+  async pollWind(now = Date.now()): Promise<void> {
+    this.wind = canyonWind(await this.get("weatherstations"), now);
+  }
+
+  /** The signs' minutes, into this hour's samples. */
+  async pollSigns(now: number): Promise<void> {
+    this.signs.sample(parseSigns(await this.get("messagesigns")), now);
+  }
+
+  async pollForecast(): Promise<void> {
+    this.forecast = parseRoadForecast(await this.get("futuredrivingconditions"));
   }
 
   /** What's standing, for /health and the page. */
-  summary(): { incidents: { road: string; words: string }[]; state: RoadState; wind: ReturnType<typeof canyonWind> } {
+  summary(now = Date.now()): {
+    incidents: { road: string; words: string }[];
+    state: RoadState;
+    wind: ReturnType<typeof canyonWind>;
+    signs: ReturnType<Signs["summary"]>;
+    forecast: RoadForecast[];
+  } {
     return {
       incidents: [...this.events.values()].map((e) => ({ road: e.ev.roadway, words: e.ev.words })).slice(0, 20),
       state: this.state,
       wind: this.wind,
+      signs: this.signs.summary(now),
+      forecast: this.forecast,
     };
   }
 }

@@ -101,7 +101,7 @@ const alerts = new Alerts();
 const planes = new Planes();
 const flow = new Flow(DATA_DIR ? join(DATA_DIR, "usual.json") : null);
 const slots = new Slots(DATA_DIR ? join(DATA_DIR, "slots.json") : null);
-const udot = new Udot();
+const udot = new Udot(undefined, DATA_DIR ? join(DATA_DIR, "signs.json") : null);
 const airnow = new AirNowSource();
 const uac = new Uac();
 let skyBase: (ReturnType<typeof skyFrom> & { source: string }) | null = null;
@@ -179,6 +179,7 @@ every(15_000, "vehicles", async () => {
     transit.stats.medianLateS,
     Date.now(),
     udot.state.closures,
+    (hour) => udot.signs.close(hour),
   );
   if (closed && slots.freeze(closed.slot, "flow", closed.flow)) publishSky();
 });
@@ -262,6 +263,9 @@ if (udot.on) {
       freezeNext(Date.now(), "ridgeGustMs", udot.wind.gustMs);
     }
   });
+  // The minutes on the overhead signs, into the hour's flow.
+  every(2 * 60_000, "udot signs", () => udot.pollSigns(Date.now()));
+  every(30 * 60_000, "udot forecast", () => udot.pollForecast());
 }
 if (airnow.on) {
   // The monitors' PM2.5, frozen three ways: the valley's median, downtown's
@@ -368,7 +372,7 @@ const server = createServer((req, res) => {
         uta: process.env.UTA_TOKEN ? "set" : "missing",
         adsb: ADSB_URL ? "receiver" : "adsb.lol",
       },
-      roads: udot.on ? { ...udot.state, incidents: udot.summary().incidents.length, wind: udot.wind } : null,
+      roads: udot.on ? { ...udot.state, incidents: udot.summary().incidents.length, wind: udot.wind, signs: udot.signs.stats, forecast: udot.forecast.length } : null,
       air: airnow.latest && {
         aqi: airnow.latest.aqi,
         category: airnow.latest.category,

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { DOWNTOWN_SITES, LAKE_SITES, localHour, parseCurrent, parseForecast, parseSites, pickSite, valleyPm25 } from "./airnow.ts";
 import { siriElements } from "./siri.ts";
 import { parseAdvisory } from "./uac.ts";
-import { Udot, canyonOf, canyonWind, heard, parseEvents, plowsOut, traction } from "./udot.ts";
+import { Signs, Udot, canyonOf, canyonWind, heard, parseEvents, parseRoadForecast, parseSigns, plowsOut, traction, travelTimes } from "./udot.ts";
 
 // Shaped like UDOT's documented responses (api/v2/get/<x>?format=json).
 const EVENTS = [
@@ -75,6 +75,99 @@ test("UDOT: traction law, plows and the canyons' wind", () => {
   assert.ok(Math.abs(w.ms - 13 * 0.44704) < 1e-9);
   assert.ok(Math.abs(w.gustMs - 41 * 0.44704) < 1e-9);
   assert.equal(w.stations.length, 2);
+});
+
+test("UDOT: a description's first line, and a station that stopped reporting", () => {
+  const [e] = parseEvents([{ ID: 372, RoadwayName: "I-15", EventType: "roadwork", IsFullClosure: false, Latitude: 40.98, Longitude: -111.9, Description: "I-15 Shepard Lane Interchange Improved\n---\nTRAFFIC SHIFT – Northbound and southbound I-15 travel lanes are shifted." }]);
+  assert.equal(e!.words, "I-15 Shepard Lane Interchange Improved");
+  const now = Date.parse("2026-12-01T15:00:00Z");
+  const w = canyonWind(
+    [
+      { StationName: "SR-210 @ Alta", WindSpeedAvg: "20", WindSpeedGust: "41", LastUpdated: now / 1000 - 600 },
+      { StationName: "SR-190 @ Brighton", WindSpeedAvg: "60", WindSpeedGust: "90", LastUpdated: now / 1000 - 3 * 3600 },
+    ],
+    now,
+  );
+  assert.deepEqual(w?.stations, ["SR-210 @ Alta"]);
+});
+
+// Shaped like UDOT's documented messagesigns and futuredrivingconditions.
+const SIGNS = [
+  { Id: "UT--100107", Name: "I-80 WB @ Jeremy Ranch / MP 142.93, SU", Roadway: "I-80 WB", DirectionOfTravel: "Westbound", Messages: ["<MSG>MINUTES TO<BR/>SLC                 16<BR/>SLC AIRPORT    26</MSG>"], Latitude: 40.75082, Longitude: -111.565787, LastUpdated: 1686328502 },
+  { Id: "UT--100200", Name: "I-15 SB @ 600 S, SLC", Roadway: "I-15 SB", DirectionOfTravel: "Southbound", Messages: ["<MSG>SLOW TRAFFIC<BR/>AHEAD</MSG><MSG>TRAVEL TIME TO<BR/>I-215   9 MIN<BR/>DRAPER  22 MIN</MSG>"], Latitude: 40.76, Longitude: -111.9, LastUpdated: 1686328502 },
+  { Id: "UT--100082", Name: "I-15 NB @ Milepost 0.28, STG", Roadway: "I-15 NB", DirectionOfTravel: "Northbound", Messages: ["<MSG>ALL WATERCRAFT<BR/>MUST EXIT AT<BR/>PORT OF ENTRY</MSG>"], Latitude: 37.004178, Longitude: -113.618146, LastUpdated: 1686328502 },
+  { Id: "UT--100300", Name: "SR-209 @ 9000 S", Roadway: "SR-209 EB", DirectionOfTravel: "Eastbound", Messages: ["<MSG>MINUTES TO<BR/>SNOWBIRD 35</MSG>"], Latitude: 40.58, Longitude: -111.85, LastUpdated: 1686328502 },
+];
+
+test("UDOT: the minutes the overhead signs show, on the valley's highways", () => {
+  assert.deepEqual(travelTimes(SIGNS[0]!.Messages), [
+    { to: "SLC", minutes: 16 },
+    { to: "SLC AIRPORT", minutes: 26 },
+  ]);
+  assert.deepEqual(travelTimes(SIGNS[1]!.Messages), [
+    { to: "I-215", minutes: 9 },
+    { to: "DRAPER", minutes: 22 },
+  ]);
+  assert.deepEqual(travelTimes(SIGNS[2]!.Messages), []);
+  assert.deepEqual(travelTimes(undefined), []);
+  const signs = parseSigns(SIGNS);
+  assert.deepEqual(
+    signs.map((t) => [t.key, t.roadway, t.minutes]),
+    [
+      ["UT--100107|SLC", "I-80 WB", 16],
+      ["UT--100107|SLC AIRPORT", "I-80 WB", 26],
+      ["UT--100200|I-215", "I-15 SB", 9],
+      ["UT--100200|DRAPER", "I-15 SB", 22],
+    ],
+    "St. George's sign is far away, and SR-209 isn't a highway the valley feels",
+  );
+});
+
+test("UDOT: the signs' pace against their usual, learned hour by hour", () => {
+  const s = new Signs(null);
+  const t0 = Date.parse("2026-12-01T15:00:00Z"); // a Tuesday, 8 AM in Utah
+  const HOUR = 3_600_000;
+  const read = (hour: number, minutes: number) =>
+    s.sample(
+      [
+        { key: "a|SLC", name: "a", roadway: "I-15 NB", to: "SLC", minutes, lat: 40.7, lon: -111.9 },
+        { key: "a|DRAPER", name: "a", roadway: "I-15 NB", to: "DRAPER", minutes: minutes * 2, lat: 40.7, lon: -111.9 },
+      ],
+      hour + 600_000,
+    );
+  // Three Tuesdays at 8 AM: 10 minutes to SLC each.
+  for (let week = 0; week < 3; week++) {
+    const hour = t0 + week * 7 * 86_400_000;
+    read(hour, 10);
+    read(hour, 10);
+    assert.equal(s.close(hour), null, "no usual yet");
+  }
+  assert.equal(s.usualFor("a|SLC", t0), 10);
+  assert.equal(s.usualFor("a|SLC", t0 + HOUR), null, "9 AM hasn't been seen");
+  // A fourth, crawling: 14 minutes, a pace well below zero.
+  const slow = t0 + 3 * 7 * 86_400_000;
+  read(slow, 14);
+  read(slow, 15);
+  assert.deepEqual(
+    s.summary(slow + 600_000).map((x) => [x.to, x.minutes, x.usual]),
+    [
+      ["SLC", 15, 10],
+      ["DRAPER", 30, 20],
+    ],
+  );
+  const pace = s.close(slow)!;
+  assert.ok(pace < -0.9 && pace >= -1, `pace ${pace}`);
+  assert.equal(s.close(slow), null, "closed once");
+  assert.equal(s.stats.pace, pace);
+});
+
+test("UDOT: the canyon roads' forecast, first timeframe only", () => {
+  const f = parseRoadForecast([
+    { Id: 1, Roadway: "US-89 From Jct. SR-193 to I-84", ForecastInfo: [{ Timeframe: "0 to 3 hours", Condition: "Yellow", ConditionReason: "Slushy roads" }] },
+    { Id: 2, Roadway: "SR-210 Little Cottonwood Canyon", ForecastInfo: [{ Timeframe: "0 to 3 hours", Condition: "Red", ConditionReason: "Snow covered" }, { Timeframe: "3 to 6 hours", Condition: "Yellow", ConditionReason: "Patchy ice" }] },
+    { Id: 3, Roadway: "I-80 Parleys Canyon", ForecastInfo: [] },
+  ]);
+  assert.deepEqual(f, [{ roadway: "SR-210 Little Cottonwood Canyon", timeframe: "0 to 3 hours", condition: "Red", reason: "Snow covered" }]);
 });
 
 // Shaped like AirNow's answers on Oct 28, 2026 (the web services that

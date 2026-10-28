@@ -80,12 +80,13 @@ paths); the push that carried the Oct 28 work deployed them.
    read the real XML, then design: `VehicleAtStop` transitions as observed
    departures and arrivals, `Distance` to Central as a countdown for the
    cadence, `ProgressRate` as lateness. Ask the owner before any new sound.
-4. When UDOT's key arrives: `keys:check` prints each endpoint's fields. UDOT's
-   field names are matched case-insensitively in `conductor/src/udot.ts`; the
-   highway list, canyon names (SR-210, SR-190) and the traction-law wording
-   were written from the documented schema and need checking against live
-   data. Travel times on message signs and canyon traffic are not built; look
-   at the real API first.
+4. When UDOT's key arrives: `keys:check` prints each endpoint's fields, the
+   minutes on the signs and the canyon roads' forecast. Field names were
+   checked against UDOT's documentation on Oct 28 (`udottraffic.utah.gov/help/endpoint/<name>`)
+   and match; the highway list, canyon names (SR-210, SR-190), the
+   traction-law wording and the signs' "MINUTES TO" phrasing still need the
+   live data. The signs' usual takes three hours of the week to learn before
+   they move the flow. Canyon traffic is not built.
 5. When UAC's token arrives: `conductor/src/uac.ts` sends the token both as
    `?token=` and a Bearer header because their docs don't say which. Find out
    which works, keep only that one, and read the real JSON to confirm

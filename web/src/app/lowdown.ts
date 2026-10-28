@@ -75,6 +75,11 @@ export interface Topic {
 }
 
 const SECTION_NAMES = ["The theme", "Groove", "Atmosphere", "Journey", "The lake"];
+
+/** "SLC AIRPORT" as a sign shouts it → "SLC Airport". */
+function titleCase(s: string): string {
+  return s.replace(/[A-Za-z]+/g, (w) => (/^(SLC|I|SR|US|UT|NB|SB|EB|WB)$/i.test(w) ? w.toUpperCase() : w[0]!.toUpperCase() + w.slice(1).toLowerCase()));
+}
 const VANTAGE_NAMES = ["the whole valley, as a map", "the Gallivan Center, downtown", "Tanners Flat, up Little Cottonwood", "Saltair, on the lake"];
 
 type R<T> = { value: T; observed: number; receipt: "live" | "cached" | "scheduled" } | null;
@@ -384,9 +389,9 @@ export const TOPICS: readonly Topic[] = [
     id: "roads",
     title: "The roads",
     group: "valley",
-    short: "A crash or closure on the valley's highways hangs the harmony until it clears; avalanche control booms up the canyon; traction law is a low brass pedal; plows in a storm are brushes.",
+    short: "A crash or closure on the valley's highways hangs the harmony until it clears; avalanche control booms up the canyon; traction law is a low brass pedal; plows are brushes; slow minutes on the signs hold the tempo back.",
     more:
-      "UDOT's traffic feed: incidents on I-15, I-80, I-215, Bangerter and the valley's other highways (roadwork isn't news) suspend the chord in the bar they open, hold the tension up while they stand, and bring the harmony home in the bar they clear; they slow the fleet's flow too. Closures for avalanche control on SR-210 or SR-190 are a low boom far into that canyon's echo. Traction law up a canyon is a pedal on home from there, a phrase at a time. Snowplows out in the valley while it snows play brushes on the off-beats, more the more plows. UDOT's weather stations up the canyons give the harp the wind as measured.",
+      "UDOT's traffic feed: incidents on I-15, I-80, I-215, Bangerter and the valley's other highways (roadwork isn't news) suspend the chord in the bar they open, hold the tension up while they stand, and bring the harmony home in the bar they clear; they slow the fleet's flow too. Closures for avalanche control on SR-210 or SR-190 are a low boom far into that canyon's echo. Traction law up a canyon is a pedal on home from there, a phrase at a time. Snowplows out in the valley while it snows play brushes on the off-beats, more the more plows. UDOT's weather stations up the canyons give the harp the wind as measured. The minutes the overhead signs show to downtown, the airport and the valley's ends are learned sign by sign for each hour of the week; an hour slower than its usual pulls the flow down with the fleet's speed, and the tempo with it. UDOT's forecast for the canyon roads is shown here and never played.",
     plays: "the harmony's suspense, a boom, a pedal and brushes",
     source: { name: "UDOT Traffic", href: "https://www.udottraffic.utah.gov/" },
     now: (c) => {
@@ -395,7 +400,12 @@ export const TOPICS: readonly Topic[] = [
       if (!u) return { value: "waiting for UDOT's key", receipt: "off" };
       const t = u.state.traction;
       const traction = t[0] || t[1] ? ` · traction law up ${t[0] && t[1] ? "both Cottonwoods" : t[0] ? "Little Cottonwood" : "Big Cottonwood"}` : "";
-      return { value: `${u.state.closures ? `${u.state.closures} incident${u.state.closures === 1 ? "" : "s"} on the highways` : "the highways clear"}${traction} · ${u.state.plows} plows out`, receipt: "live" };
+      const parts = [`${u.state.closures ? `${u.state.closures} incident${u.state.closures === 1 ? "" : "s"} on the highways` : "the highways clear"}${traction} · ${u.state.plows} plows out`];
+      const signs = (u.signs ?? []).filter((x) => x.usual !== null).sort((a, b) => b.minutes / b.usual! - a.minutes / a.usual!).slice(0, 3);
+      if (signs.length) parts.push(`signs: ${signs.map((x) => `${x.roadway} to ${titleCase(x.to)} ${x.minutes} min (usually ${Math.round(x.usual!)})`).join(", ")}`);
+      else if (u.signs?.length) parts.push(`${u.signs.length} sign readings, learning their usual`);
+      if (u.forecast?.length) parts.push(`forecast: ${u.forecast.map((f) => `${f.roadway} ${f.condition.toLowerCase()}${f.reason ? `, ${f.reason.toLowerCase()}` : ""}`).join("; ")}`);
+      return { value: parts.join(" · "), receipt: "live" };
     },
   },
   {
@@ -699,6 +709,9 @@ export function conditions(c: LowdownCtx): Condition[] {
     const s = keyed.udot.state;
     const parts = [s.closures ? `${s.closures} incident${s.closures === 1 ? "" : "s"}` : "clear", s.traction[0] || s.traction[1] ? "traction law" : "", s.plows ? `${s.plows} plows` : ""].filter(Boolean);
     add("roads", "Roads", parts.join(" · "), "live");
+    // The slowest sign against its usual, when it's news.
+    const slow = (keyed.udot.signs ?? []).filter((x) => x.usual !== null && x.usual > 0 && x.minutes / x.usual >= 1.2).sort((a, b) => b.minutes / b.usual! - a.minutes / a.usual!)[0];
+    if (slow) add("roads", "Signs", `${slow.roadway} to ${titleCase(slow.to)} ${slow.minutes} min (usually ${Math.round(slow.usual!)})`, "live");
   }
   if (keyed?.uac) add("avalanche", "Avalanche", ["no rating", "low", "moderate", "considerable", "high", "extreme"][keyed.uac.danger] ?? "?", "live");
   if (v.grid) {

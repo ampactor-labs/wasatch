@@ -6,7 +6,8 @@
 //
 // The usual is learned as the conductor runs, for each hour of a weekday, a
 // Saturday and a Sunday; until an hour has been seen three times, its flow
-// is the lateness alone.
+// is the lateness alone. With UDOT's key the minutes on the overhead signs,
+// against their own usual (udot.ts), share the pace with the fleet.
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
@@ -44,12 +45,17 @@ const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x
 
 /** An hour's flow, −1 (crawling) to 1 (quick), from its speed against the
  * usual (null while there's no usual yet), the trains' median lateness, and
- * (with UDOT's key) the crashes and closures standing on the highways. */
-export function flowOf(speed: number, usual: number | null, lateS: number, incidents = 0): number {
+ * (with UDOT's key) the crashes and closures standing on the highways and
+ * the minutes on the overhead signs against their usual (`signs`, −1…1,
+ * null without): the fleet's pace and the signs' share the pace. */
+export function flowOf(speed: number, usual: number | null, lateS: number, incidents = 0, signs: number | null = null): number {
   const late = clamp(-(lateS - 60) / 240, -1, 0.25);
   const blocked = 0.1 * Math.min(3, incidents);
-  if (usual === null) return clamp(late - blocked, -1, 1);
-  const pace = clamp((speed / usual - 1) / 0.12, -1, 1);
+  const paces: number[] = [];
+  if (usual !== null) paces.push(clamp((speed / usual - 1) / 0.12, -1, 1));
+  if (signs !== null && Number.isFinite(signs)) paces.push(clamp(signs, -1, 1));
+  if (!paces.length) return clamp(late - blocked, -1, 1);
+  const pace = paces.reduce((a, b) => a + b, 0) / paces.length;
   return clamp(0.65 * pace + 0.35 * late - blocked, -1, 1);
 }
 
@@ -75,12 +81,13 @@ export class Flow {
   /** A look at the fleet at `now`: its vehicles' speeds (m/s), the trains'
    * median lateness (s), and the incidents standing on the highways. When
    * it's the first of a new hour, the hour before closes: returns its flow,
-   * for the slot starting now. */
-  sample(speeds: number[], lateS: number, now: number, incidents = 0): { slot: number; flow: number } | null {
+   * for the slot starting now. `signs` is asked then for the hour's pace on
+   * the overhead signs (null without UDOT's key or a usual yet). */
+  sample(speeds: number[], lateS: number, now: number, incidents = 0, signs?: (hour: number) => number | null): { slot: number; flow: number } | null {
     const hour = Math.floor(now / HOUR) * HOUR;
     let closed: { slot: number; flow: number } | null = null;
     if (hour !== this.hour) {
-      if (this.hour >= 0 && hour - this.hour === HOUR) closed = this.close(hour);
+      if (this.hour >= 0 && hour - this.hour === HOUR) closed = this.close(hour, signs?.(this.hour) ?? null);
       this.hour = hour;
       this.speeds = [];
       this.lates = [];
@@ -95,14 +102,14 @@ export class Flow {
     return closed;
   }
 
-  private close(slot: number): { slot: number; flow: number } | null {
+  private close(slot: number, signs: number | null): { slot: number; flow: number } | null {
     if (this.speeds.length < MIN_SAMPLES) return null;
     const speed = median(this.speeds);
     const late = median(this.lates);
     const incidents = median(this.incidents);
     const key = bucket(this.hour);
     const u = this.usual[key];
-    const flow = Math.round(flowOf(speed, u && u.n >= 3 ? u.speed : null, late, incidents) * 100) / 100;
+    const flow = Math.round(flowOf(speed, u && u.n >= 3 ? u.speed : null, late, incidents, signs) * 100) / 100;
     this.usual[key] = u ? { speed: u.speed + ALPHA * (speed - u.speed), n: u.n + 1 } : { speed, n: 1 };
     this.save();
     this.stats = { hour: this.hour, speedMs: Math.round(speed * 100) / 100, usualMs: u ? Math.round(u.speed * 100) / 100 : null, flow };

@@ -780,8 +780,13 @@ bring the harmony home in the bar they clear; avalanche control on SR-210 or
 SR-190 is a low boom far into that canyon's echo; traction law there is a
 pedal on home from the canyon, breathing a phrase at a time; plows out in
 the valley while it snows play brushes on the off-beats. The stations up
-the canyons give the harp measured wind. Travel times and canyon traffic
-wait until the API can be seen with a key.
+the canyons give the harp measured wind. Oct 28, from UDOT's documentation:
+the minutes on the overhead signs to downtown, the airport and the valley's
+ends are learned sign by sign for each hour of the week and share the pace
+with the fleet's speed in `flow`, the board says the slowest against its
+usual ("I-15 to Draper 22 min (usually 11)"), and the canyon roads' forecast
+is shown. Canyon traffic waits for the key, and all of it for its first
+live read.
 
 ### Water
 

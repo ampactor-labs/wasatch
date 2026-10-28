@@ -16,6 +16,15 @@ test("the usual is a weekday's, a Saturday's or a Sunday's hour, in Utah", () =>
   assert.equal(bucket(Date.parse("2026-10-25T14:00:00Z")), "sun-8");
 });
 
+test("flow: the signs' pace shares the pace with the fleet's", () => {
+  // Fleet as usual, signs crawling: half the pace term.
+  assert.ok(Math.abs(flowOf(9, 9, 0, 0, -1) - (0.65 * -0.5 + 0.35 * 0.25)) < 1e-9);
+  // No fleet usual yet: the signs alone carry the pace.
+  assert.ok(Math.abs(flowOf(9, null, 0, 0, 1) - (0.65 * 1 + 0.35 * 0.25)) < 1e-9);
+  // Neither: as before.
+  assert.equal(flowOf(9, null, 0, 0, null), flowOf(9, null, 0));
+});
+
 test("flow: pace against the usual, and lateness", () => {
   assert.equal(movingMedian([0, 0, 0.2, 5, 6, 7]), null, "too few moving");
   assert.equal(movingMedian([0, 0, ...Array.from({ length: 11 }, (_, i) => 4 + i)]), 9);
