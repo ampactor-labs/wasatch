@@ -270,7 +270,7 @@ if (udot.on) {
 if (airnow.on) {
   // The monitors' PM2.5, frozen three ways: the valley's median, downtown's
   // and the lake's, so each vantage hears the haze where it stands.
-  every(20 * 60_000, "airnow", async () => {
+  every(10 * 60_000, "airnow", async () => {
     const a = await airnow.poll();
     if (!a) return;
     const now = Date.now();

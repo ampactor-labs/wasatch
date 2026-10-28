@@ -56,7 +56,7 @@ and tested, off until their keys are set.
 
 | Variable | Status |
 |---|---|
-| `AIRNOW_KEY` | Set on Railway Oct 28. AirNow retired its first services on Sept 30, 2026; `conductor/src/airnow.ts` reads the replacements (`aq/data/`, `aq/observation/current/ziplatlong/`, `aq/forecast/current/`). About nine requests an hour of the 500 allowed. |
+| `AIRNOW_KEY` | Set on Railway Oct 28. AirNow retired its first services on Sept 30, 2026; `conductor/src/airnow.ts` reads the replacements (`aq/data/`, `aq/observation/current/ziplatlong/`, `aq/forecast/current/`). About thirteen requests an hour of the 500 allowed; AirNow's site query is slow at times, so requests get 45 s and one retry, every 10 min. |
 | `EIA_KEY` | Set Oct 28. The demo key allowed 10 requests an hour; the conductor now polls demand every 15 min and the mix every 2 h. |
 | `UTA_TOKEN` | Set Oct 28, for UTA's SIRI API, whose documented host (api.rideuta.com) answers the website's 404 page; `keys:check` probes it, `UTA_SIRI` renames the host. Nothing plays from it. The owner is asking UTA what the token is for. |
 | `UDOT_KEY` | Awaiting UDOT's approval. |

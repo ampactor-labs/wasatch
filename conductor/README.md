@@ -61,7 +61,7 @@ exactly the same thing, and what the browser can't do on its own:
   ten allowed), AirNow
   (every monitor in the valley's box with its raw PM2.5, PM10, ozone, NO₂,
   CO and SO₂, the reporting area's AQI by pollutant and the forecast with
-  its action days, about nine requests an hour of the 500 a key is allowed;
+  its action days, about thirteen requests an hour of the 500 a key is allowed;
   preliminary data, shown as such and credited to Utah DEQ and EPA AirNow)
   and the Utah Avalanche Center (the day's danger, read every 15 minutes
   from 5 to 8 AM as the center asks). UTA's SIRI token (`UTA_TOKEN`) is

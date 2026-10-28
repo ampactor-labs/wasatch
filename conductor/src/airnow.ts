@@ -15,7 +15,10 @@
 //                                        by pollutant
 //   /aq/forecast/current/                the area's forecast, by day
 //
-// A key is allowed about 500 requests an hour; this makes about nine.
+// A key is allowed about 500 requests an hour; this makes about thirteen.
+// AirNow can take a while to answer the site query, so each request has a
+// long timeout and one more try: a poll that fails in an hour's second half
+// would leave the next hour on the model.
 //
 // AirNow's data exchange guidelines: the observations are preliminary and
 // are shown as such, credited to the Utah Department of Environmental
@@ -302,12 +305,21 @@ export class AirNowSource {
     return this.key !== null;
   }
 
-  /** One request. AirNow answers some failures as 200 with a
-   * `WebServiceError` envelope; that's an error here too. */
+  /** One request, tried twice if the network or AirNow's slowness fails
+   * it. AirNow answers some failures as 200 with a `WebServiceError`
+   * envelope; that's an error here too. */
   async get(path: string, params: Record<string, string>): Promise<unknown> {
     if (!this.key) throw new Error("AIRNOW_KEY isn't set");
     const q = new URLSearchParams({ format: "application/json", ...params, API_KEY: this.key });
-    const res = await fetch(`${BASE}${path}?${q}`, { headers: UA, signal: AbortSignal.timeout(20_000) });
+    let res: Response | null = null;
+    for (let attempt = 0; res === null; attempt++) {
+      try {
+        res = await fetch(`${BASE}${path}?${q}`, { headers: UA, signal: AbortSignal.timeout(45_000) });
+      } catch (err) {
+        if (attempt >= 1) throw err;
+        await new Promise((r) => setTimeout(r, 5_000));
+      }
+    }
     if (!res.ok) throw new Error(`AirNow ${res.status}`);
     const body = (await res.json()) as unknown;
     const err = (body as { WebServiceError?: { Message?: string }[] } | null)?.WebServiceError;
@@ -321,7 +333,7 @@ export class AirNowSource {
     try {
       const [sitesBody, currentBody] = await Promise.all([
         this.get("/aq/data/", {
-          startDate: hourStamp(now - 3 * HOUR),
+          startDate: hourStamp(now - 2 * HOUR),
           endDate: hourStamp(now),
           parameters: "PM25,OZONE,PM10,NO2,CO,SO2",
           BBOX,
