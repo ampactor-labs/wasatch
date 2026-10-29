@@ -97,7 +97,16 @@ paths); the push that carried the Oct 28 work deployed them.
    `overall_danger_rose` / `date_issued` / `bottom_line`. What the forecast
    *plays* is undecided (DESIGN.md: "a rare, soft, settling sound"); it is
    shown on the board and lowdown only. Ask the owner before adding sound.
-6. Still unbuilt: our own ADS-B receiver (`ADSB_URL`; adsb.lol stands in,
+6. The hats (Oct 29): the conductor learns the usual buses out per hour
+   of a weekday, a Saturday and a Sunday (`usual.json`, beside the speed);
+   an hour's `busy` is frozen into the slot after once its hour has been
+   seen three times, so the new hats arrive hour by hour over the first
+   week (until then the timetable's rate stands in). `/health` `flow.busy`
+   shows the last hour's ratio; `/slots.json` shows `busy` per hour. A
+   suggested follow-up the owner hasn't decided on: lean the hats toward
+   whichever side's buses run slower than their usual (east/west panning by
+   the buses' share was ruled out: it sits at 55–58% west all day).
+7. Still unbuilt: our own ADS-B receiver (`ADSB_URL`; adsb.lol stands in,
    about 360 reads a day), a recorded FrontRunner horn to replace the
    synthesized one (the owner will supply a file), sampled strings and brass.
    Air that could play but doesn't yet, pending the owner's ear: ozone in
