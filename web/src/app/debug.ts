@@ -43,6 +43,11 @@ export function mountDebug(host: Host, conductor: Conductor | null): void {
       ],
       ["audio", `${stats.dropouts} dropouts${stats.dropouts ? ` (${Math.round(stats.droppedMs)} ms)` : ""} · ${stats.state}`, stats.dropouts > 0],
       [
+        "level",
+        `${Number.isFinite(stats.peakDb) ? `${stats.peakDb.toFixed(1)} dBFS peak` : "silent"}${stats.gain < 0.99 ? ` · ducked to ${stats.gain.toFixed(2)}` : ""}`,
+        !(stats.peakDb > -60) || stats.gain < 0.99,
+      ],
+      [
         "output",
         `${(stats.sampleRate / 1000).toFixed(1)} kHz · ${host.simd ? "SIMD" : "scalar"} · latency ${Math.round(stats.baseLatencyMs)} + ${Math.round(stats.outputLatencyMs)} ms`,
         false,

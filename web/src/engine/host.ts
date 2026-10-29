@@ -131,6 +131,10 @@ export interface DebugStats {
   baseLatencyMs: number;
   outputLatencyMs: number;
   state: string;
+  /** The loudest sample sent to the speakers in the last half second, dBFS,
+   * and the gain after the engine: silence here is silence in the page. */
+  peakDb: number;
+  gain: number;
 }
 
 export class Host {
@@ -356,14 +360,25 @@ export class Host {
       baseLatencyMs: (this.ctx.baseLatency || 0) * 1000,
       outputLatencyMs: (latency.outputLatency || 0) * 1000,
       state: this.ctx.state,
+      peakDb: -Infinity,
+      gain: 1,
     };
     this.debugStats = s;
     this.node?.port.postMessage({ type: "debug", on: true });
     // A dropout: the audio clock falling behind the wall clock. Each half
     // second, the context should have advanced as far as performance.now().
     let last: { c: number; p: number } | null = null;
+    const meter = this.ctx.createAnalyser();
+    meter.fftSize = 32768;
+    this.outGain?.connect(meter);
+    const buf = new Float32Array(meter.fftSize);
     this.debugTimer = window.setInterval(() => {
       s.state = this.ctx.state;
+      meter.getFloatTimeDomainData(buf);
+      let peak = 0;
+      for (const x of buf) peak = Math.max(peak, Math.abs(x));
+      s.peakDb = 20 * Math.log10(peak);
+      s.gain = this.outGain?.gain.value ?? 1;
       s.outputLatencyMs = (latency.outputLatency || 0) * 1000;
       const ts = this.ctx.getOutputTimestamp?.();
       if (this.ctx.state !== "running" || !ts?.contextTime || !ts.performanceTime) {

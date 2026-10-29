@@ -137,6 +137,7 @@ try {
       const panel = await page.$$eval(".debug__row", (rows) => rows.map((r) => r.textContent ?? ""));
       for (const row of panel) console.log(`  debug: ${row}`);
       if (!panel.some((r) => /% of a core/.test(r) && !/^engine 0\.0%/.test(r))) failures.push(`${view.name}: ?debug didn't measure the engine`);
+      if (!panel.some((r) => /^level -?\d+(\.\d)? dBFS/.test(r))) failures.push(`${view.name}: ?debug heard no sound leaving the page`);
     }
     if (view.name === "phone" && !query) await vantages(page, failures, shots);
     // The conditions board: every live reading, each explaining itself.
