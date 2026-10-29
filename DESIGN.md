@@ -194,6 +194,19 @@ What's live, and where it differs from the rest of this document:
   an unknown dock reports (a failed start no longer silences bikes) and
   daily; quakes catalogued up to six hours late play, once, with the seen
   list kept on disk; a UDOT station whose time can't be read is stale.
+- **The data, used more fully** (Oct 29), no new instruments: the rivers
+  grade the bass (below the 25th percentile a held root, usual water root
+  and fifth, above the 60th a walk, above the 85th a walk in eighths); a
+  deep snowpack (over 125% of median) spreads the ninth from home to the IV
+  and the vi; overnight snow plays the theme up to 15% harder at six
+  inches, and on a POW DAY doubles its high statement an octave down; a
+  bike leaving its dock rings an octave above one coming back; a quake's
+  depth sets its bell's octave (under 5 km up and shorter, below 12 km down
+  and longer; QUAKES grew a tail, the conductor's quake rows a field); the
+  inversion is measured where it can be (Snowbird's station against the
+  airport, frozen for the hour in place of the model's, and the lowdown
+  says which). On the map, with the conductor's keys: the air monitors as
+  targets colored by the PM2.5 they measured, UDOT's incidents as diamonds.
 - **Not built yet:** our own ADS-B receiver (adsb.lol stands in), travel
   times on UDOT's signs and canyon traffic (to confirm against the API with
   a key), what the avalanche forecast plays, the resorts' own voices,

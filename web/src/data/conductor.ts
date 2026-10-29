@@ -19,7 +19,7 @@ interface WindowBody {
   end: number;
   rail: [number, number, number, number, number, number][];
   bikes: [number, number, number, number, number][];
-  quakes: [number, number, number, number, number, string, string][];
+  quakes: [number, number, number, number, number, string, string, (number | null)?][];
   ground: { band: number; lat: number; lon: number; level: number; t0: number; iq: number[] }[];
   // Added since: an older window has none of these.
   planes?: PlaneRow[];
@@ -196,7 +196,7 @@ export class Conductor implements GroundFeed {
       this.valley.conductorBikes(w.bikes.map(([ms, lat, lon, delta, station]) => ({ ms, lat, lon, delta, station })));
     }
     if (w.quakes.length) {
-      this.valley.conductorQuakes(w.quakes.map(([ms, originMs, mag, lat, lon, id, place]): Quake => ({ ms, originMs, mag, lat, lon, id, place })));
+      this.valley.conductorQuakes(w.quakes.map(([ms, originMs, mag, lat, lon, id, place, depth]): Quake => ({ ms, originMs, mag, lat, lon, id, place, depthKm: depth ?? undefined })));
     }
     for (const g of w.ground) {
       const queue = this.bands[g.band];

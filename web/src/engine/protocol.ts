@@ -283,12 +283,18 @@ export interface QuakeEvent {
   mag: number;
   lat: number;
   lon: number;
+  /** The hypocenter's depth, km (absent unknown). */
+  depthKm?: number;
 }
 
+/** QUAKES: `u32 n` and n rows, then `u32 k` and k more floats a quake (the
+ * depth): an engine older than them reads only the rows. */
 export function encodeQuakes(events: QuakeEvent[]): Uint8Array {
   const w = new Writer();
   w.u32(events.length);
   for (const e of events) w.f64(e.ms).f64(e.originMs).f32(e.mag).f32(e.lat).f32(e.lon);
+  w.u32(1);
+  for (const e of events) w.f32(e.depthKm !== undefined && Number.isFinite(e.depthKm) ? e.depthKm : Number.NaN);
   return w.bytes();
 }
 

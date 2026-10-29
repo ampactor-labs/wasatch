@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { centralIndex, encodeAlerts, encodeClock, encodeDay, encodeNetwork, encodePlanes, encodeRail, encodeSky, encodeSlow, routeCode, type NetworkFile, type SkyHour } from "./protocol.ts";
+import { centralIndex, encodeAlerts, encodeClock, encodeDay, encodeNetwork, encodePlanes, encodeQuakes, encodeRail, encodeSky, encodeSlow, routeCode, type NetworkFile, type SkyHour } from "./protocol.ts";
 import { encodeGroundPlaced } from "../data/ground.ts";
 
 const view = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength);
@@ -91,6 +91,19 @@ describe("the engine's messages", () => {
     expect(Number.isNaN(v.getFloat32(tail + 72, true))).toBe(true);
     expect(v.getFloat32(tail + 76, true)).toBe(Math.fround(4189.5));
     expect(v.getFloat32(tail + 104, true)).toBe(0.75);
+  });
+
+  test("QUAKES carries each quake's depth after the rows", () => {
+    const b = encodeQuakes([
+      { ms: 1, originMs: 0, mag: 2.1, lat: 40.7, lon: -111.9, depthKm: 7.5 },
+      { ms: 2, originMs: 1, mag: 1.4, lat: 40.6, lon: -111.8 },
+    ]);
+    expect(b.length).toBe(4 + 2 * 28 + 4 + 2 * 4);
+    const v = view(b);
+    const tail = 4 + 2 * 28;
+    expect(v.getUint32(tail, true)).toBe(1);
+    expect(v.getFloat32(tail + 4, true)).toBe(7.5);
+    expect(Number.isNaN(v.getFloat32(tail + 8, true))).toBe(true);
   });
 
   test("SLOW and RAIL carry what was added at the end", () => {

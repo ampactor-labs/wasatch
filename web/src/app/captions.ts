@@ -81,7 +81,7 @@ const INTROS: Partial<Record<Family, string>> = {
   trax: "That bell was TRAX: every train leaving a station rings one, on its line's chord tone.",
   frontrunner: "That horn was FrontRunner at Salt Lake Central, in the rhythm of a grade crossing.",
   skibus: "Those drums are the ski buses, echoing up the canyon they climb.",
-  bike: "That marimba was GREENbike: a bike checked out or docked.",
+  bike: "That marimba was GREENbike: a bike checked out (high) or docked (low).",
   quake: "That deep bell was an earthquake in Utah's catalog.",
   theme: "The Wasatch theme: thirteen summits, Ben Lomond to Mount Nebo, as a melody.",
   lake: "The low drone is the Great Salt Lake. Until it's healthy, phrases don't always come home.",
@@ -147,7 +147,7 @@ export interface ValleyNow {
   sky?: { description: string; observed: number; receipt: Receipt };
   wind?: { gustMs: number; observed: number; receipt: Receipt };
   snow?: { newIn: number; observed: number; receipt: Receipt };
-  quakes: { originMs: number; mag: number; place: string }[];
+  quakes: { originMs: number; mag: number; place: string; depthKm?: number }[];
   bikeStation(i: number): string;
   /** The loudest station, and its level against a busy day there (0–1). */
   ground?: { station: string; level: number; receipt: Receipt; observed: number };
@@ -265,14 +265,15 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
     case "bike":
       return {
         ...base,
-        text: `A GREENbike ${f.v < 0 ? "checked out" : "returned"} at ${valley.bikeStation(f.stop)}`,
+        text: `A GREENbike ${f.v < 0 ? "checked out" : "returned"} at ${valley.bikeStation(f.stop).trim()}, ${f.v < 0 ? "the upper" : "the lower"} octave`,
         receipt: "live",
         observed: f.ev,
       };
     case "quake": {
       const q = valley.quakes.find((x) => Math.abs(x.originMs - f.ev) < 1000);
       const where = q ? ` · ${q.place}` : "";
-      return { ...base, text: `M${f.v.toFixed(1)} earthquake${where}`, receipt: "live", observed: f.ev };
+      const depth = q?.depthKm !== undefined && Number.isFinite(q.depthKm) ? `, ${Math.round(q.depthKm)} km down` : "";
+      return { ...base, text: `M${f.v.toFixed(1)} earthquake${where}${depth}`, receipt: "live", observed: f.ev };
     }
     case "theme":
       return { ...base, text: `The Wasatch theme in ${keyName(key)}`, receipt: "scheduled" };
@@ -332,7 +333,14 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
         return { ...base, text: `${flows}: against the usual for the date, unknown today`, receipt: r.receipt, observed: r.observed };
       }
       const pct = Math.round(r.position * 100);
-      const how = r.position >= 0.75 ? "running high, so the bass walks" : r.position <= 0.25 ? "running low, so the bass holds long notes" : "about usual for the date";
+      const how =
+        r.position > 0.85
+          ? "in flood, so the bass walks in eighths"
+          : r.position > 0.6
+            ? "running high, so the bass walks"
+            : r.position <= 0.25
+              ? "running low, so the bass holds long notes"
+              : "about usual for the date, so root and fifth";
       const gauges = r.gauges ?? [];
       const flows = gauges.length > 1 ? list(gauges.map((g) => `${g.name} ${Math.round(g.cfs)} cfs`)) : `Jordan River ${Math.round(r.cfs)} cfs`;
       return { ...base, text: `${flows}, ${ordinal(pct)} percentile${gauges.length > 1 ? " together" : ""}: ${how}`, receipt: r.receipt, observed: r.observed };

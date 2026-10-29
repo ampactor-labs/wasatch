@@ -278,6 +278,8 @@ pub struct QuakeEvent {
     pub lat: f32,
     /// Epicenter.
     pub lon: f32,
+    /// The hypocenter's depth, km (NaN unknown).
+    pub depth_km: f32,
 }
 
 /// A plane taking off from or coming in to land at SLC.
@@ -771,6 +773,9 @@ pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>, ctx: &BarC
 
     let theme_bar = sec.kind == SectionKind::Theme && (1..=2).contains(&phrase) && bip < 4;
     let snowy = valley.slow.snowpack > 1.05 || sec.kind == SectionKind::Atmosphere;
+    // A deep year (over 125% of median): the ninth spreads from home to the
+    // IV and the vi, so the whole pad sounds fuller.
+    let deep = valley.slow.snowpack > 1.25;
 
     if theme_bar {
         return Chord::new(key, theme::HARMONY[bip as usize], Color::Triad);
@@ -815,7 +820,7 @@ pub(crate) fn chord_for(sec: &Section, bar: u32, valley: &Valley<'_>, ctx: &BarC
     }
     let idx = (bip / u32::from(sec.bars_per_chord.max(1))) as usize % prog.len();
     let deg = prog[idx];
-    let color = if snowy && deg == 0 {
+    let color = if snowy && (deg == 0 || (deep && matches!(deg, 3 | 5))) {
         Color::Add9
     } else if sec.rng.stream(0xC0).chance(u64::from(bar), 0.18) && !matches!(mode, Mode::Lydian) {
         Color::Seventh
@@ -938,21 +943,53 @@ pub fn compose(
         feature: NO_FEATURE,
     };
 
-    // Bass.
+    // Bass: the rivers, graded. Low water holds long notes; usual water
+    // plays the root and, when it's busy, the fifth; high water walks; a
+    // flood walks in eighths.
     if mix.bass > 0.0 {
-        let walking = valley.slow.river > 0.6 && activity > 0.3 && !pedal_bass;
-        if walking {
+        let river = valley.slow.river;
+        let walking = river > 0.6 && activity > 0.3 && !pedal_bass;
+        let low = river <= 0.25;
+        let degree = |off: usize| key.scale()[(usize::from(chord.degree) + off) % 7];
+        if walking && river > 0.85 {
+            // (beat, eighth, scale step): quarters on 1 and 3, eighths
+            // climbing through 2 and 4 into the next bar.
+            for (beat, half, off, vel) in [
+                (0u32, 0u32, 0usize, 0.64f32),
+                (1, 0, 2, 0.58),
+                (1, 1, 3, 0.46),
+                (2, 0, 4, 0.6),
+                (3, 0, 5, 0.58),
+                (3, 1, 6, 0.48),
+            ] {
+                let len = if half == 0 && (beat == 0 || beat == 2) {
+                    0.92
+                } else {
+                    0.46
+                };
+                out.notes.push(note(
+                    start + f64::from(beat) * beat_ms + f64::from(half) * beat_ms * 0.5,
+                    Inst::Bass,
+                    at_or_above(degree(off), 33),
+                    vel,
+                    beat_ms * len,
+                ));
+            }
+        } else if walking {
             for beat in 0..4u32 {
                 let deg_off = [0, 2, 4, 5][beat as usize];
-                let pc = key.scale()[(usize::from(chord.degree) + deg_off) % 7];
                 out.notes.push(note(
                     start + f64::from(beat) * beat_ms,
                     Inst::Bass,
-                    at_or_above(pc, 33),
+                    at_or_above(degree(deg_off), 33),
                     0.62,
                     beat_ms * 0.92,
                 ));
             }
+        } else if low {
+            // Low water: the root, held the whole bar, however busy.
+            out.notes
+                .push(note(start, Inst::Bass, bass, 0.66, bar_ms * 0.97));
         } else {
             out.notes.push(note(
                 start,
@@ -1146,6 +1183,10 @@ pub fn compose(
         if statement || fragment {
             let notes = theme::notes(key);
             let first = if fragment { 9 } else { 0 };
+            // Overnight new snow sizes the theme: up to 15% harder at six
+            // inches, and on a powder day the high statement is doubled an
+            // octave down.
+            let fresh = (valley.slow.new_snow_in / 6.0).clamp(0.0, 1.0);
             for (i, n) in notes.iter().enumerate().skip(first) {
                 let beat = if fragment {
                     n.beat - notes[first].beat
@@ -1170,6 +1211,7 @@ pub fn compose(
                 } else {
                     NO_FEATURE
                 };
+                let vel = (n.velocity * (1.0 + 0.15 * fresh)).min(1.0);
                 out.notes.push(Note {
                     variant: n.summit as u8,
                     feature,
@@ -1177,10 +1219,22 @@ pub fn compose(
                         at,
                         Inst::Piano,
                         midi,
-                        n.velocity,
+                        vel,
                         f64::from(n.beats) * beat_ms * 1.4,
                     )
                 });
+                if fresh >= 1.0 && phrase == 2 && statement {
+                    out.notes.push(Note {
+                        variant: n.summit as u8,
+                        ..note(
+                            at,
+                            Inst::Piano,
+                            n.midi,
+                            vel * 0.7,
+                            f64::from(n.beats) * beat_ms * 1.4,
+                        )
+                    });
+                }
             }
         }
     }
@@ -1337,7 +1391,8 @@ pub fn compose(
     // The roads.
     roads(sec, bar, valley, kit_on, state, out);
 
-    // Bikes: marimba plucks on scale degrees picked by latitude.
+    // Bikes: marimba plucks on scale degrees picked by latitude; a bike
+    // leaving its dock rings an octave above one coming back.
     if mix.bikes > 0.0 {
         let lo = valley.bikes.partition_point(|b| b.ms < start);
         for (n, b) in valley.bikes[lo..]
@@ -1349,7 +1404,7 @@ pub fn compose(
             let step = (((b.ms - start) / step_ms).round() as u32).min(15);
             let at = start + f64::from(step) * step_ms;
             let deg = (((b.lat - 40.70) / 0.10 * 7.0).round() as i32).clamp(0, 7);
-            let tonic = key.tonic_at_or_above(72);
+            let tonic = key.tonic_at_or_above(if b.delta < 0 { 79 } else { 67 });
             let feature = if n == 0 && !state.phrase_bike {
                 state.phrase_bike = true;
                 out.features.push(Feature {
@@ -1410,12 +1465,25 @@ pub fn compose(
         state.phrase_featured = true;
         let f = (out.features.len() - 1) as u16;
         let vel = (0.25 + 0.18 * q.mag).clamp(0.2, 0.9);
+        // Its depth: a shallow quake (under 5 km) rings an octave higher and
+        // shorter, a deep one (over 12 km) an octave lower and longer.
+        let (octave, ring_ms) = match q.depth_km {
+            d if d < 5.0 => (12, 6500.0),
+            d if d > 12.0 => (-12, 10_000.0),
+            _ => (0, 8000.0),
+        };
         out.notes.push(Note {
             lat: q.lat,
             lon: q.lon,
             feature: f,
             variant: if chord.is_minor() { 0 } else { 1 },
-            ..note(at, Inst::QuakeBell, at_or_above(root, 48), vel, 8000.0)
+            ..note(
+                at,
+                Inst::QuakeBell,
+                at_or_above(root, 48) + octave,
+                vel,
+                ring_ms,
+            )
         });
     }
 
@@ -2264,6 +2332,7 @@ mod tests {
                 mag: 2.0,
                 lat: 40.7,
                 lon: -111.9,
+                depth_km: 8.0,
             })
             .collect();
         let valley = Valley {
@@ -2797,5 +2866,204 @@ mod tests {
             out
         };
         assert_eq!(run(), run());
+    }
+
+    /// Every bar of `sec` composed with `slow`.
+    fn bars_with(
+        schedule: &Schedule,
+        network: &Network,
+        sec: &Section,
+        slow: Slow,
+        bikes: &[BikeEvent],
+    ) -> Vec<Bar> {
+        let sky = Sky::default();
+        let valley = Valley {
+            bikes,
+            ..Valley::quiet(schedule, network, &sky, &slow)
+        };
+        let mut st = ComposeState::default();
+        (0..sec.bars())
+            .map(|b| {
+                let mut bar = Bar::default();
+                compose(sec, b, &valley, &mut st, &mut bar);
+                bar
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_rivers_grade_the_bass() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let sec = chain
+            .sections
+            .iter()
+            .find(|s| s.kind == SectionKind::Groove && s.activity > 0.5)
+            .expect("a busy groove");
+        // The most bass notes in any bar, at a river's place against usual.
+        let most = |river: f32| {
+            bars_with(
+                &schedule,
+                &network,
+                sec,
+                Slow {
+                    river,
+                    ..Slow::default()
+                },
+                &[],
+            )
+            .iter()
+            .map(|b| b.notes.iter().filter(|n| n.inst == Inst::Bass).count())
+            .max()
+            .unwrap_or(0)
+        };
+        assert_eq!(most(0.1), 1, "low water holds one long note");
+        assert_eq!(most(0.45), 2, "usual water: the root and the fifth");
+        assert_eq!(most(0.7), 4, "high water walks");
+        assert_eq!(most(0.95), 6, "a flood walks in eighths");
+    }
+
+    #[test]
+    fn a_deep_snowpack_spreads_the_ninth() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let add9s = |snowpack: f32| {
+            chain
+                .sections
+                .iter()
+                .filter(|s| s.kind == SectionKind::Groove)
+                .take(6)
+                .flat_map(|sec| {
+                    bars_with(
+                        &schedule,
+                        &network,
+                        sec,
+                        Slow {
+                            snowpack,
+                            ..Slow::default()
+                        },
+                        &[],
+                    )
+                })
+                .flat_map(|b| b.harmony)
+                .filter(|h| h.chord.color == crate::music::Color::Add9)
+                .count()
+        };
+        let (thin, full, deep) = (add9s(0.7), add9s(1.1), add9s(1.4));
+        assert_eq!(thin, 0, "a thin year: no ninths outside the Atmosphere");
+        assert!(
+            full > 0 && deep > full,
+            "ninths: {thin} thin, {full} full, {deep} deep"
+        );
+    }
+
+    #[test]
+    fn a_powder_morning_plays_the_theme_fuller() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let sec = chain
+            .sections
+            .iter()
+            .find(|s| s.kind == SectionKind::Theme)
+            .expect("first light");
+        let piano = |new_snow_in: f32| {
+            bars_with(
+                &schedule,
+                &network,
+                sec,
+                Slow {
+                    new_snow_in,
+                    ..Slow::default()
+                },
+                &[],
+            )
+            .iter()
+            .flat_map(|b| {
+                b.notes
+                    .iter()
+                    .filter(|n| n.inst == Inst::Piano)
+                    .map(|n| n.vel)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+        };
+        let (dry, pow) = (piano(0.0), piano(8.0));
+        assert!(
+            pow.len() > dry.len(),
+            "a powder day doubles the high statement"
+        );
+        let sum = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
+        assert!(
+            pow.iter().take(dry.len()).sum::<f32>() > dry.iter().sum::<f32>(),
+            "and plays harder"
+        );
+        assert!(sum(&pow) <= 1.0);
+    }
+
+    #[test]
+    fn a_bike_leaving_rings_above_one_coming_back() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let sec = chain
+            .sections
+            .iter()
+            .find(|s| mix_for(s, 1).bikes > 0.0 && s.bars() >= 2)
+            .expect("a section with bikes in it");
+        let bar_ms = sec.bar_ms();
+        let at = sec.start_ms + bar_ms * 1.25;
+        let pluck = |delta: i8| {
+            let bike = [BikeEvent {
+                ms: at,
+                lat: 40.75,
+                lon: -111.89,
+                delta,
+                station: 0,
+            }];
+            bars_with(&schedule, &network, sec, Slow::default(), &bike)
+                .iter()
+                .flat_map(|b| b.notes.clone())
+                .find(|n| n.inst == Inst::Marimba)
+                .map(|n| n.midi)
+                .expect("a pluck")
+        };
+        assert_eq!(pluck(-1) - pluck(1), 12.0);
+    }
+
+    #[test]
+    fn a_quake_rings_by_its_depth() {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let (sky, slow) = (Sky::default(), Slow::default());
+        let sec = &chain.sections[30];
+        let ring = |depth_km: f32| {
+            let quakes = [QuakeEvent {
+                ms: sec.start_ms + 1_000.0,
+                origin_ms: sec.start_ms,
+                mag: 2.5,
+                lat: 40.7,
+                lon: -111.9,
+                depth_km,
+            }];
+            let valley = Valley {
+                quakes: &quakes,
+                ..Valley::quiet(&schedule, &network, &sky, &slow)
+            };
+            let mut bar = Bar::default();
+            compose(sec, 0, &valley, &mut ComposeState::default(), &mut bar);
+            let n = bar
+                .notes
+                .iter()
+                .find(|n| n.inst == Inst::QuakeBell)
+                .copied()
+                .expect("a bell");
+            (n.midi, n.dur_ms)
+        };
+        let (shallow, mid, deep, unknown) = (ring(2.0), ring(8.0), ring(18.0), ring(f32::NAN));
+        assert!(
+            shallow.0 > mid.0 && mid.0 > deep.0,
+            "{shallow:?} {mid:?} {deep:?}"
+        );
+        assert!(deep.1 > mid.1 && mid.1 > shallow.1);
+        assert_eq!(unknown, mid, "an unknown depth rings as before");
     }
 }

@@ -137,7 +137,8 @@ export type RoadRow = [number, number, number, number, number, string, string];
 /** What the conductor's keyed sources read, when their keys are set. */
 export interface KeyedNow {
   udot: {
-    incidents: { road: string; words: string }[];
+    /** Where, for the map (an older conductor sends none). */
+    incidents: { road: string; words: string; lat?: number; lon?: number; kind?: "incident" | "avalanche"; full?: boolean }[];
     state: { traction: [number, number]; plows: number; closures: number };
     wind: { ms: number; gustMs: number; stations: string[] } | null;
     /** The minutes the overhead signs show, with their usual for the hour
@@ -150,7 +151,7 @@ export interface KeyedNow {
   uac: { danger: number; rose: number[]; issued: string; bottomLine: string } | null;
   /** Whether this hour's ridge wind and PM2.5 are measured (not the
    * models'), and whether downtown's and the lake's own are. */
-  measured: { wind: boolean; air: boolean; airDowntown?: boolean; airLake?: boolean };
+  measured: { wind: boolean; air: boolean; airDowntown?: boolean; airLake?: boolean; inversion?: boolean };
 }
 
 export interface ServiceAlerts {

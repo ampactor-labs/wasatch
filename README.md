@@ -45,7 +45,7 @@ is in right now. Then the live piece fades in under it:
 | The buses and trains stuck in traffic, or flying | The tempo, a few BPM either way |
 | A UTA service alert | A drum fill into the next phrase; one on the trains holds the tension up |
 | A plane taking off from SLC, or coming in to land | A slow swell of brass and strings from where it is in the sky |
-| The Jordan and Little Cottonwood Creek running high | A walking bass |
+| The Jordan and Little Cottonwood Creek against the usual for the date | The bass: a held root when they're low, a walk when they're high, eighths in a flood |
 | A ski bus heads up a canyon | Drums in that canyon's own echo |
 | Great Salt Lake's level | The drone under everything; below 4,198 ft, phrases don't always come home |
 | The sky over the valley | How bright the mode is, Lydian through minor |
@@ -54,10 +54,11 @@ is in right now. Then the live piece fades in under it:
 | The grid drawing more power than usual | The whole mix swells a decibel or so |
 | Wind on the ridges | An Aeolian harp, each string picked by the wind's shedding frequency |
 | Snow falling in the Cottonwoods | Grains of sparkle, as light as the powder is |
+| New snow overnight, and a deep snowpack | The theme played bigger (doubled on a POW DAY); ninths through the pad |
 | Smog and an inversion | Haze over the pad, as the monitor nearest where you listen measures it; a low ceiling on the reverb |
 | The ground under downtown | Four seismometers, moved up onto the chord |
-| An earthquake in Utah | A deep bell |
-| A GREENbike checked out | A marimba pluck |
+| An earthquake in Utah | A bell, higher for a shallow one, lower and longer for a deep one |
+| A GREENbike checked out, or docked | A marimba pluck, an octave higher for one leaving |
 
 The harmony moves at every section boundary, one note at a time, and a caption
 says why: *"The valley's slowing down → B♭ minor (G♭ for G)."* Pick where

@@ -165,7 +165,18 @@ function publishSky(): void {
 function slowNow(): SlowNow {
   const lake = slowParts?.lake?.value;
   const snow = slowParts?.snow?.value;
+  // The inversion measured: Snowbird's air (about the 700 hPa level the
+  // model reads) against the airport's, both within the last two hours.
+  const now = Date.now();
+  const upF = snow?.upHighF;
+  const fresh = (t: number | undefined) => t !== undefined && now - t < 2 * HOUR;
+  const downC = skyBase?.value.tempC;
+  const inversionC =
+    upF !== null && upF !== undefined && Number.isFinite(upF) && downC !== undefined && Number.isFinite(downC) && fresh(slowParts?.snow?.observed) && fresh(skyBase?.observed)
+      ? Math.max(0, (upF - 32) * (5 / 9) - downC)
+      : undefined;
   return {
+    inversionC,
     lakeFt: lake?.ft,
     lakeDevFt: lake?.devFt,
     river: slowParts?.river?.value.position,
@@ -247,7 +258,7 @@ every(60_000, "quakes", async () => {
   if (!q) return;
   const now = Date.now();
   for (const e of seenQuakes.fresh(q.value, now)) {
-    windows.addQuake([e.ms, e.originMs, e.mag, e.lat, e.lon, e.id, e.place], now);
+    windows.addQuake([e.ms, e.originMs, e.mag, e.lat, e.lon, e.id, e.place, e.depthKm ?? Number.NaN], now);
   }
 });
 every(5 * 60_000, "sky", async () => {
@@ -377,6 +388,7 @@ const server = createServer((req, res) => {
           air: slots.measured(hour, "pm25"),
           airDowntown: slots.measured(hour, "pm25Downtown"),
           airLake: slots.measured(hour, "pm25Lake"),
+          inversion: slots.measured(hour, "inversionC"),
         },
       }),
       "public, max-age=60",

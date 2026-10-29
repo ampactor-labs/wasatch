@@ -36,6 +36,9 @@ export interface SlotValues {
   inversionC?: number;
   /** 1 when the ridge wind was frozen from the model, not measured. */
   ridgeModel?: number;
+  /** 1 when the inversion was measured (Snowbird against the airport), not
+   * the model's. */
+  inversionMeasured?: number;
   /** The slow values as they stood. */
   lakeFt?: number;
   lakeDevFt?: number;
@@ -68,7 +71,7 @@ const FIELDS = [
 ] as const;
 
 /** The fields that stand for a measurement, for the receipts. */
-export type Measured = "ridgeGustMs" | "pm25" | "pm25Downtown" | "pm25Lake";
+export type Measured = "ridgeGustMs" | "pm25" | "pm25Downtown" | "pm25Lake" | "inversionC";
 
 const HOUR = 3_600_000;
 const KEEP_MS = 14 * 86_400_000;
@@ -122,7 +125,8 @@ export class Slots {
   measured(at: number, field: Measured): boolean {
     const slot = this.slots.get(at);
     if (!slot || slot[field] === undefined) return false;
-    return !((field === "ridgeGustMs") && slot.ridgeModel);
+    if (field === "inversionC") return slot.inversionMeasured === 1;
+    return !(field === "ridgeGustMs" && slot.ridgeModel);
   }
 
   /** Every frozen hour from `from` on, for the archive. */
@@ -150,6 +154,9 @@ export interface SlowNow {
   newSnowIn?: number;
   powder?: number;
   energy?: number;
+  /** Warmer aloft, °C, measured: Snowbird's station (9,170 ft) against
+   * the airport, where both are fresh. Wins over the model's. */
+  inversionC?: number;
 }
 
 const SLOW_FIELDS = ["lakeFt", "lakeDevFt", "river", "snowpack", "newSnowIn", "powder", "energy"] as const;
@@ -169,6 +176,10 @@ export function freezeAhead(slots: Slots, now: number, next: SkyHour | undefined
   const put = (field: keyof SlotValues, v: number | undefined) => {
     if (v !== undefined && slots.freeze(at, field, v, now)) changed = true;
   };
+  if (slow.inversionC !== undefined && Number.isFinite(slow.inversionC) && slots.get(at)?.inversionC === undefined) {
+    put("inversionC", slow.inversionC);
+    put("inversionMeasured", 1);
+  }
   if (next?.at === at) {
     put("alert", next.alert);
     put("mtnSnowCm", next.mtnSnowCm);

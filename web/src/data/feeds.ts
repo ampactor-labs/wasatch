@@ -657,6 +657,7 @@ export function fetchQuakes(): Promise<Reading<Quake[]> | null> {
       ms: f.properties.time + QUAKE_LAG_MS,
       lat: f.geometry.coordinates[1],
       lon: f.geometry.coordinates[0],
+      depthKm: f.geometry.coordinates[2],
     }));
     return { value: quakes, observed: Date.now() };
   });

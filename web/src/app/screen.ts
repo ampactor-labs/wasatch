@@ -95,6 +95,8 @@ export class PlayScreen {
   private geo: SkylineGeometry | null = null;
   private proj: MapProjection | null = null;
   private bounds: MapBounds | null = null;
+  /** The keyed read the map last drew (air monitors, roads). */
+  private keyedDrawn: unknown = undefined;
   /** What the map says about the sound (app/mapmarks.ts). */
   private marks = new MapMarks(
     () => this.deps.schedule.network ?? null,
@@ -416,7 +418,7 @@ export class PlayScreen {
     host.innerHTML = `${mapBase({ bounds, width: w, height: h, labels: w >= 300, jetty: this.vantage === 0 })}
       <svg class="play__overlay" viewBox="0 0 ${w} ${h}" aria-hidden="true">
         <clipPath id="overlay-frame"><rect width="${w}" height="${h}" rx="${n(14 * u)}"/></clipPath>
-        <g clip-path="url(#overlay-frame)"><g class="map-here"></g><g class="map-vehicles"></g></g>
+        <g clip-path="url(#overlay-frame)"><g class="map-here"></g><g class="map-keyed"></g><g class="map-vehicles"></g></g>
       </svg>
       <div class="play__marks" aria-hidden="true">${MapMarks.layers()}${STATIONS.map((s, band) => {
         const [x, y] = proj.project(s.lat, s.lon);
@@ -428,7 +430,45 @@ export class PlayScreen {
     if (marks) this.marks.attach(marks, proj, u);
     this.drawGround();
     this.drawHere();
+    this.keyedDrawn = null;
+    this.drawKeyed();
     this.drawVehicles();
+  }
+
+  /** The air monitors, colored by the PM2.5 they measured, and what's on
+   * the roads (UDOT's incidents, avalanche control): live only, redrawn when
+   * the conductor's keyed read changes. */
+  private drawKeyed(): void {
+    const g = this.root.querySelector(".play__overlay .map-keyed");
+    const proj = this.proj;
+    const keyed = this.day || this.deps.valley.shift ? null : this.deps.valley.keyed;
+    if (!g || !proj || keyed === this.keyedDrawn) return;
+    this.keyedDrawn = keyed;
+    const u = this.u;
+    const inside = (x: number, y: number) => x >= 6 * u && y >= 6 * u && x <= proj.width - 6 * u && y <= proj.height - 6 * u;
+    // EPA's PM2.5 bands (2024): good to 9, moderate to 35.4, unhealthy for
+    // some to 55.4, then unhealthy.
+    const band = (pm: number) => (pm <= 9 ? "#7AC74F" : pm <= 35.4 ? "#FFD23F" : pm <= 55.4 ? "#FF6B35" : "#E5383B");
+    const monitors = (keyed?.airnow?.sites ?? [])
+      .map((m) => {
+        if (m.lat === null || m.lon === null || m.pm25 === null || !Number.isFinite(m.pm25)) return "";
+        const [x, y] = proj.project(m.lat, m.lon);
+        if (!inside(x, y)) return "";
+        // A target, so it reads apart from the trains' squares.
+        return `<g><title>${esc(`${m.name}: PM2.5 ${Math.max(0, m.pm25).toFixed(0)} µg/m³`)}</title><circle cx="${n(x)}" cy="${n(y)}" r="${n(4.2 * u)}" fill="${band(Math.max(0, m.pm25))}" stroke="#1B1F3B" stroke-width="${n(1.4 * u)}"/><circle cx="${n(x)}" cy="${n(y)}" r="${n(1.5 * u)}" fill="#FFFFFF" stroke="#1B1F3B" stroke-width="${n(0.9 * u)}"/></g>`;
+      })
+      .join("");
+    const roads = (keyed?.udot?.incidents ?? [])
+      .map((i) => {
+        if (i.lat === undefined || i.lon === undefined || !Number.isFinite(i.lat) || !Number.isFinite(i.lon)) return "";
+        const [x, y] = proj.project(i.lat, i.lon);
+        if (!inside(x, y)) return "";
+        const r = 5.5 * u;
+        const fill = i.kind === "avalanche" ? "#B8A1FF" : i.full ? "#E5383B" : "#FF6B35";
+        return `<g><title>${esc(`${i.road}: ${i.words}`)}</title><path d="M${n(x)} ${n(y - r)}L${n(x + r)} ${n(y)}L${n(x)} ${n(y + r)}L${n(x - r)} ${n(y)}Z" fill="${fill}" stroke="#1B1F3B" stroke-width="${n(1.5 * u)}" stroke-linejoin="round"/><path d="M${n(x)} ${n(y - r * 0.45)}V${n(y + r * 0.1)}M${n(x)} ${n(y + r * 0.38)}v0.01" stroke="#1B1F3B" stroke-width="${n(1.4 * u)}" stroke-linecap="round"/></g>`;
+      })
+      .join("");
+    g.innerHTML = `<g class="map-air">${monitors}</g><g class="map-roads">${roads}</g>`;
   }
 
   /** Where you're listening from, as a trail map says it: a dot, the way
@@ -692,6 +732,7 @@ export class PlayScreen {
       this.setSlot("daypart", daypartName(t));
       this.drawVehicles();
     }
+    this.drawKeyed();
     const s = this.pickStickers();
     if (s[0] !== this.stickers[0] || s[1] !== this.stickers[1]) {
       this.stickers = s;

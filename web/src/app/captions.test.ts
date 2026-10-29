@@ -57,7 +57,7 @@ describe("the feed reads like sentences and covers the whole valley", () => {
   test("trains, bikes and the ground", () => {
     expect(card(0, { obs: 1, late: 180 })).toBe("Blue Line left Gallivan Plaza, 3 min late");
     expect(card(0, { obs: 1, late: 20 })).toBe("Blue Line left Gallivan Plaza on time");
-    expect(card(3, { v: -1 })).toBe("A GREENbike checked out at 200 S & Main");
+    expect(card(3, { v: -1 })).toBe("A GREENbike checked out at 200 S & Main, the upper octave");
     expect(card(7)).toBe("The city's rumble under Brigham Young Park: 41% of a busy day there");
   });
 

@@ -56,3 +56,15 @@ test("wind measured up the canyons wins over the model's", () => {
   assert.equal(s.apply([hour(top + HOUR)])[0]!.ridgeGustMs, 8);
 });
 
+test("the inversion measured at Snowbird wins over the model's, and says so", () => {
+  const top = Date.parse("2026-12-10T15:00:00Z");
+  const s = new Slots(null);
+  freezeAhead(s, top + 46 * 60_000, { ...hour(top + HOUR), inversionC: 1.5 }, { inversionC: 6.2 });
+  assert.equal(s.get(top + HOUR)!.inversionC, 6.2);
+  assert.equal(s.measured(top + HOUR, "inversionC"), true);
+  const t = new Slots(null);
+  freezeAhead(t, top + 46 * 60_000, { ...hour(top + HOUR), inversionC: 1.5 }, {});
+  assert.equal(t.get(top + HOUR)!.inversionC, 1.5);
+  assert.equal(t.measured(top + HOUR, "inversionC"), false);
+});
+

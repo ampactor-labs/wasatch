@@ -19,7 +19,9 @@ export type RailRow = [number, number, number, number, number, number];
 /** [ms, lat, lon, delta, station] */
 export type BikeRow = [number, number, number, number, number];
 /** [ms, origin ms, magnitude, lat, lon, id, place] */
-export type QuakeRow = [number, number, number, number, number, string, string];
+/** [ms, origin ms, magnitude, lat, lon, id, place, depth km] (an older
+ * window has no depth). */
+export type QuakeRow = [number, number, number, number, number, string, string, number?];
 
 export interface GroundBand {
   band: number;

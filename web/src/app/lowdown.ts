@@ -189,9 +189,9 @@ export const TOPICS: readonly Topic[] = [
     id: "river",
     title: "The rivers",
     group: "valley",
-    short: "The Jordan and Little Cottonwood Creek, against what's usual for the date, set the bass: long notes when they run low, a walking line when they run high.",
+    short: "The Jordan and Little Cottonwood Creek, against what's usual for the date, set the bass: long notes when they run low, root and fifth as usual, a walking line when high, eighths in a flood.",
     more:
-      "Two gauges report every 15 minutes: the Jordan at 1700 South, and Little Cottonwood Creek where it meets it, the canyon's runoff, which jumps in a storm and in the spring melt. Each flow is placed among that day of the year's percentiles and the two are averaged, so spring runoff walks and a dry August holds.",
+      "Two gauges report every 15 minutes: the Jordan at 1700 South, and Little Cottonwood Creek where it meets it, the canyon's runoff, which jumps in a storm and in the spring melt. Each flow is placed among that day of the year's percentiles and the two are averaged: below the 25th the bass holds the root a whole bar, above the 60th it walks, above the 85th it walks in eighths. Spring runoff walks; a dry August holds. The value is frozen for each hour, so every phone plays the same bass.",
     plays: "the bass",
     source: { name: "USGS 10171000 and 10168000", href: "https://waterdata.usgs.gov/monitoring-location/USGS-10171000/" },
     now: (c) => {
@@ -206,10 +206,10 @@ export const TOPICS: readonly Topic[] = [
     id: "snow",
     title: "Snow",
     group: "valley",
-    short: "New snow in the Cottonwoods swells the dawn, and snow falling in the mountains sparkles: smaller and glassier the lighter the powder.",
+    short: "Overnight snow plays the morning's theme harder (doubled on a POW DAY), a deep snowpack spreads ninths through the pad, and falling snow sparkles, glassier the lighter the powder.",
     more:
-      "Four SNOTEL stations, Snowbird, Brighton, Thaynes Canyon and Mill-D North, give the overnight new snow (the most at any of them, and where) and the snowpack against its median; a fuller snowpack adds voices and upper notes to the pad. Snowfall in the mountains comes from the forecast model, hour by hour. POW DAY is earned at six inches.",
-    plays: "the dawn swell and the sparkle",
+      "Four SNOTEL stations, Snowbird, Brighton, Thaynes Canyon and Mill-D North, give the overnight new snow (the most at any of them, and where) and the snowpack against its median. Over 105% of median the home chord takes a ninth; over 125% the IV and the vi do too. New snow plays the theme up to 15% harder at six inches, and on a POW DAY its high statement is doubled an octave down. Snowfall in the mountains comes from the forecast model, hour by hour. POW DAY is earned at six inches.",
+    plays: "the theme's size, the pad's ninths and the sparkle",
     source: { name: "NRCS SNOTEL", href: "https://wcc.sc.egov.usda.gov/nwcc/site?sitenum=766" },
     now: (c) => {
       const s = c.valley.snow;
@@ -247,7 +247,7 @@ export const TOPICS: readonly Topic[] = [
     group: "valley",
     short: "Haze dulls the pad and the skyline, measured at the valley's monitors: from Saltair you hear Saltair's air, downtown Hawthorne's. An inversion puts a low ceiling on the reverb and brings far-off sounds closer, as it does outside.",
     more:
-      "Under an inversion, warm air sits on cold, sound bends back toward the ground and carries: an event 30 km away comes about 10 dB closer. The reverb gets a low, dark ceiling. PM2.5 sets how much of the skyline you can see, from every ridge on a clean day to the outline in thick haze; it never muddies the sound. With AirNow's key it's what Utah DEQ's monitors measured in the hour before, frozen by the conductor so every phone hears the same air: the valley's median for the map and the canyon, Hawthorne's downtown, the Beach station's at Saltair. Ozone, PM10 and the day's forecast with its action days are shown here and on the board and never played: a forecast only colors. AirNow's readings are preliminary, not yet validated. Without the key it's Open-Meteo's model.",
+      "Under an inversion, warm air sits on cold, sound bends back toward the ground and carries: an event 30 km away comes about 10 dB closer. The reverb gets a low, dark ceiling. The warming aloft is measured where it can be, Snowbird's station at 9,170 ft against the airport, frozen by the conductor for the hour; otherwise it's the model's. PM2.5 sets how much of the skyline you can see, from every ridge on a clean day to the outline in thick haze; it never muddies the sound. With AirNow's key it's what Utah DEQ's monitors measured in the hour before, frozen by the conductor so every phone hears the same air: the valley's median for the map and the canyon, Hawthorne's downtown, the Beach station's at Saltair. Ozone, PM10 and the day's forecast with its action days are shown here and on the board and never played: a forecast only colors. AirNow's readings are preliminary, not yet validated. Without the key it's Open-Meteo's model.",
     plays: "the reverb's ceiling and the haze",
     source: { name: "Utah DEQ's monitors via EPA AirNow (preliminary); Open-Meteo's model without the key", href: "https://www.airnow.gov/?city=Salt%20Lake%20City&state=UT&country=USA" },
     now: (c) => {
@@ -274,7 +274,8 @@ export const TOPICS: readonly Topic[] = [
         if (today) bits.push(`forecast ${today.category.toLowerCase()}${today.actionDay ? ", an action day" : ""}`);
         pm = bits.join(" · ");
       }
-      const aloft = Number.isFinite(sky.value.inversionC) ? `${sky.value.inversionC.toFixed(1)} °C warmer aloft (model)` : "aloft unknown (the model didn't answer)";
+      const how = c.valley.keyed?.measured.inversion ? "measured: Snowbird against the airport" : "model";
+      const aloft = Number.isFinite(sky.value.inversionC) ? `${sky.value.inversionC.toFixed(1)} °C warmer aloft (${how})` : "aloft unknown (the model didn't answer)";
       return { value: `${pm} · ${aloft}${inverted}`, receipt: receipt(sky) };
     },
   },
@@ -429,8 +430,8 @@ export const TOPICS: readonly Topic[] = [
     id: "quakes",
     title: "Earthquakes",
     group: "valley",
-    short: "An earthquake in Utah's catalog rings a deep bell on the chord, louder for a bigger one.",
-    more: "The catalog is read every minute. Utah has small ones most days; the bell comes once per quake, and its ring on the map sits where it was, pinned to the edge if it's far.",
+    short: "An earthquake in Utah's catalog rings a bell on the chord, louder for a bigger one, higher for a shallow one and lower and longer for a deep one.",
+    more: "The catalog is read every minute; one listed late (up to six hours) still rings, once. Under 5 km down the bell is an octave up, below 12 km an octave down. Utah has small ones most days; its ring on the map sits where it was, pinned to the edge if it's far.",
     plays: "a deep bell",
     source: { name: "USGS earthquake catalog", href: "https://earthquake.usgs.gov/earthquakes/map/" },
     now: (c) => {
@@ -444,8 +445,8 @@ export const TOPICS: readonly Topic[] = [
     id: "bikes",
     title: "GREENbike",
     group: "valley",
-    short: "Every bike checked out or docked plucks a marimba, higher at stations farther north.",
-    more: "The docks are read every 30 seconds. Checked out and returned sound the same note; the card says which.",
+    short: "Every bike checked out or docked plucks a marimba, higher at stations farther north, and a bike leaving rings an octave above one coming back.",
+    more: "The docks are read every 30 seconds. The station's latitude picks the scale degree; checked out rings in the upper octave, returned in the lower.",
     plays: "the marimba",
     source: { name: "GREENbike (GBFS)", href: "https://greenbikeutah.org/" },
     now: (c) => ({ value: `${c.valley.bikes.events.length} bikes out or back in 10 min`, receipt: c.valley.shift ? "live only" : "live" }),
@@ -556,7 +557,7 @@ export const TOPICS: readonly Topic[] = [
     group: "music",
     short: "Squares are trains, dots are buses, arrows are planes. A dashed ring closes on a sound just before it plays; then it rings, says what it is, and leaves a dot that fades over a minute.",
     more:
-      "Trains and buses are where UTA last saw them. A ring is smaller and fainter the farther it is from where you listen. Everywhere, the map is the valley floor; pick a place to listen from and it frames what you can hear there, out to the far ring, with YOU ARE HERE. The bass, the harp, the snow and the lake's drone have no one place: they light up at their homes (the river gauges, the ridge between the Cottonwoods, Alta, the lake) while they play. Rings at the seismometers swell with the ground's rumble. A train past the map's edge is an arrow on the frame pointing where it is. Planes point where they're flying and fade between sightings.",
+      "Trains and buses are where UTA last saw them. A ring is smaller and fainter the farther it is from where you listen. Everywhere, the map is the valley floor; pick a place to listen from and it frames what you can hear there, out to the far ring, with YOU ARE HERE. The bass, the harp, the snow and the lake's drone have no one place: they light up at their homes (the river gauges, the ridge between the Cottonwoods, Alta, the lake) while they play. Rings at the seismometers swell with the ground's rumble. A train past the map's edge is an arrow on the frame pointing where it is. Planes point where they're flying and fade between sightings. With the conductor's keys, the air monitors are targets colored by the PM2.5 they measured (green good, yellow moderate, orange and red unhealthy), and UDOT's incidents are diamonds (red a full closure, lilac avalanche control).",
   },
   {
     id: "stickers",

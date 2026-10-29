@@ -429,14 +429,14 @@ export class Udot {
 
   /** What's standing, for /health and the page. */
   summary(now = Date.now()): {
-    incidents: { road: string; words: string }[];
+    incidents: { road: string; words: string; lat: number; lon: number; kind: "incident" | "avalanche"; full: boolean }[];
     state: RoadState;
     wind: ReturnType<typeof canyonWind>;
     signs: ReturnType<Signs["summary"]>;
     forecast: RoadForecast[];
   } {
     return {
-      incidents: [...this.events.values()].map((e) => ({ road: e.ev.roadway, words: e.ev.words })).slice(0, 20),
+      incidents: [...this.events.values()].map((e) => ({ road: e.ev.roadway, words: e.ev.words, lat: e.ev.lat, lon: e.ev.lon, kind: e.kind, full: e.ev.full })).slice(0, 20),
       state: this.state,
       wind: this.wind,
       signs: this.signs.summary(now),

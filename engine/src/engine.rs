@@ -290,6 +290,12 @@ impl Engine {
         self.inputs.bikes = bikes;
     }
 
+    /// The quakes on record, for the tests.
+    #[cfg(test)]
+    pub fn quakes(&self) -> &[QuakeEvent] {
+        &self.inputs.quakes
+    }
+
     /// Replace the quakes.
     pub fn set_quakes(&mut self, mut quakes: Vec<QuakeEvent>) {
         quakes.sort_by(|a, b| a.ms.total_cmp(&b.ms));

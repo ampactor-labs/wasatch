@@ -307,15 +307,29 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
         }
         kind::QUAKES => {
             let n = r.count(28);
-            let quakes = (0..n)
+            let mut quakes: Vec<QuakeEvent> = (0..n)
                 .map(|_| QuakeEvent {
                     ms: r.f64(),
                     origin_ms: r.f64(),
                     mag: r.f32(),
                     lat: r.f32(),
                     lon: r.f32(),
+                    depth_km: f32::NAN,
                 })
                 .collect();
+            // Added since: `u32 k`, then k floats a quake (the depth first).
+            // An older page sends none.
+            if r.remaining() >= 4 {
+                let k = r.u32() as usize;
+                if (1..=16).contains(&k) && r.remaining() >= n * k * 4 {
+                    for q in &mut quakes {
+                        q.depth_km = r.f32();
+                        for _ in 1..k {
+                            r.f32();
+                        }
+                    }
+                }
+            }
             with_engine(|e| e.set_quakes(quakes))
         }
         kind::SAMPLE => {
@@ -694,6 +708,27 @@ mod tests {
         INBOX.with(|b| b.borrow_mut().copy_from_slice(bytes));
         let _ = ptr;
         wasatch_post(kind, bytes.len() as u32)
+    }
+
+    #[test]
+    fn quakes_read_their_depth_from_the_tail_and_go_without_it() {
+        wasatch_init(48_000.0);
+        let row = |m: &mut Vec<u8>, ms: f64| {
+            m.extend_from_slice(&ms.to_le_bytes());
+            m.extend_from_slice(&ms.to_le_bytes());
+            for v in [2.0f32, 40.7, -111.9] {
+                m.extend_from_slice(&v.to_le_bytes());
+            }
+        };
+        let mut old = 1u32.to_le_bytes().to_vec();
+        row(&mut old, 1.0);
+        assert_eq!(post(kind::QUAKES, &old), 0);
+        assert!(with_engine(|e| e.quakes()[0].depth_km).unwrap().is_nan());
+        let mut new = old.clone();
+        new.extend_from_slice(&1u32.to_le_bytes());
+        new.extend_from_slice(&9.5f32.to_le_bytes());
+        assert_eq!(post(kind::QUAKES, &new), 0);
+        assert_eq!(with_engine(|e| e.quakes()[0].depth_km), Some(9.5));
     }
 
     #[test]
