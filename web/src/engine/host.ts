@@ -173,13 +173,23 @@ export class Host {
     host.module = module;
     const node = new AudioWorkletNode(ctx, "wasatch", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
     host.node = node;
-    node.port.onmessage = (e) => host.receive(e.data);
+    // Some browsers can't clone a module into a worklet: send the bytes. Some
+    // say so here; others only on the audio thread, which then asks.
+    let sentBytes = false;
+    const sendBytes = async () => {
+      if (sentBytes) return;
+      sentBytes = true;
+      const bytes = await (await fetch(url)).arrayBuffer();
+      node.port.postMessage({ type: "module", bytes }, [bytes]);
+    };
+    node.port.onmessage = (e) => {
+      if ((e.data as { type?: string }).type === "need-bytes") void sendBytes().catch((err) => console.error(err));
+      else host.receive(e.data);
+    };
     try {
       node.port.postMessage({ type: "module", module });
     } catch {
-      // Some browsers can't clone a module into a worklet: send the bytes.
-      const bytes = await (await fetch(url)).arrayBuffer();
-      node.port.postMessage({ type: "module", bytes }, [bytes]);
+      await sendBytes();
     }
     host.outGain = ctx.createGain();
     node.connect(host.outGain);

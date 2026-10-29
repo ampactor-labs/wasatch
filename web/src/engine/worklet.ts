@@ -49,10 +49,16 @@ class WasatchProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.port.onmessage = (e: MessageEvent<Incoming>) => this.receive(e.data);
+    // A module the audio thread can't take (Chrome 153 posts it without a
+    // word, then fails it here): ask for the bytes instead.
+    this.port.onmessageerror = () => {
+      if (!this.engine) this.port.postMessage({ type: "need-bytes" });
+    };
   }
 
   private receive(msg: Incoming): void {
     if (msg.type === "module") {
+      if (this.engine) return;
       try {
         const module = msg.module ?? new WebAssembly.Module(msg.bytes ?? new ArrayBuffer(0));
         this.engine = EngineHandle.fromModuleSync(module);
