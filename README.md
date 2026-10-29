@@ -137,8 +137,7 @@ tools/gtfs/      UTA GTFS → the score's schedule files (and the archive)
 tools/archive/   sealing each finished day's sky
 tools/render/    offline renders and the quality check
 tools/e2e/       the headless browser test
-research/        the measurements behind DESIGN.md
-docs/            the first design, for the record, and the screenshot
+research/, docs/  the measurements behind DESIGN.md; the first design and the screenshot
 ```
 
 ## Deploy
