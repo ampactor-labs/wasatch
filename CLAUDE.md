@@ -49,8 +49,9 @@ fuel mix shown), FrontRunner coming home at Central, two river gauges and
 four SNOTEL stations, buses and planes on the map, and the air measured at
 Utah DEQ's monitors through AirNow (the haze by vantage: the valley's median,
 Hawthorne's downtown, the Beach station's at Saltair; AQI, ozone, PM10 and
-the forecast shown; an action day earns a sticker). UDOT and UAC are coded
-and tested, off until their keys are set.
+the forecast shown; an action day earns a sticker). UDOT's roads since Oct
+29 (incidents, closures, the canyon stations' wind, the roads' forecast). UAC
+is coded and tested, off until its token is set.
 
 ### Keys
 
@@ -59,7 +60,7 @@ and tested, off until their keys are set.
 | `AIRNOW_KEY` | Set on Railway Oct 28. AirNow retired its first services on Sept 30, 2026; `conductor/src/airnow.ts` reads the replacements (`aq/data/`, `aq/observation/current/ziplatlong/`, `aq/forecast/current/`). About thirteen requests an hour of the 500 allowed; AirNow's site query is slow at times, so requests get 45 s and one retry, every 10 min. |
 | `EIA_KEY` | Set Oct 28. The demo key allowed 10 requests an hour; the conductor now polls demand every 15 min and the mix every 2 h. |
 | `UTA_TOKEN` | Set Oct 28, for UTA's SIRI API, whose documented host (api.rideuta.com) answers the website's 404 page; `keys:check` probes it, `UTA_SIRI` renames the host. Nothing plays from it. The owner is asking UTA what the token is for. |
-| `UDOT_KEY` | Awaiting UDOT's approval. |
+| `UDOT_KEY` | Set on Railway Oct 29; `/health` reads `ok`. Incidents, closures, the wind at Parleys, Brighton, Cottonwood Summit and Alta, and 14 forecast segments arrived in the first reading; the message signs parsed none. |
 | `UAC_TOKEN` | The avalanche center asked the owner for more information first. |
 
 Railway skipped the redeploy it made when the variables were set (watch
@@ -80,13 +81,15 @@ paths); the push that carried the Oct 28 work deployed them.
    read the real XML, then design: `VehicleAtStop` transitions as observed
    departures and arrivals, `Distance` to Central as a countdown for the
    cadence, `ProgressRate` as lateness. Ask the owner before any new sound.
-4. When UDOT's key arrives: `keys:check` prints each endpoint's fields, the
-   minutes on the signs and the canyon roads' forecast. Field names were
-   checked against UDOT's documentation on Oct 28 (`udottraffic.utah.gov/help/endpoint/<name>`)
-   and match; the highway list, canyon names (SR-210, SR-190), the
-   traction-law wording and the signs' "MINUTES TO" phrasing still need the
-   live data. The signs' usual takes three hours of the week to learn before
-   they move the flow. Canyon traffic is not built.
+4. UDOT (key set Oct 29): `keys:check` prints each endpoint's fields, the
+   minutes on the signs and the canyon roads' forecast. Field names match
+   UDOT's documentation (`udottraffic.utah.gov/help/endpoint/<name>`, Oct
+   28), and the first live reading named the canyon stations as coded
+   (SR-190 @ MP 16 Brighton, SR-210 @ Alta). Still unconfirmed: the highway
+   list, the traction-law wording, and the signs' "MINUTES TO" phrasing (the
+   first reading parsed no sign with minutes; read the raw `messagesigns`
+   rows first). The signs' usual takes three hours of the week to learn
+   before they move the flow. Canyon traffic is not built.
 5. When UAC's token arrives: `conductor/src/uac.ts` sends the token both as
    `?token=` and a Bearer header because their docs don't say which. Find out
    which works, keep only that one, and read the real JSON to confirm

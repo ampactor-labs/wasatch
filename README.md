@@ -2,7 +2,7 @@
 
 A web app that plays the Salt Lake valley live as music, from its trains, buses, planes, weather, air and seismometers. A Rust engine compiled to WebAssembly composes and renders every bar on the browser's audio thread, and every phone plays the same bar at the same moment, about 90 seconds behind the valley. A small Node server seals the realtime feeds into 30-second windows that every phone reads alike. The page is TypeScript and hand-drawn SVG.
 
-**Status: working.** The site is live; UDOT's roads and the Utah Avalanche Center's forecast are coded and tested, and stay off until their API keys are set.
+**Status: working.** The site is live; the Utah Avalanche Center's forecast is coded and tested, and stays off until its API token is set.
 
 Live: https://ampactor.dev/wasatch/
 
@@ -114,7 +114,7 @@ The browser reads USGS (the lake, the Jordan River, earthquakes), the National
 Weather Service, Open-Meteo, SNOTEL, GREENbike's GBFS feed and the University
 of Utah's seismometers (over EarthScope's DataLink WebSocket, decoded from
 miniSEED in the page). The conductor reads UTA's GTFS-realtime and alerts,
-KSLC's METARs, adsb.lol, EIA, the Alta forecast and EPA AirNow, polling each
+KSLC's METARs, adsb.lol, EIA, UDOT, the Alta forecast and EPA AirNow, polling each
 at its own pace and sealing a window every 30 seconds. UTA's schedule is recompiled every morning, and each
 finished day's sky is sealed into the archive.
 
@@ -176,10 +176,10 @@ Automated tests run only in headless Chrome, so Safari and real phones are check
 - **Stand-ins.** Planes come from adsb.lol's community receivers; a receiver
   of our own isn't built. The FrontRunner horn, the strings and the brass are
   synthesized; only the piano is sampled.
-- **Waiting on keys.** UDOT's roads and the avalanche forecast are tested
-  against their documentation only, and stay off until their keys are set.
-  UTA's SIRI token is set, but the host UTA documents for it answers with a
-  404 page, so nothing plays from it.
+- **Waiting on keys.** The avalanche forecast is tested against its
+  documentation only, and stays off until its token is set. UDOT's message
+  signs have given no travel time the parser recognizes yet. UTA's SIRI token
+  is set, but the host UTA documents for it answers with a 404 page.
 - **iPhones line up by ear.** *Tune to the room* needs the microphone, which
   on iOS drops Web Audio to call volume.
 - **Slow phones drop out.** On an Android phone over Bluetooth, `?debug`
@@ -188,7 +188,7 @@ Automated tests run only in headless Chrome, so Safari and real phones are check
 
 ## Roadmap
 
-- UDOT's roads and the avalanche forecast, when their keys arrive.
+- The avalanche forecast, when its token arrives, and UDOT's signs read live.
 - A recorded FrontRunner horn, once the recording exists.
 - An ADS-B receiver of our own, to stop leaning on adsb.lol.
 
