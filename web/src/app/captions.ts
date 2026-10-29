@@ -326,6 +326,11 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
     case "river": {
       const r = valley.river;
       if (!r) return null;
+      const gaugesNow = r.gauges ?? [];
+      if (!Number.isFinite(r.position)) {
+        const flows = gaugesNow.length > 1 ? list(gaugesNow.map((g) => `${g.name} ${Math.round(g.cfs)} cfs`)) : `Jordan River ${Math.round(r.cfs)} cfs`;
+        return { ...base, text: `${flows}: against the usual for the date, unknown today`, receipt: r.receipt, observed: r.observed };
+      }
       const pct = Math.round(r.position * 100);
       const how = r.position >= 0.75 ? "running high, so the bass walks" : r.position <= 0.25 ? "running low, so the bass holds long notes" : "about usual for the date";
       const gauges = r.gauges ?? [];

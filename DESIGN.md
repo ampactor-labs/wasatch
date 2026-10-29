@@ -170,6 +170,30 @@ What's live, and where it differs from the rest of this document:
   isn't available. Coming back plays again if it was playing when you left;
   a pause you made stays. The smoke test leaves and comes back on both
   views.
+- **Every phone, the same hour** (Oct 29). An audit found what the score
+  read that wasn't frozen. The storm alerts' level steers the plan's tension
+  (and so the sections' lengths), but each hour's came from the alerts
+  active when a phone fetched, so a phone that joined after an alert
+  expired planned the rest of the day differently, and a sealed day took
+  whatever was active when it was sealed. The models' values (mountain
+  snowfall, the inversion, the ridge wind without UDOT) and the slow values
+  (the lake, the rivers, the snowpack, new snow, powder, the grid) reached
+  the engine whenever each phone's timer fetched them. Now the conductor
+  freezes all of them for the next hour in each hour's last quarter (45 to
+  54 minutes in, so every phone has them before the hour plays), measured
+  canyon wind still winning over the model's; the sky's rows carry the slow
+  values and the season at their tail, and each bar is composed from its
+  own hour's; the archive seals them as played. An engine test renders two
+  phones that fetched different slow values and holds them to the same
+  samples. Also: the lake's level is read as of the top of the hour; a
+  river whose normals didn't answer is unknown, not "usual" (one phone could
+  play the walking bass and another not); the day of year is Salt Lake's;
+  the conductor's "now" is the hour as played; an NWS failure no longer
+  costs a good METAR read; a model that didn't answer says unknown rather
+  than passing its defaults off as live; the GREENbike stations reload when
+  an unknown dock reports (a failed start no longer silences bikes) and
+  daily; quakes catalogued up to six hours late play, once, with the seen
+  list kept on disk; a UDOT station whose time can't be read is stale.
 - **Not built yet:** our own ADS-B receiver (adsb.lol stands in), travel
   times on UDOT's signs and canyon traffic (to confirm against the API with
   a key), what the avalanche forecast plays, the resorts' own voices,

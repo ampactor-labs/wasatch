@@ -161,7 +161,13 @@ export interface ServiceAlerts {
 
 /** The fields only the conductor knows of an hour: a sealed hour without
  * them takes them from the live sky (they're frozen there, never revised). */
-const CONDUCTOR_FIELDS = ["flow", "pressureTend", "stormMm", "pm25Downtown", "pm25Lake"] as const;
+const CONDUCTOR_FIELDS = ["flow", "pressureTend", "stormMm", "pm25Downtown", "pm25Lake", "lakeFt", "lakeDevFt", "river", "snowpack", "newSnowIn", "powder", "energy"] as const;
+
+/** An hour with its season, worked out from the hour itself: the same on
+ * every phone, whenever it posted. */
+function seasoned(h: SkyHour): SkyHour {
+  return { ...h, season: season(h.at) };
+}
 
 export function withConductorFields(sealed: SkyHour, live: SkyHour | undefined): SkyHour {
   if (!live) return sealed;
@@ -297,7 +303,7 @@ export class Valley {
         if (CONDUCTOR_FIELDS.some((k) => !Object.is(merged[k], sealed[k]))) hours.push(merged);
       }
     }
-    this.host.post(Kind.SKY, encodeSky(hours));
+    this.host.post(Kind.SKY, encodeSky(hours.map(seasoned)));
   }
 
   conductorSlow(lake: Reading<Lake> | null, river: Reading<River> | null, snow: Reading<Snow> | null, grid: Reading<Grid> | null = null): void {
@@ -377,7 +383,7 @@ export class Valley {
       if (hours?.length) {
         const live = new Map((this.sky?.value.hours ?? []).map((h) => [h.at, h]));
         for (const h of hours) this.sealed.set(h.at, h);
-        this.host.post(Kind.SKY, encodeSky(hours.map((h) => withConductorFields(h, live.get(h.at)))));
+        this.host.post(Kind.SKY, encodeSky(hours.map((h) => seasoned(withConductorFields(h, live.get(h.at))))));
       }
     }
   }
@@ -416,7 +422,7 @@ export class Valley {
       encodeSlow({
         lakeFt: this.lake?.value.ft ?? 4189.8,
         lakeDevFt: this.lake?.value.devFt ?? 0,
-        river: this.river?.value.position ?? 0.5,
+        river: Number.isFinite(this.river?.value.position) ? this.river!.value.position : 0.5,
         snowpack: this.snow?.value.ratio ?? 1,
         newSnowIn: this.snow?.value.newIn ?? 0,
         powder: this.snow?.value.powder ?? 0.5,

@@ -43,12 +43,13 @@ import { Flow } from "./flow.ts";
 import { decodeFeed } from "./gtfsrt.ts";
 import { fetchAltaSnow, fetchGrid, fetchMix, type Grid, type Mix } from "./outlook.ts";
 import { KSLC, Planes, RADIUS_NM, type Aircraft } from "./planes.ts";
-import { Slots } from "./slots.ts";
+import { SeenQuakes } from "./quakes.ts";
+import { freezeAhead, Slots, type SlowNow } from "./slots.ts";
 import { Transit, readSchedule } from "./transit.ts";
 import { Uac } from "./uac.ts";
 import { Udot } from "./udot.ts";
 import { WINDOW_MS, Windows } from "./windows.ts";
-import { BikeWatch, fetchLake, fetchQuakes, fetchRiver, fetchSkyRaw, fetchSnow, obsFromMetar, skyFrom, type Metar } from "../../web/src/data/feeds.ts";
+import { BikeWatch, fetchLake, fetchQuakes, fetchRiver, fetchSkyRaw, fetchSnow, obsFromMetar, skyFrom, type Lake, type Metar, type Reading, type River, type Snow } from "../../web/src/data/feeds.ts";
 import { GroundSource, STATIONS } from "../../web/src/data/ground.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -96,7 +97,7 @@ windows.onDiskError = (err) => log("windows: the disk failed, keeping them in me
 const transit = new Transit(SCHEDULE);
 const bikes = new BikeWatch();
 const ground = new GroundSource("wasatch-symphony:conductor:0:node");
-const seenQuakes = new Set<string>();
+const seenQuakes = new SeenQuakes(DATA_DIR ? join(DATA_DIR, "quakes.json") : null);
 const alerts = new Alerts();
 const planes = new Planes();
 const flow = new Flow(DATA_DIR ? join(DATA_DIR, "usual.json") : null);
@@ -106,7 +107,7 @@ const airnow = new AirNowSource();
 const uac = new Uac();
 let skyBase: (ReturnType<typeof skyFrom> & { source: string }) | null = null;
 let sky: string | null = null;
-let slowParts: Record<string, unknown> | null = null;
+let slowParts: { lake: Reading<Lake> | null; river: Reading<River> | null; snow: Reading<Snow> | null } | null = null;
 let slow: string | null = null;
 let grid: Grid | null = null;
 let mix: Mix | null = null;
@@ -143,11 +144,45 @@ function freezeNext(now: number, field: "ridgeMs" | "ridgeGustMs" | "pm25" | "pm
   if (now - hour >= 30 * 60_000 && slots.freeze(hour + HOUR, field, value, now)) publishSky();
 }
 
-/** The sky as served: its hours with what's frozen for them. */
+/** The sky as served: its hours with what's frozen for them, and "now" as
+ * the hour now plays (what's frozen for it over the models). */
 function publishSky(): void {
   if (!skyBase) return;
-  sky = JSON.stringify({ ...skyBase, value: { ...skyBase.value, hours: slots.apply(skyBase.value.hours) } });
+  const hours = slots.apply(skyBase.value.hours);
+  const now = hours.find((h) => h.at === Math.floor(Date.now() / HOUR) * HOUR);
+  const frozen = now ? slots.get(now.at) : undefined;
+  const value = { ...skyBase.value, hours };
+  if (now && frozen) {
+    if (frozen.pm25 !== undefined) value.pm25 = now.pm25;
+    if (frozen.inversionC !== undefined) value.inversionC = now.inversionC;
+    if (frozen.ridgeGustMs !== undefined) value.ridgeGustMs = now.ridgeGustMs;
+    if (frozen.mtnSnowCm !== undefined) value.mtnSnowCm = now.mtnSnowCm;
+  }
+  sky = JSON.stringify({ ...skyBase, value });
 }
+
+/** The slow values as they stand, to freeze for the next hour. */
+function slowNow(): SlowNow {
+  const lake = slowParts?.lake?.value;
+  const snow = slowParts?.snow?.value;
+  return {
+    lakeFt: lake?.ft,
+    lakeDevFt: lake?.devFt,
+    river: slowParts?.river?.value.position,
+    snowpack: snow?.ratio,
+    newSnowIn: snow?.newIn,
+    powder: snow?.powder,
+    energy: grid && grid.energy > 0 ? grid.energy : undefined,
+  };
+}
+
+// Each minute in an hour's last quarter: the next hour's alerts, models and
+// slow values, frozen.
+setInterval(() => {
+  const now = Date.now();
+  const next = skyBase?.value.hours.find((h) => h.at === Math.floor(now / HOUR) * HOUR + HOUR);
+  if (freezeAhead(slots, now, next, slowNow())) publishSky();
+}, 60_000);
 
 function publishSlow(): void {
   if (slowParts) slow = JSON.stringify({ ...slowParts, grid: grid && { value: { ...grid, mix }, observed: grid.hour, receipt: "live" } });
@@ -211,9 +246,7 @@ every(60_000, "quakes", async () => {
   const q = await fetchQuakes();
   if (!q) return;
   const now = Date.now();
-  for (const e of q.value) {
-    if (seenQuakes.has(e.id) || e.ms < now - 10 * 60_000) continue;
-    seenQuakes.add(e.id);
+  for (const e of seenQuakes.fresh(q.value, now)) {
     windows.addQuake([e.ms, e.originMs, e.mag, e.lat, e.lon, e.id, e.place], now);
   }
 });
@@ -221,7 +254,9 @@ every(5 * 60_000, "sky", async () => {
   // KSLC's METARs: complete and hourly, which the browser can't read.
   const res = await fetch("https://aviationweather.gov/api/data/metar?ids=KSLC&format=json&hours=36", { headers: UA });
   const metars = res.ok ? ((await res.json()) as Metar[]) : [];
-  const raw = await fetchSkyRaw(Date.now() - 34 * 3_600_000);
+  // NWS's observations are only a fallback for the METARs: a failure there
+  // doesn't cost a good METAR read.
+  const raw = await fetchSkyRaw(Date.now() - 34 * 3_600_000, undefined, 3, metars.length >= 12);
   if (metars.length >= 12) raw.obs = metars.map(obsFromMetar).sort((a, b) => b.t - a.t);
   skyBase = { ...skyFrom(raw), source: metars.length >= 12 ? "metar" : "nws" };
   publishSky();

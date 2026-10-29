@@ -198,7 +198,8 @@ export const TOPICS: readonly Topic[] = [
       const r = c.valley.river;
       if (!r) return null;
       const gauges = r.value.gauges?.map((g) => `${g.name.replace(" River", "").replace("Little Cottonwood Creek", "Little Cottonwood")} ${Math.round(g.cfs)} cfs`).join(" · ") ?? `${Math.round(r.value.cfs)} cfs`;
-      return { value: `${gauges} · ${Math.round(r.value.position * 100)}th percentile for the date`, receipt: receipt(r) };
+      const where = Number.isFinite(r.value.position) ? `${Math.round(r.value.position * 100)}th percentile for the date` : "the date's normals didn't answer";
+      return { value: `${gauges} · ${where}`, receipt: receipt(r) };
     },
   },
   {
@@ -273,7 +274,8 @@ export const TOPICS: readonly Topic[] = [
         if (today) bits.push(`forecast ${today.category.toLowerCase()}${today.actionDay ? ", an action day" : ""}`);
         pm = bits.join(" · ");
       }
-      return { value: `${pm} · ${sky.value.inversionC.toFixed(1)} °C warmer aloft (model)${inverted}`, receipt: receipt(sky) };
+      const aloft = Number.isFinite(sky.value.inversionC) ? `${sky.value.inversionC.toFixed(1)} °C warmer aloft (model)` : "aloft unknown (the model didn't answer)";
+      return { value: `${pm} · ${aloft}${inverted}`, receipt: receipt(sky) };
     },
   },
   {

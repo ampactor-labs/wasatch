@@ -79,6 +79,13 @@ export function atHourStart(pts: { t: number; v: number }[], now = Date.now()): 
   return best;
 }
 
+/** "MM-DD" in Salt Lake City on the day of `ms` (USGS's day-of-year normals). */
+export function mountainMonthDay(ms: number): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Denver", month: "2-digit", day: "2-digit" }).formatToParts(ms);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "01";
+  return `${get("month")}-${get("day")}`;
+}
+
 // --- The lake and the rivers (USGS Water Data APIs) ------------------------
 
 const USGS = "https://api.waterdata.usgs.gov/ogcapi/v1/collections";
@@ -102,7 +109,9 @@ export function fetchLake(): Promise<Reading<Lake> | null> {
       .map((f) => ({ t: Date.parse(f.properties.time), v: Number(f.properties.value) }))
       .filter((p) => Number.isFinite(p.v))
       .sort((a, b) => a.t - b.t);
-    const last = pts.at(-1);
+    // The level as of the top of the hour, so every phone has the same one
+    // whenever it last fetched.
+    const last = atHourStart(pts);
     if (!last) throw new Error("no lake data");
     const mean = pts.reduce((s, p) => s + p.v, 0) / pts.length;
     return { value: { ft: last.v, devFt: last.v - mean }, observed: last.t };
@@ -112,7 +121,8 @@ export function fetchLake(): Promise<Reading<Lake> | null> {
 export interface Gauge {
   name: string;
   cfs: number;
-  /** Where its flow sits in the day-of-year percentiles, 0–1. */
+  /** Where its flow sits in the day-of-year percentiles, 0–1; NaN when
+   * USGS's normals didn't answer. */
   position: number;
 }
 
@@ -120,7 +130,7 @@ export interface River {
   /** The Jordan's flow. */
   cfs: number;
   /** Where the valley's water sits against the usual for the date, 0–1:
-   * the gauges' mean. */
+   * the mean of the gauges whose normals answered; NaN when none did. */
   position: number;
   /** Each gauge: the Jordan at 1700 South, and Little Cottonwood Creek
    * where it meets it (the canyon's runoff, quick to rise in a storm). */
@@ -163,9 +173,11 @@ async function gauge(site: string, name: string): Promise<(Gauge & { t: number }
   // the same value whenever it last fetched.
   const f = atHourStart(series.features.map((x) => ({ t: Date.parse(x.properties.time), v: Number(x.properties.value) })));
   if (!f) return null;
-  const doy = new Date().toISOString().slice(5, 10);
+  const doy = mountainMonthDay(f.t);
   const row = normals?.features[0]?.properties.data[0]?.values.find((v) => v.time_of_year === doy);
-  const position = row ? percentile(f.v, row.values.map(Number), row.percentiles.map((p) => Number(p) / 100)) : 0.5;
+  // Without the normals there's no telling high from low: unknown, not
+  // "usual", so a phone whose normals failed doesn't play a different bass.
+  const position = row ? percentile(f.v, row.values.map(Number), row.percentiles.map((p) => Number(p) / 100)) : Number.NaN;
   return { name, cfs: f.v, position, t: f.t };
 }
 
@@ -175,7 +187,8 @@ export function fetchRiver(): Promise<Reading<River> | null> {
     const gauges = read.filter((g) => g !== null);
     const jordan = read[0];
     if (!jordan || !gauges.length) throw new Error("no river data");
-    const position = gauges.reduce((a, g) => a + g.position, 0) / gauges.length;
+    const known = gauges.filter((g) => Number.isFinite(g.position));
+    const position = known.length ? known.reduce((a, g) => a + g.position, 0) / known.length : Number.NaN;
     return {
       value: { cfs: jordan.cfs, position, gauges: gauges.map(({ name, cfs, position }) => ({ name, cfs, position })) },
       observed: Math.min(...gauges.map((g) => g.t)),
@@ -464,11 +477,13 @@ export interface SkyRaw {
  * The span must be the same on every phone: the day's plan builds on every
  * hour since its 5 AM anchor.
  */
-export async function fetchSkyRaw(from: number, to?: number, pastDays = 3): Promise<SkyRaw> {
+export async function fetchSkyRaw(from: number, to?: number, pastDays = 3, obsOptional = false): Promise<SkyRaw> {
   const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
   const span = `start=${iso(from)}${to ? `&end=${iso(to)}` : ""}`;
+  const nwsObs = json<{ features: NwsObs[] }>(`https://api.weather.gov/stations/KSLC/observations?${span}&limit=500`, { headers: NWS_HEADERS }, 20_000);
   const [obs, alerts, models] = await Promise.all([
-    json<{ features: NwsObs[] }>(`https://api.weather.gov/stations/KSLC/observations?${span}&limit=500`, { headers: NWS_HEADERS }, 20_000),
+    // With METARs in hand (the conductor), NWS's copy of them is optional.
+    obsOptional ? nwsObs.catch(() => ({ features: [] as NwsObs[] })) : nwsObs,
     json<{ features: NwsAlert[] }>("https://api.weather.gov/alerts/active?point=40.7608,-111.891", { headers: NWS_HEADERS }).catch(
       () => ({ features: [] as NwsAlert[] }),
     ),
@@ -595,10 +610,12 @@ export function skyFrom(raw: SkyRaw, now = Date.now()): { value: SkyNow; observe
     value: {
       description: latest?.text ?? "",
       tempC: latest?.tempC ?? Number.NaN,
-      pm25: nowHour?.pm25 ?? Number.NaN,
-      inversionC: nowHour?.inversionC ?? 0,
-      ridgeGustMs: nowHour?.ridgeGustMs ?? Number.NaN,
-      mtnSnowCm: nowHour?.mtnSnowCm ?? 0,
+      // A model that didn't answer leaves its defaults in the hours (the
+      // engine needs numbers) but says nothing for now: unknown, not "live".
+      pm25: air ? (nowHour?.pm25 ?? Number.NaN) : Number.NaN,
+      inversionC: slc ? (nowHour?.inversionC ?? 0) : Number.NaN,
+      ridgeGustMs: alta ? (nowHour?.ridgeGustMs ?? Number.NaN) : Number.NaN,
+      mtnSnowCm: alta ? (nowHour?.mtnSnowCm ?? 0) : Number.NaN,
       pressureHpa: raw.obs[0]?.pressureHpa ?? Number.NaN,
       pressureTend: [...hours].reverse().find((h) => h.pressureTend !== undefined)?.pressureTend ?? Number.NaN,
       alerts: active,
@@ -673,10 +690,21 @@ export class BikeWatch {
   private last = new Map<string, number>();
   private lastUpdated = 0;
   private stations: Station[] = [];
+  /** When the station list was last asked for (Date.now ms). */
+  private loadedAt = 0;
   readonly events: (BikeEvent & { name: string })[] = [];
 
   async init(): Promise<void> {
+    this.loadedAt = Date.now();
     this.stations = await fetchStations();
+  }
+
+  /** Reload the stations if a dock reported that the list doesn't know (a
+   * start that failed, a new station), or once a day; at most every ten
+   * minutes. */
+  private async refresh(unknown: boolean): Promise<void> {
+    const age = Date.now() - this.loadedAt;
+    if ((unknown && age > 10 * 60_000) || age > 86_400_000) await this.init().catch(() => {});
   }
 
   stationName(i: number): string {
@@ -691,6 +719,7 @@ export class BikeWatch {
     );
     const updated = d.last_updated * 1000;
     if (updated <= this.lastUpdated) return false;
+    await this.refresh(d.data.stations.some((s) => !this.stations.some((x) => x.id === s.station_id)));
     const first = this.last.size === 0;
     const fresh: (BikeEvent & { name: string })[] = [];
     for (const s of d.data.stations) {

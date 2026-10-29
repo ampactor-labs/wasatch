@@ -186,11 +186,36 @@ export interface SkyHour {
    * key: the haze each vantage hears. Absent, a vantage hears `pm25`. */
   pm25Downtown?: number;
   pm25Lake?: number;
+  /** The slow values as the conductor froze them for the hour, so every
+   * phone composes the hour from the same ones (absent: the latest SLOW). */
+  lakeFt?: number;
+  lakeDevFt?: number;
+  river?: number;
+  snowpack?: number;
+  newSnowIn?: number;
+  powder?: number;
+  energy?: number;
+  /** Winter, 0–1, worked out from the hour itself. */
+  season?: number;
 }
 
 /** The fields added to an hour since the first twelve, in the order the
  * engine reads them (append only: an older engine reads the ones it knows). */
-const SKY_MORE = ["flow", "pressureTend", "stormMm", "pm25Downtown", "pm25Lake"] as const;
+export const SKY_MORE = [
+  "flow",
+  "pressureTend",
+  "stormMm",
+  "pm25Downtown",
+  "pm25Lake",
+  "lakeFt",
+  "lakeDevFt",
+  "river",
+  "snowpack",
+  "newSnowIn",
+  "powder",
+  "energy",
+  "season",
+] as const;
 
 /** SKY: `u32 n`, n hours of `f64 at` and twelve floats, then `u32 k` and k
  * more floats an hour (an engine older than them reads only the rows). */

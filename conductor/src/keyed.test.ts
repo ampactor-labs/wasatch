@@ -89,6 +89,11 @@ test("UDOT: a description's first line, and a station that stopped reporting", (
     now,
   );
   assert.deepEqual(w?.stations, ["SR-210 @ Alta"]);
+  // An unreadable time is stale beside readable ones; with none readable,
+  // the feed is taken as current.
+  const garbled = { StationName: "SR-190 @ Brighton", WindSpeedAvg: "60", WindSpeedGust: "90", LastUpdated: "soon" };
+  assert.deepEqual(canyonWind([{ StationName: "SR-210 @ Alta", WindSpeedAvg: "20", WindSpeedGust: "41", LastUpdated: now / 1000 - 600 }, garbled], now)?.stations, ["SR-210 @ Alta"]);
+  assert.deepEqual(canyonWind([garbled], now)?.stations, ["SR-190 @ Brighton"]);
 });
 
 // Shaped like UDOT's documented messagesigns and futuredrivingconditions.

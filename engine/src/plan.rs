@@ -138,6 +138,26 @@ pub struct SkyHour {
     /// PM2.5 measured at the lake (the station by Saltair), µg/m³; NaN
     /// unknown, and then `pm25` stands for it. The haze the lake vantage hears.
     pub pm25_lake: f32,
+    /// The slow values as the conductor froze them for the hour (NaN
+    /// unknown, and then the latest posted `Slow` stands in): every phone
+    /// composes the hour from the same lake, rivers, snow and grid,
+    /// whenever it last fetched them. See `Slow::overlaid`.
+    pub lake_ft: f32,
+    /// The lake against its daily mean, ft, frozen for the hour.
+    pub lake_dev_ft: f32,
+    /// The rivers against the usual for the date, 0–1, frozen for the hour.
+    pub river: f32,
+    /// Snowpack against median, frozen for the hour.
+    pub snowpack: f32,
+    /// Overnight new snow, inches, frozen for the hour.
+    pub new_snow_in: f32,
+    /// New-snow lightness, 0–1, frozen for the hour.
+    pub powder: f32,
+    /// The grid's demand against the usual, frozen for the hour.
+    pub energy: f32,
+    /// Winter, 0–1, for the hour (the page works it out from the hour
+    /// itself, so it's the same everywhere).
+    pub season: f32,
 }
 
 impl Default for SkyHour {
@@ -160,6 +180,14 @@ impl Default for SkyHour {
             storm_mm: f32::NAN,
             pm25_downtown: f32::NAN,
             pm25_lake: f32::NAN,
+            lake_ft: f32::NAN,
+            lake_dev_ft: f32::NAN,
+            river: f32::NAN,
+            snowpack: f32::NAN,
+            new_snow_in: f32::NAN,
+            powder: f32::NAN,
+            energy: f32::NAN,
+            season: f32::NAN,
         }
     }
 }

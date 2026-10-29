@@ -135,6 +135,8 @@ pub struct Engine {
     /// tap, so START can arrive first): the welcome and the fade wait for it.
     start_waiting: bool,
     fade_in_at: Option<f64>,
+    /// The lake's slosh for the bar's hour, ft (NaN: the posted value).
+    lake_dev_ft: f32,
     samples: Vec<PianoSample>,
     tables: SkylineTables,
     piano: Vec<PianoVoice>,
@@ -207,6 +209,7 @@ impl Engine {
             started: false,
             start_waiting: false,
             fade_in_at: None,
+            lake_dev_ft: f32::NAN,
             samples: Vec::new(),
             tables: SkylineTables::fallback(),
             piano: (0..16).map(|_| PianoVoice::default()).collect(),
@@ -780,6 +783,14 @@ impl Engine {
             return;
         };
         let valley = self.inputs.valley();
+        // The slow values of the bar's own hour (of the day being played, in
+        // A Day in Twelve Minutes), as frozen for it: the same on every phone.
+        let bar_ms = cur.section.start_ms + f64::from(cur.bar) * cur.section.bar_ms();
+        let slow = valley.slow_at(self.day.as_ref().map_or(bar_ms, |r| r.day_at(bar_ms)));
+        let valley = Valley {
+            slow: &slow,
+            ..valley
+        };
         match &self.day {
             Some(run) => twelve::compose_day(
                 &cur.section,
@@ -1230,10 +1241,12 @@ impl Engine {
             .at_or_default(if day_ms > 0.0 { day_ms } else { h.at_ms });
         self.master.set_warmth(warmth_for(hour.temp_c));
         // The grid's now has nothing to say about a day gone by.
+        let slow = self.inputs.slow.overlaid(&hour);
+        self.lake_dev_ft = slow.lake_dev_ft;
         self.master.set_energy(if day_ms > 0.0 {
             0.0
         } else {
-            energy_db(self.inputs.slow.energy_or_usual())
+            energy_db(slow.energy_or_usual())
         });
         // The haze where the listener stands: downtown's or the lake's PM2.5
         // where the monitors there reported, else the valley's.
@@ -1375,7 +1388,12 @@ impl Engine {
             m.r += pad.r * self.mix.pad;
             m.send += pad.send * self.mix.pad;
             self.bass.tick(&mut fam[Home::Rivers as usize]);
-            let slosh = (self.inputs.slow.lake_dev_ft.abs() / 0.5).min(1.0);
+            let dev = if self.lake_dev_ft.is_finite() {
+                self.lake_dev_ft
+            } else {
+                self.inputs.slow.lake_dev_ft
+            };
+            let slosh = (dev.abs() / 0.5).min(1.0);
             self.lake
                 .tick(self.mix.lake, slosh, &mut fam[Home::Lake as usize]);
             for (v, &located) in self.drums.iter_mut().zip(&self.kit_located) {
@@ -1621,6 +1639,55 @@ mod tests {
         assert!(
             voices.contains(&(Inst::Bass as u8 as f64)),
             "no bass voice in {voices:?}"
+        );
+    }
+
+    #[test]
+    fn phones_that_fetched_different_slow_values_play_the_frozen_hour_alike() {
+        // Two phones: one fetched the rivers high and the lake up, the other
+        // low; both have the conductor's frozen hours.
+        let l: f64 = (20_755.0 * 24.0 + 6.0 + 17.0) * 3_600_000.0; // Oct 29, 5 PM MDT
+        let phone = |river: f32, lake_ft: f32, powder: f32| {
+            let mut e = Engine::new(48_000.0);
+            e.set_day(day(20261029, 20_755.0, 6.0));
+            for k in -4..3 {
+                let at = (l / 3_600_000.0).floor() * 3_600_000.0 + f64::from(k) * 3_600_000.0;
+                e.set_sky_hour(
+                    at,
+                    crate::plan::SkyHour {
+                        // Snow falling at Alta: the grains play, and the
+                        // powder picks their instrument.
+                        mtn_snow_cm: 2.0,
+                        river: 0.8,
+                        lake_ft: 4189.8,
+                        snowpack: 1.2,
+                        powder: 0.7,
+                        season: 0.6,
+                        ..Default::default()
+                    },
+                );
+            }
+            e.set_slow(Slow {
+                river,
+                lake_ft,
+                snowpack: 0.5,
+                powder,
+                ..Default::default()
+            });
+            e.set_clock(0.0, l + DELAY_MS);
+            e.start();
+            let mut out = Vec::new();
+            for _ in 0..(12.0 * 48_000.0 / 128.0) as usize {
+                out.extend_from_slice(e.render(128));
+            }
+            out
+        };
+        let a = phone(0.95, 4199.0, 0.1);
+        let b = phone(0.05, 4185.0, 0.9);
+        assert!(a.iter().any(|x| x.abs() > 0.01), "silent");
+        assert!(
+            a == b,
+            "two phones with the same frozen hours played differently"
         );
     }
 }

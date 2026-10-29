@@ -10,6 +10,13 @@
 // it before that hour plays. The air comes three ways: the valley's (the
 // monitors' median), downtown's (Hawthorne) and the lake's (the station at
 // Saltair), so each vantage hears the haze where it stands.
+//
+// What the models say of an hour and the storm alerts issued for it (the
+// alert level steers the plan's tension), and the slow values (the lake,
+// the rivers, the snow, the grid), are frozen in the hour before's last
+// quarter: a phone that fetched them at another moment, or joined after an
+// alert expired, still plans the hour from the same ones, and the archive
+// seals what was played.
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { SkyHour } from "../../web/src/engine/protocol.ts";
@@ -23,9 +30,42 @@ export interface SlotValues {
   pm25?: number;
   pm25Downtown?: number;
   pm25Lake?: number;
+  /** The issued alerts' level and the models' values for the hour. */
+  alert?: number;
+  mtnSnowCm?: number;
+  inversionC?: number;
+  /** 1 when the ridge wind was frozen from the model, not measured. */
+  ridgeModel?: number;
+  /** The slow values as they stood. */
+  lakeFt?: number;
+  lakeDevFt?: number;
+  river?: number;
+  snowpack?: number;
+  newSnowIn?: number;
+  powder?: number;
+  energy?: number;
 }
 
-const FIELDS = ["flow", "stormMm", "ridgeMs", "ridgeGustMs", "pm25", "pm25Downtown", "pm25Lake"] as const;
+/** What's laid over the sky's hours as served (everything but `ridgeModel`). */
+const FIELDS = [
+  "flow",
+  "stormMm",
+  "ridgeMs",
+  "ridgeGustMs",
+  "pm25",
+  "pm25Downtown",
+  "pm25Lake",
+  "alert",
+  "mtnSnowCm",
+  "inversionC",
+  "lakeFt",
+  "lakeDevFt",
+  "river",
+  "snowpack",
+  "newSnowIn",
+  "powder",
+  "energy",
+] as const;
 
 /** The fields that stand for a measurement, for the receipts. */
 export type Measured = "ridgeGustMs" | "pm25" | "pm25Downtown" | "pm25Lake";
@@ -80,7 +120,9 @@ export class Slots {
 
   /** Whether the hour at `at` has a measured `field`, for the receipts. */
   measured(at: number, field: Measured): boolean {
-    return this.slots.get(at)?.[field] !== undefined;
+    const slot = this.slots.get(at);
+    if (!slot || slot[field] === undefined) return false;
+    return !((field === "ridgeGustMs") && slot.ridgeModel);
   }
 
   /** Every frozen hour from `from` on, for the archive. */
@@ -97,4 +139,46 @@ export class Slots {
       // Kept in memory; the next save tries again.
     }
   }
+}
+
+/** The slow values as they stand, for `freezeAhead`. */
+export interface SlowNow {
+  lakeFt?: number;
+  lakeDevFt?: number;
+  river?: number;
+  snowpack?: number;
+  newSnowIn?: number;
+  powder?: number;
+  energy?: number;
+}
+
+const SLOW_FIELDS = ["lakeFt", "lakeDevFt", "river", "snowpack", "newSnowIn", "powder", "energy"] as const;
+
+/** In an hour's last quarter (45 to 54 minutes in: a phone refreshes its
+ * sky every five minutes and must have the next hour's before it plays, 90 s
+ * after it starts), freeze for the next hour what the models and the issued
+ * alerts say of it, and the slow values as they stand. Wind measured up the
+ * canyons, frozen from the half hour, wins over the model's. Returns whether
+ * anything was frozen. */
+export function freezeAhead(slots: Slots, now: number, next: SkyHour | undefined, slow: SlowNow): boolean {
+  const hour = Math.floor(now / HOUR) * HOUR;
+  const into = now - hour;
+  if (into < 45 * 60_000 || into >= 54 * 60_000) return false;
+  const at = hour + HOUR;
+  let changed = false;
+  const put = (field: keyof SlotValues, v: number | undefined) => {
+    if (v !== undefined && slots.freeze(at, field, v, now)) changed = true;
+  };
+  if (next?.at === at) {
+    put("alert", next.alert);
+    put("mtnSnowCm", next.mtnSnowCm);
+    put("inversionC", next.inversionC);
+    if (slots.get(at)?.ridgeGustMs === undefined && Number.isFinite(next.ridgeGustMs) && Number.isFinite(next.ridgeMs)) {
+      put("ridgeMs", next.ridgeMs);
+      put("ridgeGustMs", next.ridgeGustMs);
+      put("ridgeModel", 1);
+    }
+  }
+  for (const k of SLOW_FIELDS) put(k, slow[k]);
+  return changed;
 }

@@ -239,7 +239,7 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
             let k = r.u32() as usize;
             if (1..=64).contains(&k) && r.remaining() >= n * k * 4 {
                 for (_, h) in &mut hours {
-                    let mut more = [f32::NAN; 5];
+                    let mut more = [f32::NAN; 13];
                     for i in 0..k {
                         let v = r.f32();
                         if let Some(m) = more.get_mut(i) {
@@ -252,6 +252,14 @@ fn handle(kind: u32, bytes: &[u8]) -> i32 {
                         h.storm_mm,
                         h.pm25_downtown,
                         h.pm25_lake,
+                        h.lake_ft,
+                        h.lake_dev_ft,
+                        h.river,
+                        h.snowpack,
+                        h.new_snow_in,
+                        h.powder,
+                        h.energy,
+                        h.season,
                     ] = more;
                 }
             }

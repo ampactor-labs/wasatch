@@ -393,6 +393,23 @@ impl Default for Slow {
 }
 
 impl Slow {
+    /// These values with an hour's frozen ones laid over them, where the
+    /// hour has them.
+    pub fn overlaid(&self, h: &crate::plan::SkyHour) -> Slow {
+        let or = |frozen: f32, posted: f32| if frozen.is_finite() { frozen } else { posted };
+        Slow {
+            lake_ft: or(h.lake_ft, self.lake_ft),
+            lake_dev_ft: or(h.lake_dev_ft, self.lake_dev_ft),
+            river: or(h.river, self.river),
+            snowpack: or(h.snowpack, self.snowpack),
+            new_snow_in: or(h.new_snow_in, self.new_snow_in),
+            powder: or(h.powder, self.powder),
+            season: or(h.season, self.season),
+            ground: self.ground,
+            energy: or(h.energy, self.energy),
+        }
+    }
+
     /// Whether the grid's demand is known.
     pub fn knows_energy(&self) -> bool {
         self.energy.is_finite() && self.energy > 0.0
@@ -455,6 +472,14 @@ impl<'a> Valley<'a> {
             roads: &[],
             road_windows: &[],
         }
+    }
+
+    /// The slow values for the moment `ms`: its hour's frozen ones over
+    /// the latest posted.
+    pub fn slow_at(&self, ms: f64) -> Slow {
+        self.sky
+            .at(ms)
+            .map_or(*self.slow, |h| self.slow.overlaid(&h))
     }
 
     /// What stood on the roads at `ms`, from the window covering it.

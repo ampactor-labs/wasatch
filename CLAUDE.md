@@ -109,6 +109,11 @@ paths); the push that carried the Oct 28 work deployed them.
   phone: sealed 30 s windows from the conductor, or hourly sky slots that are
   frozen and never revised. Only observations steer the plan (`plan.rs`);
   forecasts and models only color bars. Anything new must follow this.
+  `conductor/src/slots.ts` freezes the next hour's alerts, models and slow
+  values in the last quarter of each hour (`freezeAhead`). `compose_next`
+  hands `compose()` a `Valley` whose `slow` is `slow_at(the bar's hour)`;
+  anything outside `compose()` that reads slow values (the master, the lake's
+  slosh) uses `Slow::overlaid` with the bar's hour, never `inputs.slow` bare.
 - **Wire formats grow by tails.** The .wasm is served unhashed beside hashed
   JS, so an old page can meet a new engine for minutes after a deploy. Append
   fields after existing rows (SKY, SLOW, RAIL do); never change a stride.

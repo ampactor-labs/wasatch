@@ -75,19 +75,22 @@ describe("the engine's messages", () => {
       ridgeGustMs: 12,
       mtnSnowCm: 0.2,
     };
-    const b = encodeSky([h, { ...h, at: h.at + 3_600_000, flow: -0.4, pressureTend: -2.5, stormMm: 180, pm25Downtown: 11.1 }]);
-    expect(b.length).toBe(4 + 2 * (8 + 12 * 4) + 4 + 2 * 5 * 4);
+    const b = encodeSky([h, { ...h, at: h.at + 3_600_000, flow: -0.4, pressureTend: -2.5, stormMm: 180, pm25Downtown: 11.1, lakeFt: 4189.5, season: 0.75 }]);
+    expect(b.length).toBe(4 + 2 * (8 + 12 * 4) + 4 + 2 * 13 * 4);
     const v = view(b);
     expect(v.getFloat64(4, true)).toBe(h.at);
     expect(Number.isNaN(v.getFloat32(12, true))).toBe(true);
     expect(v.getFloat32(12 + 11 * 4, true)).toBeCloseTo(0.2, 6);
     const tail = 4 + 2 * 56;
-    expect(v.getUint32(tail, true)).toBe(5);
-    // The first hour's are unknown; the second's follow in order, the lake's
-    // PM2.5 unknown.
+    expect(v.getUint32(tail, true)).toBe(13);
+    // The first hour's are unknown; the second's follow in order (from
+    // tail + 4 + 13 × 4), the lake's PM2.5 unknown, then the frozen slow
+    // values and the season.
     expect(Number.isNaN(v.getFloat32(tail + 4, true))).toBe(true);
-    expect([24, 28, 32, 36].map((o) => v.getFloat32(tail + o, true))).toEqual([Math.fround(-0.4), -2.5, 180, Math.fround(11.1)]);
-    expect(Number.isNaN(v.getFloat32(tail + 40, true))).toBe(true);
+    expect([56, 60, 64, 68].map((o) => v.getFloat32(tail + o, true))).toEqual([Math.fround(-0.4), -2.5, 180, Math.fround(11.1)]);
+    expect(Number.isNaN(v.getFloat32(tail + 72, true))).toBe(true);
+    expect(v.getFloat32(tail + 76, true)).toBe(Math.fround(4189.5));
+    expect(v.getFloat32(tail + 104, true)).toBe(0.75);
   });
 
   test("SLOW and RAIL carry what was added at the end", () => {

@@ -166,12 +166,15 @@ const RIDGE_STATIONS = /alta|snowbird|cottonwood|brighton|solitude|guardsman|par
 export function canyonWind(body: unknown, now = Date.now()): { ms: number; gustMs: number; stations: string[] } | null {
   if (!Array.isArray(body)) return null;
   const mph = 0.44704;
+  // A station whose time can't be read is stale when others' can be; if
+  // none can (a format change), the feed itself is taken as current.
+  const timed = (body as Json[]).some((s) => Number.isFinite(when(field(s, "LastUpdated"))));
   const read = (body as Json[]).flatMap((s) => {
     const name = str(s, "StationName", "Name");
     const avg = num(s, "WindSpeedAvg", "WindSpeed");
     const gust = num(s, "WindSpeedGust", "WindGust");
     const at = when(field(s, "LastUpdated"));
-    const fresh = !Number.isFinite(at) || now - at < 2 * HOUR;
+    const fresh = Number.isFinite(at) ? now - at < 2 * HOUR : !timed;
     return RIDGE_STATIONS.test(name) && Number.isFinite(avg) && fresh ? [{ name, avg, gust: Number.isFinite(gust) ? gust : avg }] : [];
   });
   if (!read.length) return null;
