@@ -552,9 +552,9 @@ export const TOPICS: readonly Topic[] = [
     id: "map",
     title: "The map",
     group: "music",
-    short: "Squares are trains and dots are buses, where UTA last saw them; arrows are planes. Rings are sounds as they play, smaller and fainter the farther they are from where you listen.",
+    short: "Squares are trains, dots are buses, arrows are planes. A dashed ring closes on a sound just before it plays; then it rings, says what it is, and leaves a dot that fades over a minute.",
     more:
-      "Rings at the seismometers swell with the ground's rumble. A train past the map's edge, FrontRunner up to Ogden or down to Provo, is an arrow on the frame pointing where it is. Planes point where they're flying and fade between sightings. Pick a place to listen from and the map marks it with YOU ARE HERE.",
+      "Trains and buses are where UTA last saw them. A ring is smaller and fainter the farther it is from where you listen. Everywhere, the map is the valley floor; pick a place to listen from and it frames what you can hear there, out to the far ring, with YOU ARE HERE. The bass, the harp, the snow and the lake's drone have no one place: they light up at their homes (the river gauges, the ridge between the Cottonwoods, Alta, the lake) while they play. Rings at the seismometers swell with the ground's rumble. A train past the map's edge is an arrow on the frame pointing where it is. Planes point where they're flying and fade between sightings.",
   },
   {
     id: "stickers",

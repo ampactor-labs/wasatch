@@ -177,6 +177,8 @@ async function main(): Promise<void> {
       if (e.t === "bar") s.onBar(e);
       else if (e.t === "feat") s.onFeature(e);
       else if (e.t === "pulse") s.onPulse(e);
+      else if (e.t === "soon") s.onSoon(e);
+      else if (e.t === "voice") s.onVoice(e);
       else if (e.t === "theme") s.onTheme(e);
       else if (e.t === "play") s.onPlay(e);
       else if (e.t === "solo") s.onSolo(e);

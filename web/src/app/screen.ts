@@ -23,7 +23,8 @@ import {
   type Vantage,
 } from "../art/index.ts";
 import { esc, n } from "../art/util.ts";
-import type { BarEvent, DayEvent, FeatureEvent, Heard, PlayEvent, PulseEvent, SoloEvent, ThemeEvent, VantageEvent } from "../engine/host.ts";
+import type { BarEvent, DayEvent, FeatureEvent, Heard, PlayEvent, PulseEvent, SoloEvent, SoonEvent, ThemeEvent, VantageEvent, VoiceEvent } from "../engine/host.ts";
+import { frameFor, MapMarks, soundColor } from "./mapmarks.ts";
 import {
   featureCaption,
   harmonyCaption,
@@ -39,7 +40,7 @@ import {
 } from "./captions.ts";
 import { midiName } from "./music.ts";
 import { dialLabels, homePos, keyName, noteName, push, type Key } from "./music.ts";
-import type { Schedule } from "./schedule.ts";
+import { tidyStation, type Schedule } from "./schedule.ts";
 import { daypartName, type Valley } from "./valley.ts";
 import { FAMILY_TOPIC, STICKER_TOPIC, conditions, type LowdownCtx } from "./lowdown.ts";
 import { season } from "../data/feeds.ts";
@@ -54,16 +55,6 @@ export const VANTAGES: { id: Vantage; code: number; name: string; short: string 
   { id: "canyons", code: 2, name: "The Canyons", short: "Canyons" },
   { id: "lake", code: 3, name: "The Lake", short: "Lake" },
 ];
-
-/** Inst codes (engine/src/compose.rs) to pulse colors on the map. */
-const PULSE_COLOR: Record<number, string> = {
-  1: "#FFD23F", // bell: TRAX
-  2: "#FF4F9A", // horn: FrontRunner
-  3: "#7AC74F", // marimba: GREENbike
-  5: "#FF6B35", // quake bell
-  11: "#4FA3D9", // canyon drums: ski buses
-  15: "#9AD0F5", // a swell: a plane
-};
 
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -103,6 +94,14 @@ export class PlayScreen {
   private introduced = new Set<Family>();
   private geo: SkylineGeometry | null = null;
   private proj: MapProjection | null = null;
+  private bounds: MapBounds | null = null;
+  /** What the map says about the sound (app/mapmarks.ts). */
+  private marks = new MapMarks(
+    () => this.deps.schedule.network ?? null,
+    tidyStation,
+    () => this.vantage === 0,
+    () => this.paused || reducedMotion(),
+  );
   /** The map's unit (art/map.ts): its marks scale with it. */
   private u = 1;
   private riderT = 0.02;
@@ -144,7 +143,7 @@ export class PlayScreen {
       <div class="play__note" aria-hidden="true"></div>
       <section class="play__valley">
         <div class="play__mapwrap">
-          <div class="play__map" aria-label="The valley map" data-topic="map"></div>
+          <div class="play__frame"><div class="play__map" aria-label="The valley map" data-topic="map"></div></div>
           <div class="play__sticker play__sticker--a" tabindex="0"></div>
           <div class="play__sticker play__sticker--b" tabindex="0"></div>
         </div>
@@ -218,7 +217,9 @@ export class PlayScreen {
     } catch {
       // A private window: it's only a convenience.
     }
-    this.drawHere();
+    // The map frames what you can hear from there.
+    if (ping) this.zoomMap();
+    else this.renderMap();
     const place = PLACES[code];
     if (ping && place) this.pulse({ t: "pulse", i: -1, lat: place.lat, lon: place.lon, m: 0, at: performance.now() });
     this.deps.onVantage(code);
@@ -346,18 +347,56 @@ export class PlayScreen {
     this.riderAnim = requestAnimationFrame(step);
   }
 
-  /** Bounds that fill a w × h box around the valley: the lake's south arm
-   * to the crest, Bountiful to Draper, grown to the box's shape. */
+  /** What the map frames in a w × h box (frameFor in mapmarks.ts):
+   * everywhere, the valley floor; from a place, what you can hear there. */
   private mapBounds(w: number, h: number): MapBounds {
-    const k = Math.cos((40.72 * Math.PI) / 180);
-    let lat = 0.66;
-    let lon = 0.82;
-    const aspect = h / w;
-    if (aspect > lat / (lon * k)) lat = Math.min(1.3, lon * k * aspect);
-    else lon = Math.min(1.25, lat / (k * aspect));
-    const cLat = 40.71;
-    const cLon = -111.98;
-    return { n: cLat + lat / 2, s: cLat - lat / 2, w: cLon - lon / 2, e: cLon + lon / 2 };
+    return frameFor(PLACES[this.vantage] ?? null, w, h, this.dialInset());
+  }
+
+  /** How far the harmony dial reaches over the map from its left edge (on a
+   * phone it sits on the map's corner; on a desktop it has a column). */
+  private dialInset(): number {
+    const map = this.root.querySelector(".play__map")?.getBoundingClientRect();
+    const dial = this.root.querySelector(".play__dial")?.getBoundingClientRect();
+    if (!map || !dial || !dial.width) return 0;
+    const over = dial.right > map.left && dial.left < map.left + 20 && dial.bottom > map.top && dial.top < map.bottom;
+    return over ? Math.max(0, dial.right - map.left) : 0;
+  }
+
+  /** Move the map to frame where you're listening from: the old map zooms
+   * toward the new frame and fades while the new one zooms in under it. */
+  private zoomMap(): void {
+    const host = this.root.querySelector<HTMLElement>(".play__map");
+    const frame = host?.parentElement;
+    const old = this.proj;
+    const from = this.bounds;
+    if (!host || !frame || !old || !from || reducedMotion() || typeof host.animate !== "function") {
+      this.renderMap();
+      return;
+    }
+    const ghost = document.createElement("div");
+    ghost.className = "play__map play__map--ghost";
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.append(...Array.from(host.childNodes));
+    frame.appendChild(ghost);
+    this.renderMap();
+    const to = this.bounds;
+    const proj = this.proj;
+    if (!to || !proj) {
+      ghost.remove();
+      return;
+    }
+    const ms = 700;
+    const easing = "cubic-bezier(.35,.05,.2,1)";
+    frame.classList.add("play__frame--zooming");
+    ghost.animate([{ transform: "none", opacity: 1 }, { transform: fill(old, to), opacity: 0 }], { duration: ms, easing, fill: "forwards" });
+    const zoom = host.animate([{ transform: fill(proj, from) }, { transform: "none" }], { duration: ms, easing });
+    const done = () => {
+      ghost.remove();
+      frame.classList.remove("play__frame--zooming");
+    };
+    zoom.onfinish = done;
+    zoom.oncancel = done;
   }
 
   private renderMap(): void {
@@ -366,24 +405,27 @@ export class PlayScreen {
     const w = Math.max(240, Math.round(host.clientWidth));
     const h = Math.max(200, Math.round(host.clientHeight || w * 1.1));
     const bounds = this.mapBounds(w, h);
+    this.bounds = bounds;
     this.proj = mapProjection(bounds, w, h);
     // The base map and the lines are static; trains, events and the
     // seismometers move on an overlay, so the map itself never repaints.
     const proj = this.proj;
     const u = mapUnit(w, h);
     this.u = u;
-    host.parentElement?.style.setProperty("--map-u", u.toFixed(3));
-    host.innerHTML = `${mapBase({ bounds, width: w, height: h, labels: w >= 300 })}
+    host.closest<HTMLElement>(".play__mapwrap")?.style.setProperty("--map-u", u.toFixed(3));
+    host.innerHTML = `${mapBase({ bounds, width: w, height: h, labels: w >= 300, jetty: this.vantage === 0 })}
       <svg class="play__overlay" viewBox="0 0 ${w} ${h}" aria-hidden="true">
         <clipPath id="overlay-frame"><rect width="${w}" height="${h}" rx="${n(14 * u)}"/></clipPath>
         <g clip-path="url(#overlay-frame)"><g class="map-here"></g><g class="map-vehicles"></g></g>
       </svg>
-      <div class="play__marks" aria-hidden="true">${STATIONS.map((s, band) => {
+      <div class="play__marks" aria-hidden="true">${MapMarks.layers()}${STATIONS.map((s, band) => {
         const [x, y] = proj.project(s.lat, s.lon);
         return `<div class="seis" data-band="${band}" data-topic="ground" style="left:${n(x)}px;top:${n(y)}px"><i class="seis__ring"></i><i class="seis__dot"></i></div>`;
       }).join("")}</div>`;
     const routes = host.querySelector("svg.map .map-routes");
     if (routes) routes.innerHTML = this.routesSvg();
+    const marks = host.querySelector<HTMLElement>(".play__marks");
+    if (marks) this.marks.attach(marks, proj, u);
     this.drawGround();
     this.drawHere();
     this.drawVehicles();
@@ -539,7 +581,7 @@ export class PlayScreen {
     const off = x < edge || y < edge || x > proj.width - edge || y > proj.height - edge;
     x = Math.max(edge, Math.min(proj.width - edge, x));
     y = Math.max(edge, Math.min(proj.height - edge, y));
-    const color = e.i < 0 ? "#FFD23F" : (PULSE_COLOR[e.i] ?? "#FF6B35");
+    const color = e.i < 0 ? "#FFD23F" : soundColor(e.i);
     const big = e.i === 5 || e.i < 0;
     // Plain elements that only scale and fade: the compositor animates them
     // without repainting the map. A far event, quiet from where you're
@@ -551,6 +593,7 @@ export class PlayScreen {
     el.innerHTML = `<i class="pulse__ring"></i><i class="pulse__dot"></i>`;
     g.appendChild(el);
     window.setTimeout(() => el.remove(), big ? 4000 : 1800);
+    if (!off) this.marks.sounded(e);
   }
 
   private renderDial(): void {
@@ -771,6 +814,16 @@ export class PlayScreen {
     this.noteTimer = window.setTimeout(() => el.classList.remove("play__note--on"), 900);
   }
 
+  /** A sound with a place, composed: the map shows it coming. */
+  onSoon(e: Heard<SoonEvent>): void {
+    this.marks.coming(e);
+  }
+
+  /** The river's bass, the ridge's harp or the snow, sounding. */
+  onVoice(e: Heard<VoiceEvent>): void {
+    this.marks.voiced(e);
+  }
+
   onPulse(e: Heard<PulseEvent>): void {
     this.pulse(e);
   }
@@ -848,4 +901,12 @@ export class PlayScreen {
   inDay(): boolean {
     return this.day !== null;
   }
+}
+
+/** The transform (origin top left) that makes `bounds` fill the box `proj` draws. */
+function fill(proj: MapProjection, bounds: MapBounds): string {
+  const [x0, y0] = proj.project(bounds.n, bounds.w);
+  const [x1] = proj.project(bounds.s, bounds.e);
+  const s = proj.width / Math.max(1, x1 - x0);
+  return `translate(${n(-x0 * s)}px, ${n(-y0 * s)}px) scale(${s.toFixed(4)})`;
 }

@@ -115,7 +115,8 @@ What's live, and where it differs from the rest of this document:
     had been reset at every section, losing it), and a phone joining at a
     boundary hears it too.
 - **The keys, in** (Oct 28). AirNow's and EIA's keys are set on the
-  conductor, and UTA's token.
+  conductor. (What was set as UTA's token was UDOT's key under the wrong
+  name; on Oct 29 it moved to `UDOT_KEY`, and UDOT's roads came in.)
   - *The air, measured.* AirNow retired the service the conductor first
     called on Sept 30, 2026; it now reads the three that replaced it:
     every Utah DEQ monitor in the valley's box with its raw hourly PM2.5,
@@ -137,12 +138,31 @@ What's live, and where it differs from the rest of this document:
     and what the power was made from by source, which PacifiCorp East
     reports as a daily batch, a day behind; both shown, neither played.
     Only the demand moves the mix, as before.
-  - *UTA's token.* The only keyed UTA API on record is the SIRI service
-    (`VehicleMonitor/ByRoute`, `StopMonitor`), whose documented host now
-    serves the UTA website and answers 404; `keys:check` probes it (and
+  - *UTA's token,* when there is one. The only keyed UTA API on record is
+    the SIRI service (`VehicleMonitor/ByRoute`, `StopMonitor`), whose
+    documented host now serves the UTA website and answers 404;
+    `keys:check` probes it with `UTA_TOKEN` (and
     `UTA_SIRI` points it elsewhere) so the moment it answers, a vehicle's
     `VehicleAtStop`, its distance to the next stop and its lateness class
     can replace the inference of departures from trip updates.
+- **Phones, and the map saying what plays** (Oct 29). Phones had played
+  silence: a phone's context runs only after the tap, so START reached the
+  engine before any clock and the fade never opened; the engine now makes
+  a start that came too early when the first clock arrives, and the smoke
+  test's phone view holds its audio until the tap and fails on silence.
+  Chrome 153 also stopped delivering a compiled module to the worklet
+  (a `messageerror` there, no exception here); the worklet asks for the
+  bytes instead. The map now frames what you can hear: everywhere, the
+  valley floor (fitted right of the dial where the dial sits on the map);
+  from a place, its far ring, leaning a third of the way toward the
+  valley, with a zoom between. The engine tells the page each placed note
+  as it composes it (`soon`, a second or so ahead) and each unplaced voice
+  as it sounds (`voice`: the bass, the harp, the snow), and `pulse` carries
+  its variant (a bell's line). So a dashed ring closes on a sound before it
+  plays, the sound names itself ("E · Blue Line · Courthouse"), its dot
+  stays for a minute, and the bass, harp, snow and the lake's drone light
+  at their homes (the two river gauges, the ridge, Alta, the lake). The
+  outbox only grew; an older page ignores the new events.
 - **Not built yet:** our own ADS-B receiver (adsb.lol stands in), travel
   times on UDOT's signs and canyon traffic (to confirm against the API with
   a key), what the avalanche forecast plays, the resorts' own voices,

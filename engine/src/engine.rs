@@ -801,9 +801,15 @@ impl Engine {
             .day
             .as_ref()
             .map_or(0.0, |r| r.day_at(self.scratch.start_ms));
-        for n in &self.scratch.notes {
+        // The map hears what's coming: each note it will show, and how soon.
+        let now = self.listening_ms(self.frame).unwrap_or(not_before);
+        for i in 0..self.scratch.notes.len() {
+            let n = self.scratch.notes[i];
             if n.at_ms >= not_before {
-                self.pending.push(*n);
+                self.pending.push(n);
+                if on_map(&n) {
+                    self.soon(&n, now);
+                }
             }
         }
         for h in &self.scratch.harmony {
@@ -965,9 +971,7 @@ impl Engine {
                 let place = self.placement(n.lat, n.lon, 0.35);
                 let i = pick(&mut self.rr[2], self.horns.iter().map(|v| v.is_active()));
                 self.horns[i].start(n.midi, n.vel * mix.rail.max(0.5), dur_s, place);
-                if n.variant == 0 {
-                    self.pulse(frame, &n, &place);
-                }
+                self.pulse(frame, &n, &place);
             }
             Inst::Swell => {
                 let i = if n.variant & 128 != 0 {
@@ -993,9 +997,7 @@ impl Engine {
                     size,
                     place,
                 );
-                if n.variant & 1 == 0 {
-                    self.pulse(frame, &n, &place);
-                }
+                self.pulse(frame, &n, &place);
             }
             Inst::Marimba => {
                 let place = self.placement(n.lat, n.lon, 0.2);
@@ -1041,6 +1043,7 @@ impl Engine {
                     },
                     place,
                 );
+                self.voice(frame, &n);
             }
             Inst::QuakeBell => {
                 let place = self.placement(n.lat, n.lon, 0.5);
@@ -1075,8 +1078,12 @@ impl Engine {
                 let i = pick(&mut self.rr[6], self.harp.iter().map(|v| v.is_active()));
                 let mut noise = Noise::new(seed | 1);
                 self.harp[i].excite(n.midi, n.vel * mix.harp, sr, &mut noise, place);
+                self.voice(frame, &n);
             }
-            Inst::Bass => self.bass.start(n.midi, n.vel * mix.bass, dur_s, sr),
+            Inst::Bass => {
+                self.bass.start(n.midi, n.vel * mix.bass, dur_s, sr);
+                self.voice(frame, &n);
+            }
             _ => {
                 let (kind, pan) = match n.inst {
                     Inst::Kick => (DrumKind::Kick, 0.0),
@@ -1128,14 +1135,42 @@ impl Engine {
     /// A sounding event for the map, with how loud it is from here (1 on
     /// the map view).
     fn pulse(&mut self, frame: f64, n: &Note, place: &Placement) {
-        if n.lat.is_finite() {
+        if on_map(n) {
             let g = libm::sqrtf(place.gl * place.gl + place.gr * place.gr).min(1.0);
             let _ = writeln!(
                 self.outbox,
-                r#"{{"t":"pulse","f":{frame:.0},"i":{},"lat":{:.5},"lon":{:.5},"m":{},"g":{g:.2}}}"#,
-                n.inst as u8, n.lat, n.lon, n.midi
+                r#"{{"t":"pulse","f":{frame:.0},"i":{},"lat":{:.5},"lon":{:.5},"m":{},"g":{g:.2},"v":{}}}"#,
+                n.inst as u8, n.lat, n.lon, n.midi, n.variant
             );
         }
+    }
+
+    /// A note the map will show, as soon as it's composed: where, and in how
+    /// many ms from the start of this block it sounds.
+    fn soon(&mut self, n: &Note, now: f64) {
+        let place = self.placement(n.lat, n.lon, 0.3);
+        let g = libm::sqrtf(place.gl * place.gl + place.gr * place.gr).min(1.0);
+        let _ = writeln!(
+            self.outbox,
+            r#"{{"t":"soon","f":{:.0},"i":{},"lat":{:.5},"lon":{:.5},"m":{},"g":{g:.2},"v":{},"in":{:.2}}}"#,
+            self.frame,
+            n.inst as u8,
+            n.lat,
+            n.lon,
+            n.midi,
+            n.variant,
+            (n.at_ms - now).max(0.0)
+        );
+    }
+
+    /// A voice with no one place (the river's bass, the ridge's harp, the
+    /// snow's grains), as it sounds.
+    fn voice(&mut self, frame: f64, n: &Note) {
+        let _ = writeln!(
+            self.outbox,
+            r#"{{"t":"voice","f":{frame:.0},"i":{},"m":{}}}"#,
+            n.inst as u8, n.midi
+        );
     }
 
     fn apply_harmony(
@@ -1437,6 +1472,26 @@ impl Engine {
 
 /// The first free voice, or the next one round-robin (the oldest-ish) to
 /// steal.
+/// Whether the map shows a note: the sounds with a place, once each (a
+/// plane's swell by its first voice, FrontRunner's horn by its first note,
+/// the drums only up a canyon).
+fn on_map(n: &Note) -> bool {
+    n.lat.is_finite()
+        && match n.inst {
+            Inst::Bell | Inst::Marimba | Inst::QuakeBell => true,
+            Inst::Horn => n.variant == 0,
+            Inst::Swell => n.variant & 4 == 0 && n.variant & 1 == 0,
+            Inst::Kick
+            | Inst::Snare
+            | Inst::Rim
+            | Inst::Hat
+            | Inst::Shaker
+            | Inst::Tom
+            | Inst::Crash => n.variant == 1 || n.variant == 4,
+            Inst::Piano | Inst::Grain | Inst::Harp | Inst::Bass => false,
+        }
+}
+
 fn pick(rr: &mut usize, active: impl ExactSizeIterator<Item = bool>) -> usize {
     let len = active.len().max(1);
     let mut free = None;
@@ -1510,5 +1565,62 @@ mod tests {
         e.set_clock(e.frame, l + DELAY_MS);
         let heard = peak(&mut e, 8.0);
         assert!(heard > 0.01, "silent after the clock arrived: peak {heard}");
+    }
+
+    /// A number field of one outbox line (`"key":value`).
+    fn field(line: &str, key: &str) -> Option<f64> {
+        let at = line.find(&format!("\"{key}\":"))? + key.len() + 3;
+        let rest = &line[at..];
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
+        rest[..end].parse().ok()
+    }
+
+    #[test]
+    fn the_map_hears_each_placed_note_before_it_sounds() {
+        let mut e = Engine::new(48_000.0);
+        e.set_day(day(20261029, 20_755.0, 6.0));
+        let l = (20_755.0 * 24.0 + 6.0 + 17.0) * 3_600_000.0; // Oct 29, 5 PM MDT
+        e.set_bikes(
+            (0..12)
+                .map(|k| BikeEvent {
+                    ms: l + 3_000.0 + f64::from(k) * 1_700.0,
+                    lat: 40.76 + 0.01 * k as f32,
+                    lon: -111.89,
+                    delta: -1,
+                    station: k as u16,
+                })
+                .collect(),
+        );
+        e.set_clock(0.0, l + DELAY_MS);
+        e.start();
+        let mut soon = Vec::new();
+        let mut pulses = Vec::new();
+        let mut voices = Vec::new();
+        for _ in 0..(28.0 * 48_000.0 / 128.0) as usize {
+            e.render(128);
+            for line in e.take_outbox().lines() {
+                let get = |k| field(line, k).unwrap_or(f64::NAN);
+                let key = (get("i"), get("m"), get("lat"), get("lon"), get("v"));
+                if line.contains(r#""t":"soon""#) {
+                    soon.push((get("f") + get("in") * 48.0, key));
+                } else if line.contains(r#""t":"pulse""#) {
+                    pulses.push((get("f"), key));
+                } else if line.contains(r#""t":"voice""#) {
+                    voices.push(get("i"));
+                }
+            }
+        }
+        let marimbas = pulses.iter().filter(|p| p.1.0 == 3.0).count();
+        assert!(marimbas >= 4, "only {marimbas} bikes heard");
+        for (f, key) in &pulses {
+            let told = soon.iter().any(|(at, k)| k == key && (at - f).abs() <= 2.0);
+            assert!(told, "a pulse at frame {f} ({key:?}) came unannounced");
+        }
+        assert_eq!(soon.len(), pulses.len(), "announced what never sounded");
+        // The bass walks under the evening's groove, and says so.
+        assert!(
+            voices.contains(&(Inst::Bass as u8 as f64)),
+            "no bass voice in {voices:?}"
+        );
     }
 }

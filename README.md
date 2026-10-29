@@ -178,8 +178,8 @@ Automated tests run only in headless Chrome, so Safari and real phones are check
   synthesized; only the piano is sampled.
 - **Waiting on keys.** The avalanche forecast is tested against its
   documentation only, and stays off until its token is set. UDOT's message
-  signs have given no travel time the parser recognizes yet. UTA's SIRI token
-  is set, but the host UTA documents for it answers with a 404 page.
+  signs have given no travel time the parser recognizes yet. UTA's SIRI API
+  is coded and probed, with no token yet.
 - **iPhones line up by ear.** *Tune to the room* needs the microphone, which
   on iOS drops Web Audio to call volume.
 - **Slow phones drop out.** On an Android phone over Bluetooth, `?debug`

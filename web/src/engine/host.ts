@@ -69,6 +69,27 @@ export interface PulseEvent {
   m: number;
   /** How loud it is from where you're listening, 0–1 (1 on the map). */
   g?: number;
+  /** The note's variant: a bell's line, a plane landing (bit 8), the drums
+   * up a canyon (1) or at avalanche control (4). Newer engines only. */
+  v?: number;
+}
+/** A note the map will show, as soon as it's composed: `in` ms after `at`. */
+export interface SoonEvent {
+  t: "soon";
+  i: number;
+  lat: number;
+  lon: number;
+  m: number;
+  g: number;
+  v: number;
+  in: number;
+}
+/** A voice with no one place sounding: the bass (14), the harp (13), a
+ * snow grain (4). */
+export interface VoiceEvent {
+  t: "voice";
+  i: number;
+  m: number;
 }
 /** The listener moved: where to, and how near each family is from there. */
 export interface VantageEvent {
@@ -108,7 +129,7 @@ export interface DayEvent {
    * clocks fall back. */
   speed?: number;
 }
-export type EngineEvent = (BarEvent | FeatureEvent | PulseEvent | ThemeEvent | PlayEvent | SoloEvent | DayEvent | VantageEvent) & { f: number };
+export type EngineEvent = (BarEvent | FeatureEvent | PulseEvent | SoonEvent | VoiceEvent | ThemeEvent | PlayEvent | SoloEvent | DayEvent | VantageEvent) & { f: number };
 export type Heard<E> = E & { /** performance.now() when it's heard */ at: number };
 
 type Listener = (e: Heard<EngineEvent>) => void;

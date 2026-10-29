@@ -151,6 +151,8 @@ export interface MapBaseOpts {
   height?: number;
   /** Labels for canyons and cities (default true). */
   labels?: boolean;
+  /** Spiral Jetty, or an arrow toward it when it's off the map (default true). */
+  jetty?: boolean;
   title?: string;
 }
 
@@ -280,7 +282,9 @@ export function mapBase(opts: MapBaseOpts = {}): string {
 
   // Spiral Jetty: drawn in place if it's on the map, else an arrow toward it.
   const [jx, jy] = proj.project(SPIRAL_JETTY.lat, SPIRAL_JETTY.lon);
-  if (jx >= 0 && jx <= width && jy >= 0 && jy <= height) {
+  if (opts.jetty === false) {
+    // A close-up map has no room to point the way.
+  } else if (jx >= 0 && jx <= width && jy >= 0 && jy <= height) {
     layers.push(`<path class="map-jetty" d="${spiral(jx, jy, 9 * u)}" fill="none" stroke="${INK}" stroke-width="${n(2.2 * u)}" stroke-linecap="round"/>`);
   } else {
     const x = 14 * u;
