@@ -131,6 +131,9 @@ pub struct Engine {
     mix: Mix,
     mix_target: Mix,
     started: bool,
+    /// Started before the first clock (a phone's context runs only after the
+    /// tap, so START can arrive first): the welcome and the fade wait for it.
+    start_waiting: bool,
     fade_in_at: Option<f64>,
     samples: Vec<PianoSample>,
     tables: SkylineTables,
@@ -202,6 +205,7 @@ impl Engine {
             mix: Mix::default(),
             mix_target: Mix::default(),
             started: false,
+            start_waiting: false,
             fade_in_at: None,
             samples: Vec::new(),
             tables: SkylineTables::fallback(),
@@ -425,7 +429,12 @@ impl Engine {
     /// Small errors slew; a jump of more than half a second re-locates.
     pub fn set_clock(&mut self, frame: f64, utc_ms: f64) {
         match self.clock {
-            None => self.clock = Some((frame, utc_ms)),
+            None => {
+                self.clock = Some((frame, utc_ms));
+                if self.start_waiting {
+                    self.start();
+                }
+            }
             Some((f0, u0)) => {
                 let predicted = u0 + (frame - f0) * 1000.0 / f64::from(self.sr);
                 let err = utc_ms - predicted;
@@ -458,8 +467,10 @@ impl Engine {
     pub fn start(&mut self) {
         self.started = true;
         let Some(l) = self.listening_ms(self.frame) else {
+            self.start_waiting = true;
             return;
         };
+        self.start_waiting = false;
         self.ensure_chain(l);
         if self.cursor.is_none() {
             self.locate(l);
@@ -494,6 +505,7 @@ impl Engine {
     pub fn stop(&mut self) {
         self.master.set_fade(false);
         self.fade_in_at = None;
+        self.start_waiting = false;
     }
 
     /// The key sounding now (the home key before anything is planned).
@@ -1475,5 +1487,28 @@ mod tests {
         // Its anchor is 05:00 MST that day: 12:00 UTC, not 11:00.
         assert_eq!(chain.anchor_ms.rem_euclid(86_400_000.0), 12.0 * 3_600_000.0);
         assert!(chain.anchor_ms <= l && l < chain.end_ms);
+    }
+
+    /// The loudest sample in `seconds` of what the engine plays.
+    fn peak(e: &mut Engine, seconds: f32) -> f32 {
+        let mut peak = 0.0f32;
+        for _ in 0..(seconds * 48_000.0 / 128.0) as usize {
+            peak = e.render(128).iter().fold(peak, |p, x| p.max(x.abs()));
+        }
+        peak
+    }
+
+    #[test]
+    fn started_before_its_first_clock_it_still_plays() {
+        // A phone: the context runs only after the tap, so START reaches the
+        // engine before any clock does.
+        let mut e = Engine::new(48_000.0);
+        e.set_day(day(20261029, 20_755.0, 6.0));
+        let l = (20_755.0 * 24.0 + 6.0 + 7.0) * 3_600_000.0; // Oct 29, 7 AM MDT
+        e.start();
+        assert_eq!(peak(&mut e, 0.5), 0.0, "nothing to play without a clock");
+        e.set_clock(e.frame, l + DELAY_MS);
+        let heard = peak(&mut e, 8.0);
+        assert!(heard > 0.01, "silent after the clock arrived: peak {heard}");
     }
 }

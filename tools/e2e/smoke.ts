@@ -90,6 +90,19 @@ try {
     { name: "desktop", width: 1440, height: 900, mobile: false },
   ]) {
     const page = await browser.newPage();
+    // A phone's audio runs only after the tap; headless Chrome's runs from
+    // the page's load. Hold it until the tap, as a phone does.
+    if (view.mobile) {
+      await page.evaluateOnNewDocument(() => {
+        const AC = window.AudioContext;
+        window.AudioContext = class extends AC {
+          constructor(options?: AudioContextOptions) {
+            super(options);
+            void this.suspend();
+          }
+        };
+      });
+    }
     await page.setViewport({ width: view.width, height: view.height, deviceScaleFactor: 2, isMobile: view.mobile, hasTouch: view.mobile });
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`pageerror: ${e instanceof Error ? e.message : String(e)}`));
@@ -123,6 +136,21 @@ try {
     console.log(`  key "${state.key}" · section "${state.section}" · ${state.trains} trains on the map`);
     for (const c of state.captions) console.log(`  caption: ${c}`);
     if (!state.key) failures.push(`${view.name}: no bar arrived`);
+    // What the engine sends to the speakers, over two seconds.
+    const peak = await page.evaluate(async () => {
+      const a = (window as unknown as { __wasatch: { host: { analyser(n: number): AnalyserNode | null } } }).__wasatch.host.analyser(2048);
+      if (!a) return 0;
+      const buf = new Float32Array(a.fftSize);
+      let p = 0;
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        a.getFloatTimeDomainData(buf);
+        for (const x of buf) p = Math.max(p, Math.abs(x));
+      }
+      return p;
+    });
+    console.log(`  level: ${peak > 0 ? `${(20 * Math.log10(peak)).toFixed(1)} dBFS peak` : "silent"}`);
+    if (!(peak > 0.001)) failures.push(`${view.name}: the engine plays silence`);
     if (state.captions.length === 0) failures.push(`${view.name}: no captions`);
     // Feeds can be down; anything else is a bug.
     const real = errors.filter((e) => !/Failed to load resource|net::|CORS|status of 4|status of 5/.test(e));
