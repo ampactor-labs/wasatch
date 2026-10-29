@@ -143,9 +143,9 @@ export const TOPICS: readonly Topic[] = [
     id: "buses",
     title: "Buses",
     group: "valley",
-    short: "How often UTA's buses stop, minute by minute, sets how busy the groove's hats and shakers are.",
+    short: "How many buses are out against the usual for the hour sets how busy the hats are: a normal hour sits in the middle, a holiday thins them, an unusually busy hour fills them in.",
     more:
-      "A weekday has about 240,000 bus stops. Their rate, against what's usual for the hour, picks how many of sixteen steps the hats and shakers play, spread as evenly as they can be: the same rule that gives the world's traditional rhythms (three in eight is the tresillo). Buses are a groove, never single hits, so rush hour is dense but never a wall. The count of buses out is UTA's own, live; it runs higher than the schedule's “in service” because a bus laying over between trips already carries its next one.",
+      "The conductor counts the buses out every 15 seconds and learns the usual for each hour of a weekday, a Saturday and a Sunday; every 10% above or below usual adds or takes a step of hats from each bar's sixteen, and the timetable's rush leans a step fuller, the small hours a step thinner. Until an hour has been seen three times, the timetable's rate of stops stands in. The hits are spread as evenly as they can be: the same rule that gives the world's traditional rhythms (three in eight is the tresillo). Buses are a groove, never single hits, so rush hour is dense but never a wall. The count of buses out is UTA's own, live; it runs higher than the schedule's “in service” because a bus laying over between trips already carries its next one.",
     plays: "the hats and shakers",
     source: { name: "UTA schedule and realtime", href: "https://www.rideuta.com/Rider-Info/Developer-Resources" },
     now: (c) => {
@@ -501,7 +501,7 @@ export const TOPICS: readonly Topic[] = [
     group: "music",
     short: "Each part of the day has its tempo, 72 BPM at night up to 100 at rush hour, nudged up to 4 BPM by how the buses and trains are moving.",
     more:
-      "The conductor watches the whole fleet's speed against what's usual for that hour of a weekday, a Saturday or a Sunday, and the trains' lateness. Each hour's flow nudges the tempo after it: a valley stuck in traffic holds the music back, a clear one lifts it. The tempo changes only at a section's start, by at most 4 BPM at a time, so the drop from last trains into the night takes four sections.",
+      "The conductor watches the whole fleet's speed against what's usual for that hour of a weekday, a Saturday or a Sunday, and the trains' lateness. Each hour's flow nudges the tempo after it: a valley stuck in traffic holds the music back, a clear one lifts it. The tempo changes only at a section's start, by at most 4 BPM at a time, so the drop from last trains into the night takes four sections. The flow sets the hats' swing too: a valley crawling swings lazier, one flowing plays straighter.",
     now: (c) => {
       if (!c.bar) return null;
       const why = c.bar.tempo === 9 ? " · up: the valley's moving quickly" : c.bar.tempo === 10 ? " · held back: the valley's crawling" : "";

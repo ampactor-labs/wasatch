@@ -197,6 +197,9 @@ export interface SkyHour {
   energy?: number;
   /** Winter, 0–1, worked out from the hour itself. */
   season?: number;
+  /** Buses out against the usual for the hour, frozen by the conductor
+   * (observed): how full the hats are. */
+  busy?: number;
 }
 
 /** The fields added to an hour since the first twelve, in the order the
@@ -215,6 +218,7 @@ export const SKY_MORE = [
   "powder",
   "energy",
   "season",
+  "busy",
 ] as const;
 
 /** SKY: `u32 n`, n hours of `f64 at` and twelve floats, then `u32 k` and k

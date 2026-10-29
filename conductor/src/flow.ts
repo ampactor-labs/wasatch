@@ -4,6 +4,10 @@
 // it a few BPM: a valley stuck in traffic slows the music, a clear one lifts
 // it.
 //
+// The same hour's busyness: how many buses are out against the usual for
+// the hour (holidays, cancellations and added service move it; the
+// timetable alone wouldn't), which sets how full the groove's hats are.
+//
 // The usual is learned as the conductor runs, for each hour of a weekday, a
 // Saturday and a Sunday; until an hour has been seen three times, its flow
 // is the lateness alone. With UDOT's key the minutes on the overhead signs,
@@ -23,7 +27,13 @@ const ALPHA = 0.3;
 interface Usual {
   speed: number;
   n: number;
+  /** Buses out, and how many hours it's learned from (older files lack it). */
+  buses?: number;
+  nb?: number;
 }
+
+/** Fewer buses than this usually out (the small hours) says nothing. */
+const MIN_USUAL_BUSES = 20;
 
 const local = new Intl.DateTimeFormat("en-US", { timeZone: "America/Denver", weekday: "short", hour: "numeric", hourCycle: "h23" });
 
@@ -64,9 +74,10 @@ export class Flow {
   private speeds: number[] = [];
   private lates: number[] = [];
   private incidents: number[] = [];
+  private buses: number[] = [];
   private usual: Record<string, Usual> = {};
   private readonly path: string | null;
-  stats = { hour: null as number | null, speedMs: null as number | null, usualMs: null as number | null, flow: null as number | null };
+  stats = { hour: null as number | null, speedMs: null as number | null, usualMs: null as number | null, flow: null as number | null, busy: null as number | null };
 
   constructor(path: string | null) {
     this.path = path;
@@ -83,15 +94,23 @@ export class Flow {
    * it's the first of a new hour, the hour before closes: returns its flow,
    * for the slot starting now. `signs` is asked then for the hour's pace on
    * the overhead signs (null without UDOT's key or a usual yet). */
-  sample(speeds: number[], lateS: number, now: number, incidents = 0, signs?: (hour: number) => number | null): { slot: number; flow: number } | null {
+  sample(
+    speeds: number[],
+    lateS: number,
+    now: number,
+    incidents = 0,
+    signs?: (hour: number) => number | null,
+    buses: number | null = null,
+  ): { slot: number; flow: number; busy: number | null } | null {
     const hour = Math.floor(now / HOUR) * HOUR;
-    let closed: { slot: number; flow: number } | null = null;
+    let closed: { slot: number; flow: number; busy: number | null } | null = null;
     if (hour !== this.hour) {
       if (this.hour >= 0 && hour - this.hour === HOUR) closed = this.close(hour, signs?.(this.hour) ?? null);
       this.hour = hour;
       this.speeds = [];
       this.lates = [];
       this.incidents = [];
+      this.buses = [];
     }
     const m = movingMedian(speeds);
     if (m !== null) {
@@ -99,10 +118,11 @@ export class Flow {
       this.lates.push(lateS);
       this.incidents.push(incidents);
     }
+    if (buses !== null && Number.isFinite(buses)) this.buses.push(buses);
     return closed;
   }
 
-  private close(slot: number, signs: number | null): { slot: number; flow: number } | null {
+  private close(slot: number, signs: number | null): { slot: number; flow: number; busy: number | null } | null {
     if (this.speeds.length < MIN_SAMPLES) return null;
     const speed = median(this.speeds);
     const late = median(this.lates);
@@ -110,10 +130,22 @@ export class Flow {
     const key = bucket(this.hour);
     const u = this.usual[key];
     const flow = Math.round(flowOf(speed, u && u.n >= 3 ? u.speed : null, late, incidents, signs) * 100) / 100;
-    this.usual[key] = u ? { speed: u.speed + ALPHA * (speed - u.speed), n: u.n + 1 } : { speed, n: 1 };
+    // Buses out against the usual for the hour, once it's been seen three times.
+    const buses = this.buses.length >= MIN_SAMPLES ? median(this.buses) : null;
+    const known = u?.buses !== undefined && (u.nb ?? 0) >= 3 && u.buses >= MIN_USUAL_BUSES;
+    const busy = buses !== null && known ? Math.round((buses / u.buses!) * 100) / 100 : null;
+    const next: Usual = u ? { speed: u.speed + ALPHA * (speed - u.speed), n: u.n + 1 } : { speed, n: 1 };
+    if (buses !== null) {
+      next.buses = u?.buses !== undefined ? u.buses + ALPHA * (buses - u.buses) : buses;
+      next.nb = (u?.nb ?? 0) + 1;
+    } else if (u?.buses !== undefined) {
+      next.buses = u.buses;
+      next.nb = u.nb;
+    }
+    this.usual[key] = next;
     this.save();
-    this.stats = { hour: this.hour, speedMs: Math.round(speed * 100) / 100, usualMs: u ? Math.round(u.speed * 100) / 100 : null, flow };
-    return { slot, flow };
+    this.stats = { hour: this.hour, speedMs: Math.round(speed * 100) / 100, usualMs: u ? Math.round(u.speed * 100) / 100 : null, flow, busy };
+    return { slot, flow, busy };
   }
 
   private save(): void {

@@ -65,6 +65,8 @@ describe("the feed reads like sentences and covers the whole valley", () => {
     expect(card(12)).toBe("Inversion: 6.2 °C warmer aloft, PM2.5 38, a lid on the reverb");
     expect(card(13)).toBe("Jordan River 160 cfs, 82nd percentile: running high, so the bass walks");
     expect(card(14, { v: 171.6 })).toBe("203 buses out, making 172 stops a minute: the hats and shakers");
+    const holiday = featureCaption({ t: "feat", at: 0, k: 14, route: 0, stop: 0, ev: 0, late: 0, obs: 0, v: 171.6 }, schedule, { ...valley, busy: 0.64 }, key);
+    expect(holiday?.text).toBe("203 buses out, 64% of the usual for the hour: the hats thin out");
     expect(card(15, { v: 150 })).toBe("Trains running 3 min late on average: the drums lay back 25 ms");
     expect(card(16, { v: 0.8 })).toBe("Winter Storm Warning for the valley: tension, and fills in the drums");
   });

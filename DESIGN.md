@@ -207,6 +207,20 @@ What's live, and where it differs from the rest of this document:
   airport, frozen for the hour in place of the model's, and the lowdown
   says which). On the map, with the conductor's keys: the air monitors as
   targets colored by the PM2.5 they measured, UDOT's incidents as diamonds.
+- **The hats, against the usual** (Oct 29). The hats had followed the
+  timetable's rate of bus stops, which is flat from 6 AM to 7 PM (about 235
+  a minute) and the same every weekday: they told the time, not the day.
+  Now the conductor counts the buses out every 15 s and learns the usual for
+  each hour of a weekday, a Saturday and a Sunday, as it does the fleet's
+  speed; an hour's buses against that usual (`busy`, frozen for the hour
+  after, a 14th field at the SKY tail) sets the hats: a usual hour in the
+  middle, a step for every 10% either way (a holiday thins them, an
+  unusually busy hour fills them), the timetable's rush and night leaning a
+  step. Until an hour has been seen three times, the timetable's rate
+  stands in. The flow sets the hats' swing: crawling swings lazier,
+  flowing plays straighter. Panning the hats by where the buses are was
+  looked at and left: the timetable puts 55 to 57% of the stops west of Main
+  all day, and the live fleet sat at 58%, so it would be a fixed lean.
 - **Not built yet:** our own ADS-B receiver (adsb.lol stands in), travel
   times on UDOT's signs and canyon traffic (to confirm against the API with
   a key), what the avalanche forecast plays, the resorts' own voices,

@@ -162,7 +162,7 @@ export interface ServiceAlerts {
 
 /** The fields only the conductor knows of an hour: a sealed hour without
  * them takes them from the live sky (they're frozen there, never revised). */
-const CONDUCTOR_FIELDS = ["flow", "pressureTend", "stormMm", "pm25Downtown", "pm25Lake", "lakeFt", "lakeDevFt", "river", "snowpack", "newSnowIn", "powder", "energy"] as const;
+const CONDUCTOR_FIELDS = ["flow", "pressureTend", "stormMm", "pm25Downtown", "pm25Lake", "lakeFt", "lakeDevFt", "river", "snowpack", "newSnowIn", "powder", "energy", "busy"] as const;
 
 /** An hour with its season, worked out from the hour itself: the same on
  * every phone, whenever it posted. */
@@ -510,6 +510,7 @@ export class Valley {
       road: (ms) => this.roadRows.find((r) => r[0] === ms),
       keyed: this.keyed,
       grid: this.grid ? { ...this.grid.value, observed: this.grid.observed, receipt: this.grid.receipt } : undefined,
+      busy: sky?.value.hours.find((h) => h.at === Math.floor((this.now() - 90_000) / 3_600_000) * 3_600_000)?.busy,
     };
   }
 

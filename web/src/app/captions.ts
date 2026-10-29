@@ -148,6 +148,8 @@ export interface ValleyNow {
   wind?: { gustMs: number; observed: number; receipt: Receipt };
   snow?: { newIn: number; observed: number; receipt: Receipt };
   quakes: { originMs: number; mag: number; place: string; depthKm?: number }[];
+  /** Buses out against the usual for this hour (the conductor's), if known. */
+  busy?: number;
   bikeStation(i: number): string;
   /** The loudest station, and its level against a busy day there (0–1). */
   ground?: { station: string; level: number; receipt: Receipt; observed: number };
@@ -348,6 +350,12 @@ export function featureCaption(f: Heard<FeatureEvent>, schedule: Schedule, valle
     case "buses": {
       const perMinute = Math.round(f.v);
       const out = valley.busesOut;
+      // With the conductor's usual for the hour: how busy against it.
+      if (out && valley.busy !== undefined && Number.isFinite(valley.busy)) {
+        const pct = Math.round(valley.busy * 100);
+        const hats = valley.busy >= 1.1 ? "the hats fill in" : valley.busy <= 0.9 ? "the hats thin out" : "the hats sit in the middle";
+        return { ...base, text: `${out.count.toLocaleString("en-US")} buses out, ${pct}% of the usual for the hour: ${hats}`, receipt: "live", observed: out.observed };
+      }
       return out
         ? { ...base, text: `${out.count.toLocaleString("en-US")} buses out, making ${perMinute} stops a minute: the hats and shakers`, receipt: "live", observed: out.observed }
         : { ...base, text: `Buses making ${perMinute} stops a minute: the hats and shakers`, receipt: "scheduled" };

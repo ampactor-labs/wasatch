@@ -226,8 +226,12 @@ every(15_000, "vehicles", async () => {
     Date.now(),
     udot.state.closures,
     (hour) => udot.signs.close(hour),
+    fleet.counts.buses,
   );
-  if (closed && slots.freeze(closed.slot, "flow", closed.flow)) publishSky();
+  if (closed) {
+    const froze = slots.freeze(closed.slot, "flow", closed.flow);
+    if ((closed.busy !== null && slots.freeze(closed.slot, "busy", closed.busy)) || froze) publishSky();
+  }
 });
 every(60_000, "alerts", async () => {
   const res = await fetch(`${UTA}/Alert`, { headers: UA });

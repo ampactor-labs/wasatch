@@ -47,9 +47,11 @@ export interface SlotValues {
   newSnowIn?: number;
   powder?: number;
   energy?: number;
+  /** Buses out against the usual for the hour (the conductor's, observed). */
+  busy?: number;
 }
 
-/** What's laid over the sky's hours as served (everything but `ridgeModel`). */
+/** What's laid over the sky's hours as served (everything but the markers). */
 const FIELDS = [
   "flow",
   "stormMm",
@@ -68,6 +70,7 @@ const FIELDS = [
   "newSnowIn",
   "powder",
   "energy",
+  "busy",
 ] as const;
 
 /** The fields that stand for a measurement, for the receipts. */

@@ -1054,13 +1054,31 @@ pub fn compose(
             ));
         }
         if sec.kind != SectionKind::Atmosphere {
-            // Hats from the bus rate.
+            // Hats: how busy the buses are against the usual for the hour
+            // (the conductor's count of buses out, frozen for the hour). A
+            // usual hour sits in the middle, a busy one fills in, a quiet
+            // one (a holiday, cancellations) thins out, a step for every
+            // 10%; the timetable's own rush and night lean it a step either
+            // way. Without the count, the timetable's rate alone.
             let rate = valley.schedule.bus_rate(start + bar_ms * 0.5);
-            let a = (rate / 240.0).min(1.2);
+            let hour = valley.sky.at_or_default(start);
             let ks = [0u32, 3, 5, 7, 9, 11, 13];
-            let k = ks[((a * 6.0).round() as usize).min(6)];
+            let idx = if hour.busy.is_finite() {
+                let lean = ((rate / 240.0 - 0.6) * 2.5).clamp(-1.0, 1.0);
+                let unusual = ((hour.busy - 1.0) / 0.1).clamp(-3.0, 3.0);
+                (3.0 + lean + unusual).round().clamp(1.0, 6.0) as usize
+            } else {
+                let a = (rate / 240.0).min(1.2);
+                ((a * 6.0).round() as usize).min(6)
+            };
+            let k = ks[idx];
             let pattern = euclid(k, 16, phrase % 4);
-            let swing = if activity > 0.75 { 0.12 } else { 0.05 } * step_ms;
+            // Swing from the traffic: a valley crawling swings lazier, one
+            // flowing plays straighter; a busy groove leans in a little.
+            let flow = hour.flow_or_usual();
+            let swing = f64::from(
+                (0.07 - 0.07 * flow + if activity > 0.75 { 0.03 } else { 0.0 }).clamp(0.0, 0.17),
+            ) * step_ms;
             for s in 0..16u32 {
                 if pattern & (1 << s) != 0 {
                     let off = if s % 2 == 1 { swing } else { 0.0 };
@@ -3065,5 +3083,74 @@ mod tests {
         );
         assert!(deep.1 > mid.1 && mid.1 > shallow.1);
         assert_eq!(unknown, mid, "an unknown depth rings as before");
+    }
+
+    /// The hats in a busy groove's bars, with the sky's hours edited.
+    fn hats_with(edit: impl Fn(&mut crate::plan::SkyHour)) -> (usize, f64) {
+        let (schedule, network) = valley_fixture();
+        let chain = fixture_chain(&schedule);
+        let sky = sky_with(&schedule, edit);
+        let slow = Slow::default();
+        let valley = Valley::quiet(&schedule, &network, &sky, &slow);
+        let sec = chain
+            .sections
+            .iter()
+            .find(|s| s.kind == SectionKind::Groove && s.activity > 0.5)
+            .expect("a busy groove");
+        let mut st = ComposeState::default();
+        let mut count = 0;
+        // How far past its step each hat lands, on-beat and off-beat: the
+        // swing is how much later the off-beats are.
+        let (mut on, mut off) = (Vec::new(), Vec::new());
+        let step_ms = sec.bar_ms() / 16.0;
+        for b in 0..sec.bars() {
+            let mut bar = Bar::default();
+            compose(sec, b, &valley, &mut st, &mut bar);
+            for n in bar.notes.iter().filter(|n| n.inst == Inst::Hat) {
+                count += 1;
+                let pos = (n.at_ms - bar.start_ms) / step_ms;
+                let step = (pos + 1e-6).floor();
+                let past = (pos - step) * step_ms;
+                if step as i64 % 2 == 1 {
+                    off.push(past)
+                } else {
+                    on.push(past)
+                }
+            }
+        }
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+        (count, mean(&off) - mean(&on))
+    }
+
+    #[test]
+    fn the_hats_follow_how_busy_the_buses_are_against_the_usual() {
+        let usual = hats_with(|h| h.busy = 1.0).0;
+        let busy = hats_with(|h| h.busy = 1.25).0;
+        let holiday = hats_with(|h| h.busy = 0.65).0;
+        assert!(
+            busy > usual && usual > holiday,
+            "hats: {holiday} holiday, {usual} usual, {busy} busy"
+        );
+        // Unknown (no conductor, or an hour not learned yet): the timetable's
+        // rate, as before.
+        assert!(hats_with(|_| {}).0 > 0);
+    }
+
+    #[test]
+    fn traffic_sets_the_swing() {
+        let crawling = hats_with(|h| {
+            h.busy = 1.0;
+            h.flow = -0.85;
+        })
+        .1;
+        let flowing = hats_with(|h| {
+            h.busy = 1.0;
+            h.flow = 0.85;
+        })
+        .1;
+        assert!(
+            crawling > 2.0 * flowing,
+            "swing: {crawling:.1} ms crawling, {flowing:.1} ms flowing"
+        );
     }
 }

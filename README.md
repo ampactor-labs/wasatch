@@ -41,8 +41,8 @@ is in right now. Then the live piece fades in under it:
 |---|---|
 | A TRAX train leaves a station | A bell on its line's chord tone (Blue root, Red fifth, Green third) |
 | FrontRunner at Salt Lake Central | A horn in the rhythm of a grade crossing, and the phrase it arrives in comes home |
-| Buses everywhere | The groove's density: hats and shakers in Euclidean patterns |
-| The buses and trains stuck in traffic, or flying | The tempo, a few BPM either way |
+| Buses out, against the usual for the hour | How full the hats are: thin on a holiday, full on an unusually busy day |
+| The buses and trains stuck in traffic, or flying | The tempo, a few BPM either way, and the hats' swing |
 | A UTA service alert | A drum fill into the next phrase; one on the trains holds the tension up |
 | A plane taking off from SLC, or coming in to land | A slow swell of brass and strings from where it is in the sky |
 | The Jordan and Little Cottonwood Creek against the usual for the date | The bass: a held root when they're low, a walk when they're high, eighths in a flood |

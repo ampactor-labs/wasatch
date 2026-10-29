@@ -58,6 +58,22 @@ test("an hour's flow is given for the slot after it, once its samples are in", (
   assert.doesNotThrow(() => new Flow(path));
 });
 
+test("an hour's busyness: buses out against the usual for the hour", () => {
+  const h0 = Date.parse("2026-11-03T15:00:00Z"); // Tuesdays, 8 AM
+  const speeds = Array.from({ length: 40 }, () => 8);
+  const flow = new Flow(null);
+  const busy: (number | null)[] = [];
+  for (let week = 0; week < 4; week++) {
+    const h = h0 + week * 7 * 24 * HOUR;
+    for (let s = 0; s < 240; s++) flow.sample(speeds, 45, h + s * 15_000, 0, undefined, week < 3 ? 300 : 240);
+    busy.push(flow.sample(speeds, 45, h + HOUR)?.busy ?? null);
+    flow.sample([], 0, h + 5 * HOUR);
+  }
+  // Unknown until the hour has been seen three times; then a holiday's
+  // fewer buses read as quieter than usual.
+  assert.deepEqual(busy, [null, null, null, 0.8]);
+});
+
 test("a slot is frozen once and survives a restart", () => {
   const dir = mkdtempSync(join(tmpdir(), "wasatch-slots-"));
   const path = join(dir, "slots.json");

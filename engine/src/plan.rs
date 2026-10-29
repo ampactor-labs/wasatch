@@ -158,6 +158,9 @@ pub struct SkyHour {
     /// Winter, 0–1, for the hour (the page works it out from the hour
     /// itself, so it's the same everywhere).
     pub season: f32,
+    /// Buses out against the usual for the hour (1 usual; NaN unknown).
+    /// Observed, by the conductor: how full the hats are.
+    pub busy: f32,
 }
 
 impl Default for SkyHour {
@@ -188,6 +191,7 @@ impl Default for SkyHour {
             powder: f32::NAN,
             energy: f32::NAN,
             season: f32::NAN,
+            busy: f32::NAN,
         }
     }
 }
