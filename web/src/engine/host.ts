@@ -308,7 +308,8 @@ export class Host {
 
   /** The tap: resume audio (as "playback" on iOS, so the Silent switch and the
    * lock screen don't stop it), start the engine, and keep a media element
-   * playing for lock-screen controls. */
+   * playing for lock-screen controls. (The page itself pauses when it's
+   * left, the screen going off included: main.ts.) */
   async start(keepaliveUrl: string): Promise<void> {
     // All of this runs synchronously inside the tap, before any await.
     const nav = navigator as Navigator & { audioSession?: { type: string } };

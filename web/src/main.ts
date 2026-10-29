@@ -202,6 +202,23 @@ async function main(): Promise<void> {
       s.setPaused(paused || !running);
       if ("mediaSession" in navigator) navigator.mediaSession.playbackState = paused || !running ? "paused" : "playing";
     });
+    // Leaving the page (another app, the home screen, another tab, the
+    // screen going off) pauses the music; coming back picks it up again if
+    // it was playing when you left. A pause you made stays paused.
+    let leftPlaying = false;
+    const leave = () => {
+      if (paused || leftPlaying) return;
+      leftPlaying = true;
+      void setPlaying(false);
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") leave();
+      else if (leftPlaying) {
+        leftPlaying = false;
+        if (paused) void setPlaying(true);
+      }
+    });
+    window.addEventListener("pagehide", leave);
     // A context that doesn't start within a few seconds of the tap (a
     // browser that blocked it): show play, so the next tap starts it.
     window.setTimeout(() => {

@@ -163,6 +163,13 @@ What's live, and where it differs from the rest of this document:
   stays for a minute, and the bass, harp, snow and the lake's drone light
   at their homes (the two river gauges, the ridge, Alta, the lake). The
   outbox only grew; an older page ignores the new events.
+- **Leaving pauses it** (Oct 29). The owner asked that the music stop when
+  the page is left: another app, the home screen, another tab. A page can't
+  tell that from the screen going off, so locking the phone pauses it too,
+  and the background listening above (a kitchen, a car with the screen off)
+  isn't available. Coming back plays again if it was playing when you left;
+  a pause you made stays. The smoke test leaves and comes back on both
+  views.
 - **Not built yet:** our own ADS-B receiver (adsb.lol stands in), travel
   times on UDOT's signs and canyon traffic (to confirm against the API with
   a key), what the avalanche forecast plays, the resorts' own voices,

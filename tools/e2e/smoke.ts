@@ -151,6 +151,21 @@ try {
     });
     console.log(`  level: ${peak > 0 ? `${(20 * Math.log10(peak)).toFixed(1)} dBFS peak` : "silent"}`);
     if (!(peak > 0.001)) failures.push(`${view.name}: the engine plays silence`);
+    // Leaving the page pauses the music; coming back plays it again.
+    const away = async (hidden: boolean) => {
+      await page.evaluate((h) => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (h ? "hidden" : "visible") });
+        Object.defineProperty(document, "hidden", { configurable: true, get: () => h });
+        document.dispatchEvent(new Event("visibilitychange"));
+      }, hidden);
+      await new Promise((r) => setTimeout(r, 800));
+      return page.evaluate(() => (window as unknown as { __wasatch: { state: string } }).__wasatch.state);
+    };
+    const gone = await away(true);
+    const back = await away(false);
+    console.log(`  away: ${gone}, back: ${back}`);
+    if (gone !== "suspended") failures.push(`${view.name}: leaving the page left the music ${gone}`);
+    if (back !== "running") failures.push(`${view.name}: coming back left the music ${back}`);
     if (state.captions.length === 0) failures.push(`${view.name}: no captions`);
     // Feeds can be down; anything else is a bug.
     const real = errors.filter((e) => !/Failed to load resource|net::|CORS|status of 4|status of 5/.test(e));
