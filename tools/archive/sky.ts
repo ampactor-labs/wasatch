@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { fetchSkyModels, fetchSkyRaw, obsFromMetar, skyFrom, type Metar } from "../../web/src/data/feeds.ts";
 import { fetchIemMetars } from "./iem.ts";
 import type { SkyHour } from "../../web/src/engine/protocol.ts";
+import { previousFile } from "../previous.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const HOUR = 3_600_000;
@@ -53,19 +54,6 @@ export interface SkyFile {
 /** The hours that belong to a service day starting at `t0`. */
 export function dayHours(hours: SkyHour[], t0: number): SkyHour[] {
   return hours.filter((h) => h.at >= t0 - BEFORE && h.at < t0 + AFTER);
-}
-
-async function previousFile(src: string, name: string): Promise<string | null> {
-  try {
-    if (/^https?:/.test(src)) {
-      const res = await fetch(`${src.replace(/\/$/, "")}/${name}`, { cache: "no-store" });
-      return res.ok ? await res.text() : null;
-    }
-    const path = join(src, name);
-    return existsSync(path) ? readFileSync(path, "utf8") : null;
-  } catch {
-    return null;
-  }
 }
 
 /** The conductor's frozen hours since `from`, by hour; empty if it can't be

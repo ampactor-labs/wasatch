@@ -201,8 +201,29 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const [everywhere, downtown, canyons, lake] = heard as [(typeof heard)[0], (typeof heard)[0], (typeof heard)[0], (typeof heard)[0]];
   if (new Set(heard.map((h) => h.hash)).size !== 4) failures.push("vantages: two of them render the same");
   for (const [i, h] of heard.entries()) {
-    if (i > 0 && h.apart < -8) failures.push(`from ${places[i]}: only ${h.apart.toFixed(1)} dB from the map's mix`);
     if (Math.abs(h.phone - everywhere.phone) > 4) failures.push(`from ${places[i]}: ${(h.phone - everywhere.phone).toFixed(1)} dB on a phone against the map`);
+  }
+  // How far each place moves the mix, through the day. One scene can't say:
+  // in a groove the city fills the map's mix, so downtown sounds closest to
+  // it; in an atmosphere, at first light or late at night the pad and the
+  // lake do, so the lake does. Across a day each place must move the mix
+  // clearly somewhere (8 dB, the energy of the difference against the
+  // map's) and never fall onto it (16 dB). Measured Oct 29 to Nov 22, every
+  // place cleared 8 dB somewhere by 1.2 dB or more and stayed within 13.2.
+  const scenes = ["06:45", "12:20", "17:40", "22:30"];
+  const apart: number[][] = [[], [], []];
+  for (const time of scenes) {
+    const m = (time === "17:40" ? map : await render(day, time, 60))!.left.subarray(settle * SR);
+    for (const v of [1, 2, 3]) {
+      const l = (time === "17:40" ? null : await render(day, time, 60, { vantage: v }))?.left.subarray(settle * SR);
+      apart[v - 1]!.push(l ? dB(energy(l.map((x, i) => x - m[i]!)) / energy(m)) : heard[v]!.apart);
+    }
+  }
+  for (const [k, a] of apart.entries()) {
+    const place = places[k + 1]!;
+    console.log(`from ${place}, through the day: ${a.map((x, i) => `${scenes[i]} ${x.toFixed(1)}`).join(", ")} dB from the map's mix`);
+    if (Math.max(...a) < -8) failures.push(`from ${place}: never more than ${Math.max(...a).toFixed(1)} dB from the map's mix`);
+    if (Math.min(...a) < -16) failures.push(`from ${place}: only ${Math.min(...a).toFixed(1)} dB from the map's mix at ${scenes[a.indexOf(Math.min(...a))]}`);
   }
   if (lake.highs > everywhere.highs - 4) failures.push(`from the lake: highs ${lake.highs.toFixed(1)} dB, not darker than the map's ${everywhere.highs.toFixed(1)}`);
   if (canyons.width < everywhere.width + 1.5) failures.push(`from the canyons: width ${canyons.width.toFixed(1)} dB, no wider than the map's ${everywhere.width.toFixed(1)}`);

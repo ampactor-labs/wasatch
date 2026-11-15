@@ -140,6 +140,14 @@ paths); the push that carried the Oct 28 work deployed them.
 - The Railway CLI (5.71) quirks: `volume add` panics (use GraphQL
   `volumeCreate`), `restart` never returns (bound it), `environment edit
   --json` reads stdin.
+- The daily Pages build carries every archived day and sky forward by
+  downloading them from the live site (a couple of hundred files), and fails
+  rather than deploy a manifest with one missing; `tools/previous.ts` tries
+  each four times with backoff (Nov 14: one blip had failed the build).
+- `tools/render/check.ts` renders the current day, so it changes with the
+  calendar. Its vantage check reads each place across four scenes of the
+  day (one scene's section can put any place close to the map's mix); keep
+  any new check robust to the day it's run on.
 - Hosted Pages fetches `/slots.json` from the conductor when sealing a day
   (`tools/archive/sky.ts`); if the conductor is down that day's seal goes
   without the frozen fields and phones take them from the live sky.

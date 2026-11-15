@@ -40,6 +40,7 @@ import {
   type CalendarException,
   type CalendarRow,
 } from "./util.ts";
+import { previousFile } from "../previous.ts";
 
 const FEED_URL = "https://gtfsfeed.rideuta.com/GTFS.zip";
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -84,20 +85,6 @@ interface PreviousManifest {
   t0: Record<string, number>;
   sky?: Record<string, string>;
   rebuilt?: string[];
-}
-
-/** Read a file of the previous build, from a directory or a URL. */
-async function previousFile(src: string, name: string): Promise<string | null> {
-  try {
-    if (/^https?:/.test(src)) {
-      const res = await fetch(`${src.replace(/\/$/, "")}/${name}`, { cache: "no-store" });
-      return res.ok ? await res.text() : null;
-    }
-    const path = join(src, name);
-    return existsSync(path) ? readFileSync(path, "utf8") : null;
-  } catch {
-    return null;
-  }
 }
 
 function parseArgs(argv: string[]): Args {
