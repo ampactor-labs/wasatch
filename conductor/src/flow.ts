@@ -13,7 +13,9 @@
 // is the lateness alone. With UDOT's key the minutes on the overhead signs,
 // against their own usual (udot.ts), share the pace with the fleet.
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { bucket, isException, localDate, seed, Usuals } from "./usual.ts";
+
+export { bucket };
 
 const HOUR = 3_600_000;
 /** A vehicle slower than this is stopped (at a stop, a light, a layover). */
@@ -21,28 +23,11 @@ export const MOVING_MS = 0.5;
 /** Too few out (the small hours) says nothing about traffic. */
 const MIN_MOVING = 10;
 const MIN_SAMPLES = 15;
-/** How fast the usual learns. */
-const ALPHA = 0.3;
-
-interface Usual {
-  speed: number;
-  n: number;
-  /** Buses out, and how many hours it's learned from (older files lack it). */
-  buses?: number;
-  nb?: number;
-}
-
+/** The trains' median lateness on an ordinary hour, before the conductor
+ * has learned the hour's own (live medians ran 108–193 s by line, Nov 2026). */
+export const USUAL_LATE_S = 120;
 /** Fewer buses than this usually out (the small hours) says nothing. */
 const MIN_USUAL_BUSES = 20;
-
-const local = new Intl.DateTimeFormat("en-US", { timeZone: "America/Denver", weekday: "short", hour: "numeric", hourCycle: "h23" });
-
-/** Which usual an hour is compared with: "weekday-8", "sat-8", "sun-8". */
-export function bucket(ms: number): string {
-  const parts = Object.fromEntries(local.formatToParts(new Date(ms)).map((p) => [p.type, p.value]));
-  const day = parts.weekday === "Sat" ? "sat" : parts.weekday === "Sun" ? "sun" : "weekday";
-  return `${day}-${Number(parts.hour)}`;
-}
 
 /** The median of the vehicles moving, m/s; null with too few moving. */
 export function movingMedian(speeds: number[]): number | null {
@@ -58,8 +43,10 @@ const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x
  * (with UDOT's key) the crashes and closures standing on the highways and
  * the minutes on the overhead signs against their usual (`signs`, −1…1,
  * null without): the fleet's pace and the signs' share the pace. */
-export function flowOf(speed: number, usual: number | null, lateS: number, incidents = 0, signs: number | null = null): number {
-  const late = clamp(-(lateS - 60) / 240, -1, 0.25);
+export function flowOf(speed: number, usual: number | null, lateS: number, incidents = 0, signs: number | null = null, usualLateS: number | null = null): number {
+  // Lateness against what's usual for the hour (UTA's trains run about two
+  // minutes behind on an ordinary day), not against the timetable.
+  const late = clamp(-(lateS - (usualLateS ?? USUAL_LATE_S)) / 240, -1, 0.25);
   const blocked = 0.1 * Math.min(3, incidents);
   const paces: number[] = [];
   if (usual !== null) paces.push(clamp((speed / usual - 1) / 0.12, -1, 1));
@@ -75,18 +62,24 @@ export class Flow {
   private lates: number[] = [];
   private incidents: number[] = [];
   private buses: number[] = [];
-  private usual: Record<string, Usual> = {};
-  private readonly path: string | null;
+  private readonly usual: Usuals;
+  /** The schedule's service set per date, to spot holidays (set by the
+   * server from the manifest). */
+  days: Record<string, string> = {};
   stats = { hour: null as number | null, speedMs: null as number | null, usualMs: null as number | null, flow: null as number | null, busy: null as number | null };
 
   constructor(path: string | null) {
-    this.path = path;
-    if (!path || !existsSync(path)) return;
-    try {
-      this.usual = JSON.parse(readFileSync(path, "utf8")) as Record<string, Usual>;
-    } catch {
-      // Unreadable: learn it again.
-    }
+    // Older files kept a running average per bucket: { speed, n, buses, nb }.
+    this.usual = new Usuals(path, (old) => {
+      const out: Record<string, Record<string, number[]>> = { speed: {}, buses: {} };
+      for (const [b, u] of Object.entries(old as Record<string, { speed?: number; n?: number; buses?: number; nb?: number }>)) {
+        const sp = seed(u.speed, u.n);
+        const bu = seed(u.buses, u.nb);
+        if (sp) out.speed![b] = sp;
+        if (bu) out.buses![b] = bu;
+      }
+      return out;
+    });
   }
 
   /** A look at the fleet at `now`: its vehicles' speeds (m/s), the trains'
@@ -127,34 +120,20 @@ export class Flow {
     const speed = median(this.speeds);
     const late = median(this.lates);
     const incidents = median(this.incidents);
-    const key = bucket(this.hour);
-    const u = this.usual[key];
-    const flow = Math.round(flowOf(speed, u && u.n >= 3 ? u.speed : null, late, incidents, signs) * 100) / 100;
+    const b = bucket(this.hour);
+    const usualSpeed = this.usual.get("speed", b);
+    const flow = Math.round(flowOf(speed, usualSpeed, late, incidents, signs, this.usual.get("late", b)) * 100) / 100;
     // Buses out against the usual for the hour, once it's been seen three times.
     const buses = this.buses.length >= MIN_SAMPLES ? median(this.buses) : null;
-    const known = u?.buses !== undefined && (u.nb ?? 0) >= 3 && u.buses >= MIN_USUAL_BUSES;
-    const busy = buses !== null && known ? Math.round((buses / u.buses!) * 100) / 100 : null;
-    const next: Usual = u ? { speed: u.speed + ALPHA * (speed - u.speed), n: u.n + 1 } : { speed, n: 1 };
-    if (buses !== null) {
-      next.buses = u?.buses !== undefined ? u.buses + ALPHA * (buses - u.buses) : buses;
-      next.nb = (u?.nb ?? 0) + 1;
-    } else if (u?.buses !== undefined) {
-      next.buses = u.buses;
-      next.nb = u.nb;
-    }
-    this.usual[key] = next;
-    this.save();
-    this.stats = { hour: this.hour, speedMs: Math.round(speed * 100) / 100, usualMs: u ? Math.round(u.speed * 100) / 100 : null, flow, busy };
+    const usualBuses = this.usual.get("buses", b);
+    const busy = buses !== null && usualBuses !== null && usualBuses >= MIN_USUAL_BUSES ? Math.round((buses / usualBuses) * 100) / 100 : null;
+    // A holiday is heard against the usual (thin) but doesn't teach it.
+    const exception = isException(localDate(this.hour), this.days);
+    this.usual.learn("speed", b, speed, exception);
+    this.usual.learn("late", b, late, exception);
+    if (buses !== null) this.usual.learn("buses", b, buses, exception);
+    this.usual.save();
+    this.stats = { hour: this.hour, speedMs: Math.round(speed * 100) / 100, usualMs: usualSpeed === null ? null : Math.round(usualSpeed * 100) / 100, flow, busy };
     return { slot, flow, busy };
-  }
-
-  private save(): void {
-    if (!this.path) return;
-    try {
-      writeFileSync(`${this.path}.tmp`, JSON.stringify(this.usual));
-      renameSync(`${this.path}.tmp`, this.path);
-    } catch {
-      // Kept in memory.
-    }
   }
 }

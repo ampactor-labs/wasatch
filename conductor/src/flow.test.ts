@@ -28,10 +28,13 @@ test("flow: the signs' pace shares the pace with the fleet's", () => {
 test("flow: pace against the usual, and lateness", () => {
   assert.equal(movingMedian([0, 0, 0.2, 5, 6, 7]), null, "too few moving");
   assert.equal(movingMedian([0, 0, ...Array.from({ length: 11 }, (_, i) => 4 + i)]), 9);
-  assert.equal(flowOf(8, 8, 30), 0.65 * 0 + 0.35 * 0.125);
-  assert.equal(flowOf(8, null, 300), -1, "without a usual, lateness alone");
-  assert.ok(flowOf(6.5, 8, 200) < -0.8, "a slow, late hour");
-  assert.ok(flowOf(6.4, 8, 45) < -0.6, "a slow one");
+  // Lateness is against UTA's ordinary two minutes, or the hour's own usual.
+  assert.equal(flowOf(8, 8, 120), 0);
+  assert.equal(flowOf(8, 8, 60), 0.65 * 0 + 0.35 * 0.25);
+  assert.equal(flowOf(8, 8, 200, 0, null, 200), 0, "late as usual for the hour is no news");
+  assert.equal(flowOf(8, null, 360), -1, "without a usual, lateness alone");
+  assert.ok(flowOf(6.5, 8, 300) < -0.8, "a slow, late hour");
+  assert.ok(flowOf(6.4, 8, 120) < -0.6, "a slow one, on its usual time");
   assert.ok(flowOf(9.5, 8, 0) > 0.7, "a quick one");
 });
 
@@ -50,7 +53,7 @@ test("an hour's flow is given for the slot after it, once its samples are in", (
     const out = flow.sample(speeds(8), 45, h + HOUR);
     assert.equal(out?.slot, h + HOUR);
     if (week < 3) assert.equal(out?.flow, Math.round(flowOf(8, null, 45) * 100) / 100);
-    else assert.equal(out?.flow, Math.round(flowOf(6.4, 8, 45) * 100) / 100);
+    else assert.equal(out?.flow, Math.round(flowOf(6.4, 8, 45, 0, null, 45) * 100) / 100);
     // The next hour starts over; a gap of hours closes nothing.
     flow.sample([], 0, h + 5 * HOUR);
   }

@@ -201,6 +201,9 @@ function publishSlow(): void {
 
 every(60 * 60_000, "schedule", async () => {
   await transit.load(Date.now());
+  // Holidays (a weekday on a weekend's schedule) don't teach the usuals.
+  flow.days = transit.days;
+  udot.signs.days = transit.days;
   alerts.setRoutes((await readSchedule<{ routes: RouteInfo[] }>(SCHEDULE, "routes.json")).routes);
 });
 every(10_000, "transit", async () => {

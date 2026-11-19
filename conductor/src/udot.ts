@@ -19,8 +19,7 @@
 // https://udottraffic.utah.gov/developers/doc (fields as documented there,
 // Oct 2026): ten calls a minute are allowed; this makes about two and a half.
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { bucket } from "./flow.ts";
+import { bucket, isException, localDate, seed, Usuals } from "./usual.ts";
 
 const BASE = "https://www.udottraffic.utah.gov/api";
 const UA = { "User-Agent": "wasatch-symphony conductor (github.com/ampactor-labs/wasatch)" };
@@ -235,13 +234,6 @@ export function parseSigns(body: unknown): SignTime[] {
   });
 }
 
-interface Usual {
-  min: number;
-  n: number;
-}
-
-/** How fast the usual learns. */
-const ALPHA = 0.3;
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 
@@ -251,8 +243,9 @@ const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x
  * signs' paces, −1 (twice the usual minutes or worse) to 1; it joins the
  * fleet's speed in the flow. */
 export class Signs {
-  private readonly path: string | null;
-  private usual: Record<string, Record<string, Usual>> = {};
+  private readonly usual: Usuals;
+  /** The schedule's service set per date, to spot holidays. */
+  days: Record<string, string> = {};
   /** This hour's samples by key, and which hour they're for. */
   private hour = -1;
   private samples = new Map<string, number[]>();
@@ -260,20 +253,24 @@ export class Signs {
   stats = { signs: 0, places: 0, pace: null as number | null };
 
   constructor(path: string | null) {
-    this.path = path;
-    if (!path || !existsSync(path)) return;
-    try {
-      this.usual = JSON.parse(readFileSync(path, "utf8")) as Record<string, Record<string, Usual>>;
-    } catch {
-      // Unreadable: learn it again.
-    }
+    // Older files kept a running average: { key: { bucket: { min, n } } }.
+    this.usual = new Usuals(path, (old) => {
+      const out: Record<string, Record<string, number[]>> = {};
+      for (const [key, buckets] of Object.entries(old as Record<string, Record<string, { min?: number; n?: number }>>)) {
+        for (const [b, u] of Object.entries(buckets)) {
+          const xs = seed(u.min, u.n);
+          if (xs) (out[key] ??= {})[b] = xs;
+        }
+      }
+      return out;
+    });
   }
 
   /** The usual minutes for `key` in the bucket of `ms`, once it's been seen
    * three times. */
   usualFor(key: string, ms: number): number | null {
-    const u = this.usual[key]?.[bucket(ms)];
-    return u && u.n >= 3 ? Math.round(u.min * 10) / 10 : null;
+    const u = this.usual.get(key, bucket(ms));
+    return u === null ? null : Math.round(u * 10) / 10;
   }
 
   /** A read of the signs at `now`. */
@@ -294,16 +291,15 @@ export class Signs {
   close(hour: number): number | null {
     if (hour !== this.hour || !this.samples.size) return null;
     const paces: number[] = [];
+    const exception = isException(localDate(hour), this.days);
     for (const [key, minutes] of this.samples) {
       const m = median(minutes);
       const u = this.usualFor(key, hour);
       if (u !== null && u > 0) paces.push(clamp((u / m - 1) / 0.12, -1, 1));
-      const b = bucket(hour);
-      const was = this.usual[key]?.[b];
-      (this.usual[key] ??= {})[b] = was ? { min: was.min + ALPHA * (m - was.min), n: was.n + 1 } : { min: m, n: 1 };
+      this.usual.learn(key, bucket(hour), m, exception);
     }
     this.samples = new Map();
-    this.save();
+    this.usual.save();
     const pace = paces.length ? Math.round(median(paces) * 100) / 100 : null;
     this.stats.pace = pace;
     return pace;
@@ -314,15 +310,6 @@ export class Signs {
     return this.latest.map((t) => ({ name: t.name, roadway: t.roadway, to: t.to, minutes: t.minutes, usual: this.usualFor(t.key, now) }));
   }
 
-  private save(): void {
-    if (!this.path) return;
-    try {
-      writeFileSync(`${this.path}.tmp`, JSON.stringify(this.usual));
-      renameSync(`${this.path}.tmp`, this.path);
-    } catch {
-      // Kept in memory.
-    }
-  }
 }
 
 // --- The roads' forecast -----------------------------------------------------

@@ -78,6 +78,8 @@ export class Transit {
   /** Departures settled since the last call to `drain`. */
   private settled: RailRow[] = [];
   stats = { trips: 0, tracked: 0, settled: 0, medianLateS: 0 };
+  /** Each date's service-set key, from the manifest (to spot holidays). */
+  days: Record<string, string> = {};
   private recentLate: number[] = [];
   /** FrontRunner's route index and Salt Lake Central's stop index, from
    * the network (−1 until it's read). */
@@ -96,6 +98,7 @@ export class Transit {
   /** Load the service days around `now` (again when the date turns). */
   async load(now: number): Promise<void> {
     const manifest = await this.read<Manifest>("manifest.json");
+    this.days = manifest.days;
     const dates = Object.entries(manifest.t0)
       .filter(([, t0]) => now >= t0 - 3_600_000 && now < t0 + 31 * 3_600_000)
       .map(([d]) => d);
