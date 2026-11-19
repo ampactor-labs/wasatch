@@ -77,12 +77,40 @@ export function canyonOf(roadway: string): 0 | 1 | 2 {
   return 0;
 }
 
-/** The highways whose incidents the valley feels. */
-const HIGHWAY = /\b(I-?15|I-?80|I-?215|SR-?201|US-?89|BANGERTER|SR-?154|MOUNTAIN VIEW|SR-?85|LEGACY|SR-?67)\b/i;
+/** A roadway's name in one spelling: UDOT writes "SR 201", "SR-201",
+ * "UT-201", "I 15", "I-15 NB" and "Interstate 15" in the same API. Upper
+ * case, "SR-201"/"I-15"/"US-89" with a hyphen, direction suffixes dropped. */
+export function roadwayKey(roadway: string): string {
+  return roadway
+    .toUpperCase()
+    .replace(/\bINTERSTATE\s*/g, "I-")
+    .replace(/\b(STATE ROUTE|STATE ROAD|HWY|HIGHWAY)\s*(?=\d)/g, "SR-")
+    .replace(/\b(I|SR|UT|US)\s*-?\s*(\d+)/g, (_m, kind: string, n: string) => `${kind === "UT" ? "SR" : kind}-${n}`)
+    .replace(/\b(NB|SB|EB|WB|NORTHBOUND|SOUTHBOUND|EASTBOUND|WESTBOUND)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** The highways whose incidents the valley feels (on `roadwayKey`s). */
+const HIGHWAY = /\b(I-15|I-80|I-215|SR-201|US-89|BANGERTER|SR-154|MOUNTAIN VIEW|SR-85|LEGACY|SR-67)\b/;
+/** A notice of chains or traction devices, not a crash: it plays as the
+ * canyon's brass pedal (road conditions), not as an incident. */
+const RESTRICTION = /restriction|traction|chain|tire|4x4|four.?wheel/i;
+/** A crash that UDOT hasn't touched in this long has cleared (some are
+ * left standing for days). */
+const STALE_MS = 6 * HOUR;
 
 export interface UdotEvent {
   id: string;
   type: string;
+  /** UDOT's category and subtype, when given ("" if not). */
+  category: string;
+  subtype: string;
+  /** When it starts, is planned to end, and was last updated, UTC ms (NaN
+   * when not given). */
+  start: number;
+  end: number;
+  updated: number;
   full: boolean;
   lat: number;
   lon: number;
@@ -110,6 +138,11 @@ export function parseEvents(body: unknown): UdotEvent[] {
       {
         id,
         type: str(e, "EventType"),
+        category: str(e, "EventCategory"),
+        subtype: str(e, "EventSubType"),
+        start: when(field(e, "StartDate")),
+        end: when(field(e, "PlannedEndDate")),
+        updated: when(field(e, "LastUpdated")),
         full: field(e, "IsFullClosure") === true || /^true$/i.test(str(e, "IsFullClosure")),
         lat,
         lon,
@@ -120,15 +153,24 @@ export function parseEvents(body: unknown): UdotEvent[] {
   });
 }
 
-/** An incident the music hears: a crash or a full closure on a valley
- * highway, or avalanche control up a canyon. Roadwork isn't news. */
-export function heard(e: UdotEvent): { kind: "incident" | "avalanche"; road: 0 | 1 | 2 } | null {
+/** An incident the music hears at `now`: a crash or a full closure on a
+ * valley highway or a canyon road, or avalanche control up a canyon.
+ * Roadwork isn't news; nor is a chains-or-traction notice (that's the
+ * canyon's pedal), an event that hasn't started or has ended, or a crash
+ * nobody has touched in hours. */
+export function heard(e: UdotEvent, now = Date.now()): { kind: "incident" | "avalanche"; road: 0 | 1 | 2 } | null {
   const canyon = canyonOf(e.roadway);
-  if (canyon && /avalanche/i.test(`${e.words} ${e.type}`)) return { kind: "avalanche", road: canyon };
+  const all = `${e.words} ${e.type} ${e.category} ${e.subtype}`;
+  if (Number.isFinite(e.start) && e.start > now) return null;
+  if (Number.isFinite(e.end) && e.end < now) return null;
+  if (canyon && /avalanche/i.test(all)) return { kind: "avalanche", road: canyon };
   if (!inValley(e.lat, e.lon)) return null;
-  const crash = /accident|incident|crash/i.test(e.type);
-  const closure = /closure/i.test(e.type) && e.full;
-  if ((crash || closure) && (HIGHWAY.test(e.roadway) || canyon)) return { kind: "incident", road: canyon };
+  if (RESTRICTION.test(all)) return null;
+  if (Number.isFinite(e.updated) && now - e.updated > STALE_MS) return null;
+  const kinds = `${e.type} ${e.category} ${e.subtype}`;
+  const crash = /accident|incident|crash|collision/i.test(kinds);
+  const closure = /closure/i.test(kinds) && e.full;
+  if ((crash || closure) && (HIGHWAY.test(roadwayKey(e.roadway)) || canyon)) return { kind: "incident", road: canyon };
   return null;
 }
 
@@ -158,6 +200,13 @@ export function plowsOut(body: unknown, now: number): number {
 /** The weather stations up the canyons and on the ridges whose wind the
  * harp hears. */
 const RIDGE_STATIONS = /alta|snowbird|cottonwood|brighton|solitude|guardsman|parleys summit|kessler/i;
+/** Where they are: the Cottonwoods and Parleys, east of the valley. A
+ * station elsewhere in Utah with one of those words in its name (there's a
+ * "Cottonwood Summit" on SR-18 near St. George) doesn't count. */
+export const RIDGES = { south: 40.5, north: 40.85, west: -111.85, east: -111.5 };
+const onRidges = (lat: number, lon: number) =>
+  // A station listed without a position is taken at its name.
+  !Number.isFinite(lat) || !Number.isFinite(lon) || (lat >= RIDGES.south && lat <= RIDGES.north && lon >= RIDGES.west && lon <= RIDGES.east);
 
 /** The wind measured up the canyons: the mean of the stations' averages and
  * the strongest gust, m/s; null with none reporting. A station that hasn't
@@ -174,7 +223,8 @@ export function canyonWind(body: unknown, now = Date.now()): { ms: number; gustM
     const gust = num(s, "WindSpeedGust", "WindGust");
     const at = when(field(s, "LastUpdated"));
     const fresh = Number.isFinite(at) ? now - at < 2 * HOUR : !timed;
-    return RIDGE_STATIONS.test(name) && Number.isFinite(avg) && fresh ? [{ name, avg, gust: Number.isFinite(gust) ? gust : avg }] : [];
+    const placed = onRidges(num(s, "Latitude"), num(s, "Longitude"));
+    return RIDGE_STATIONS.test(name) && placed && Number.isFinite(avg) && fresh ? [{ name, avg, gust: Number.isFinite(gust) ? gust : avg }] : [];
   });
   if (!read.length) return null;
   return {
@@ -229,7 +279,7 @@ export function parseSigns(body: unknown): SignTime[] {
     const lat = num(s, "Latitude");
     const lon = num(s, "Longitude");
     const roadway = str(s, "Roadway", "RoadwayName");
-    if (!id || !inSignsBox(lat, lon) || !HIGHWAY.test(roadway)) return [];
+    if (!id || !inSignsBox(lat, lon) || !HIGHWAY.test(roadwayKey(roadway))) return [];
     return travelTimes(field(s, "Messages")).map((t) => ({ key: `${id}|${t.to}`, name: str(s, "Name"), roadway, to: t.to, minutes: t.minutes, lat, lon }));
   });
 }
@@ -374,7 +424,7 @@ export class Udot {
   async pollEvents(now: number): Promise<RoadRow[]> {
     const current = new Map<string, { kind: "incident" | "avalanche"; road: 0 | 1 | 2; ev: UdotEvent }>();
     for (const ev of parseEvents(await this.get("event"))) {
-      const h = heard(ev);
+      const h = heard(ev, now);
       if (h) current.set(ev.id, { ...h, ev });
     }
     const rows: RoadRow[] = [];

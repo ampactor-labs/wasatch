@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { DOWNTOWN_SITES, LAKE_SITES, localHour, parseCurrent, parseForecast, parseSites, pickSite, valleyPm25 } from "./airnow.ts";
 import { siriElements } from "./siri.ts";
 import { parseAdvisory } from "./uac.ts";
-import { Signs, Udot, canyonOf, canyonWind, heard, parseEvents, parseRoadForecast, parseSigns, plowsOut, traction, travelTimes } from "./udot.ts";
+import { Signs, Udot, canyonOf, roadwayKey, canyonWind, heard, parseEvents, parseRoadForecast, parseSigns, plowsOut, traction, travelTimes } from "./udot.ts";
 
 // Shaped like UDOT's documented responses (api/v2/get/<x>?format=json).
 const EVENTS = [
@@ -25,6 +25,28 @@ test("UDOT: incidents on the valley's highways and avalanche control up the cany
   assert.equal(canyonOf("SR-190"), 2);
   assert.equal(canyonOf("UT 210"), 1);
   assert.equal(canyonOf("I-15"), 0);
+});
+
+test("UDOT: a traction notice, a stale crash and a future closure aren't incidents; spellings agree", () => {
+  const now = Date.parse("2026-11-18T15:00:00Z");
+  const sec = (ms: number) => Math.round(ms / 1000);
+  const events = parseEvents([
+    // What stood on Nov 18 as "closures": chains up both canyons.
+    { ID: "t1", RoadwayName: "SR 190", EventType: "accidentsAndIncidents", EventSubType: "Road Restrictions", IsFullClosure: false, Latitude: 40.62, Longitude: -111.75, Description: "Road Restrictions, Traction Devices Required" },
+    { ID: "t2", RoadwayName: "SR 210", EventType: "accidentsAndIncidents", IsFullClosure: false, Latitude: 40.57, Longitude: -111.72, Description: "Traction law in effect" },
+    { ID: "c1", RoadwayName: "SR 201 EB", EventType: "accidentsAndIncidents", IsFullClosure: false, Latitude: 40.72, Longitude: -111.95, Description: "Crash, right lane blocked", LastUpdated: sec(now - 20 * 60_000) },
+    { ID: "c2", RoadwayName: "I 15 NB", EventType: "accidentsAndIncidents", IsFullClosure: false, Latitude: 40.7, Longitude: -111.9, Description: "Crash on the shoulder", LastUpdated: sec(now - 30 * 3_600_000) },
+    { ID: "c3", RoadwayName: "Interstate 80", EventType: "closures", IsFullClosure: true, Latitude: 40.73, Longitude: -111.85, Description: "Closed", StartDate: sec(now + 3_600_000) },
+    { ID: "c4", RoadwayName: "US 89", EventType: "closures", IsFullClosure: true, Latitude: 40.88, Longitude: -111.88, Description: "Closed", PlannedEndDate: sec(now - 3_600_000) },
+  ]);
+  assert.deepEqual(
+    events.map((e) => heard(e, now)),
+    [null, null, { kind: "incident", road: 0 }, null, null, null],
+  );
+  assert.equal(roadwayKey("SR 201 EB"), "SR-201");
+  assert.equal(roadwayKey("Interstate 15 Northbound"), "I-15");
+  assert.equal(roadwayKey("UT-154"), "SR-154");
+  assert.equal(roadwayKey("US 89"), "US-89");
 });
 
 test("UDOT: an incident opening, then clearing; the first read only learns", async () => {
@@ -75,6 +97,12 @@ test("UDOT: traction law, plows and the canyons' wind", () => {
   assert.ok(Math.abs(w.ms - 13 * 0.44704) < 1e-9);
   assert.ok(Math.abs(w.gustMs - 41 * 0.44704) < 1e-9);
   assert.equal(w.stations.length, 2);
+  // A "Cottonwood Summit" on SR-18 near St. George isn't up our canyons.
+  const placed = canyonWind([
+    { StationName: "SR-210 @ Alta", WindSpeedAvg: 20, WindSpeedGust: 41, Latitude: 40.59, Longitude: -111.64 },
+    { StationName: "SR-18 @ MP 35 Cottonwood Summit", WindSpeedAvg: 50, WindSpeedGust: 70, Latitude: 37.4, Longitude: -113.6 },
+  ]);
+  assert.deepEqual(placed?.stations, ["SR-210 @ Alta"]);
 });
 
 test("UDOT: a description's first line, and a station that stopped reporting", () => {
