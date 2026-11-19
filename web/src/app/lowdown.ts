@@ -462,7 +462,12 @@ export const TOPICS: readonly Topic[] = [
     source: { name: "University of Utah Seismograph Stations, via EarthScope", href: "https://quake.utah.edu/" },
     now: (c) => {
       const g = c.valley.ground;
-      return g ? { value: STATIONS.map((s, i) => `${s.code} ${Math.round((g.levels[i] ?? 0) * 100)}%`).join(" · "), receipt: "live" } : { value: "not connected", receipt: "waiting" };
+      // A band whose station is quiet is sung by a stand-in: "DOT for SHED".
+      const name = (s: (typeof STATIONS)[number], i: number) => {
+        const code = g?.codes?.[i] ?? s.code;
+        return code === s.code ? s.code : `${code} for ${s.code}`;
+      };
+      return g ? { value: STATIONS.map((s, i) => `${name(s, i)} ${Math.round((g.levels[i] ?? 0) * 100)}%`).join(" · "), receipt: "live" } : { value: "not connected", receipt: "waiting" };
     },
   },
   {

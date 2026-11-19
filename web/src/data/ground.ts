@@ -28,14 +28,33 @@ export interface Station {
    * times quieter than days then read near 0.15.
    */
   ref: number;
+  /** Stations that sing the band while this one is quiet, in order. */
+  standIns?: StandIn[];
 }
+
+/** A station that can stand in for a band's own. */
+export type StandIn = Pick<Station, "code" | "name" | "lat" | "lon" | "ref">;
 
 export const STATIONS: Station[] = [
   { code: "CAP2", name: "the Capitol", lat: 40.7796, lon: -111.889, lo: 2, ref: 3 },
   { code: "AVE", name: "the Avenues", lat: 40.7744, lon: -111.8628, lo: 4, ref: 7.5 },
   { code: "BYP", name: "Brigham Young Park", lat: 40.7711, lon: -111.8872, lo: 8, ref: 38 },
-  { code: "SHED", name: "the I-15 bridge array", lat: 40.722, lon: -111.9062, lo: 16, ref: 510 },
+  {
+    code: "SHED",
+    name: "the I-15 bridge array",
+    lat: 40.722,
+    lon: -111.9062,
+    lo: 16,
+    ref: 510,
+    // SHED went quiet on Nov 3, 2026. DOT, an accelerometer by SR-201 and
+    // I-215, carried the most freeway band of the live stations (107 counts
+    // at 6:45 PM on a Wednesday, Nov 18), so it sings the freeway meanwhile.
+    standIns: [{ code: "DOT", name: "the SR-201 freeway", lat: 40.7267, lon: -111.9608, ref: 160 }],
+  },
 ];
+
+/** Every station code streamed: the bands' own and their stand-ins. */
+export const STATION_CODES: string[] = STATIONS.flatMap((s) => [s.code, ...(s.standIns ?? []).map((t) => t.code)]);
 
 const URL = "wss://rtserve.earthscope.org/datalink";
 const BASEBAND_MS = 100;
@@ -167,14 +186,16 @@ class StationStream {
   ddc: BandDdc | null = null;
   lastData = 0;
 
-  readonly station: Station;
+  readonly station: StandIn;
+  private readonly lo: number;
 
-  constructor(station: Station) {
+  constructor(station: StandIn, lo: number) {
     this.station = station;
+    this.lo = lo;
   }
 
   add(start: number, rate: number, samples: Int32Array): void {
-    if (!this.ddc) this.ddc = new BandDdc(this.station.lo, rate);
+    if (!this.ddc) this.ddc = new BandDdc(this.lo, rate);
     const dt = 1000 / rate;
     let first = 0;
     if (this.expect > 0) {
@@ -210,6 +231,8 @@ export interface GroundFeed {
   level(band: number): number;
   /** Whether a band has data around listening time `l`. */
   freshAt(band: number, l: number): boolean;
+  /** The station singing `band` now: its own, or one standing in. */
+  stationAt(band: number): StandIn | undefined;
 }
 
 /**
@@ -229,7 +252,7 @@ export class GroundSource implements GroundFeed {
 
   constructor(client = "wasatch-symphony:web:0:browser") {
     this.client = client;
-    for (const s of STATIONS) this.streams.set(s.code, new StationStream(s));
+    for (const s of STATIONS) for (const st of [s, ...(s.standIns ?? [])]) this.streams.set(st.code, new StationStream(st, s.lo));
   }
 
   private send(header: string, data?: string): void {
@@ -254,7 +277,7 @@ export class GroundSource implements GroundFeed {
       ws.binaryType = "arraybuffer";
       this.ws = ws;
       let state: "id" | "match" | "position" | "streaming" = "id";
-      const pattern = `^FDSN:UU_(${STATIONS.map((s) => s.code).join("|")})_[0-9]*_[EH]_[NH]_Z/MSEED$`;
+      const pattern = `^FDSN:UU_(${STATION_CODES.join("|")})_[0-9]*_[EH]_[NH]_Z/MSEED$`;
       ws.onopen = () => this.send(`ID ${this.client}`);
       ws.onerror = () => reject(new Error("the seismometers' server refused us"));
       ws.onclose = () => {
@@ -299,24 +322,46 @@ export class GroundSource implements GroundFeed {
     });
   }
 
+  /** The stream singing `band` now: its own station while it's sending,
+   * else the first stand-in that is, else its own. */
+  private source(band: number, now = Date.now()): StationStream | undefined {
+    const s = STATIONS[band];
+    if (!s) return undefined;
+    const all = [s, ...(s.standIns ?? [])].map((t) => this.streams.get(t.code)).filter((x): x is StationStream => !!x);
+    return all.find((st) => now - st.lastData < 60_000) ?? all[0];
+  }
+
+  /** The station singing `band` now (its own, or a stand-in). */
+  stationAt(band: number): StandIn | undefined {
+    return this.source(band)?.station;
+  }
+
   take(band: number, upTo: number): Baseband[] {
-    const ddc = this.streams.get(STATIONS[band]?.code ?? "")?.ddc;
-    if (!ddc) return [];
-    let n = 0;
-    while (n < ddc.out.length && ddc.out[n]!.t <= upTo) n++;
-    return ddc.out.splice(0, n);
+    const s = STATIONS[band];
+    const src = this.source(band);
+    let out: Baseband[] = [];
+    // Drain every stream of the band, keeping the singing one's.
+    for (const t of s ? [s, ...(s.standIns ?? [])] : []) {
+      const ddc = this.streams.get(t.code)?.ddc;
+      if (!ddc) continue;
+      let n = 0;
+      while (n < ddc.out.length && ddc.out[n]!.t <= upTo) n++;
+      const taken = ddc.out.splice(0, n);
+      if (this.streams.get(t.code) === src) out = taken;
+    }
+    return out;
   }
 
   level(band: number): number {
-    const s = STATIONS[band];
-    const ddc = s ? this.streams.get(s.code)?.ddc : undefined;
-    if (!s || !ddc) return 0;
-    const db = 20 * Math.log10(Math.max(1e-6, ddc.level() / s.ref));
+    const src = this.source(band);
+    const ddc = src?.ddc;
+    if (!src || !ddc) return 0;
+    const db = 20 * Math.log10(Math.max(1e-6, ddc.level() / src.station.ref));
     return Math.max(0, Math.min(1, 0.45 + db / 40));
   }
 
   freshAt(band: number, l: number): boolean {
-    const st = this.streams.get(STATIONS[band]?.code ?? "");
+    const st = this.source(band);
     return !!st && l - st.lastData < 60_000 && st.lastData - l < 120_000;
   }
 
@@ -353,8 +398,9 @@ export class Ground {
 
   private tick(): void {
     const listening = this.nowUtc() + this.shift - DELAY_MS;
-    let loudest: { s: Station; rel: number } | null = null;
+    let loudest: { s: StandIn; rel: number } | null = null;
     const levels: [number, number, number, number] = [0, 0, 0, 0];
+    const codes = STATIONS.map((s) => s.code);
     let live = false;
     STATIONS.forEach((s, band) => {
       // Drop what the listener has passed; hand over what's due.
@@ -364,12 +410,16 @@ export class Ground {
       const fresh = this.shift === 0 && this.feed.freshAt(band, listening);
       if (!fresh) return;
       live = true;
+      // Heard from where it's measured: the band's own station, or the one
+      // standing in for it.
+      const at = this.feed.stationAt(band) ?? s;
+      codes[band] = at.code;
       levels[band] = this.feed.level(band);
-      if (!loudest || levels[band] > loudest.rel) loudest = { s, rel: levels[band] };
-      if (due.length) this.host.post(Kind.GROUND, encodeGroundPlaced(band, s.lat, s.lon, due.map((p) => [p.i, p.q])));
+      if (!loudest || levels[band] > loudest.rel) loudest = { s: at, rel: levels[band] };
+      if (due.length) this.host.post(Kind.GROUND, encodeGroundPlaced(band, at.lat, at.lon, due.map((p) => [p.i, p.q])));
     });
-    const top = loudest as { s: Station; rel: number } | null;
-    this.onState(live && top ? { station: top.s.name, levels, observed: listening } : null);
+    const top = loudest as { s: StandIn; rel: number } | null;
+    this.onState(live && top ? { station: top.s.name, levels, codes, observed: listening } : null);
   }
 
   stop(): void {

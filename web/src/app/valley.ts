@@ -57,6 +57,8 @@ export function daypartName(ms: number): string {
 export interface GroundState {
   station: string;
   levels: [number, number, number, number];
+  /** Which station sings each band: its own, or one standing in. */
+  codes?: string[];
   observed: number;
 }
 

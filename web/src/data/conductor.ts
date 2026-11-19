@@ -7,7 +7,7 @@
 import type { Host } from "../engine/host.ts";
 import { Kind, encodeAlerts, encodePlanes, encodeRail, encodeRoads, type Fleet, type RoadState } from "../engine/protocol.ts";
 import type { AlertRow, Grid, KeyedNow, PlaneDot, PlaneRow, RoadRow, ServiceAlerts, Valley } from "../app/valley.ts";
-import { DELAY_MS, STATIONS, type Baseband, type GroundFeed } from "./ground.ts";
+import { DELAY_MS, STATIONS, type Baseband, type GroundFeed, type StandIn } from "./ground.ts";
 import type { Lake, Quake, Reading, River, SkyNow, Snow } from "./feeds.ts";
 import { utcNow } from "../engine/clock.ts";
 
@@ -37,6 +37,8 @@ export class Conductor implements GroundFeed {
   private fetched = new Set<number>();
   private bands: Baseband[][] = STATIONS.map(() => []);
   private levels = STATIONS.map(() => 0);
+  /** Where each band was last heard from (its station or a stand-in). */
+  private at: ({ lat: number; lon: number } | null)[] = STATIONS.map(() => null);
   private lastGround = STATIONS.map(() => 0);
   private timers: number[] = [];
   /** Windows read, and the latest one's start: for the mappings view. */
@@ -204,6 +206,7 @@ export class Conductor implements GroundFeed {
       for (let k = 0; k * 2 < g.iq.length; k++) queue.push({ t: g.t0 + k * 100, i: g.iq[2 * k]!, q: g.iq[2 * k + 1]! });
       queue.sort((a, b) => a.t - b.t);
       this.levels[g.band] = g.level;
+      this.at[g.band] = { lat: g.lat, lon: g.lon };
       this.lastGround[g.band] = g.t0 + (g.iq.length / 2) * 100;
     }
   }
@@ -217,6 +220,15 @@ export class Conductor implements GroundFeed {
   }
 
   // --- The ground, from the windows ------------------------------------------
+
+  /** The station singing `band`, known by where the windows place it. */
+  stationAt(band: number): StandIn | undefined {
+    const s = STATIONS[band];
+    const at = this.at[band];
+    if (!s) return undefined;
+    if (!at) return s;
+    return [s, ...(s.standIns ?? [])].find((t) => Math.abs(t.lat - at.lat) < 1e-3 && Math.abs(t.lon - at.lon) < 1e-3) ?? s;
+  }
 
   take(band: number, upTo: number): Baseband[] {
     const q = this.bands[band];
