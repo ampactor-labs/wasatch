@@ -264,6 +264,29 @@ impl Sky {
         self.at(ms).unwrap_or_default()
     }
 
+    /// The hour as a bar at `ms` hears it, the same on every phone: what was
+    /// frozen ahead for the hour (alerts, models, the slow values) from the
+    /// hour itself, and what was observed (the valley's weather, the fleet's
+    /// flow and buses) from `OBS_LAG_MS` before. An observation lands in its
+    /// row around the hour's start, when some phones have fetched the sky and
+    /// others haven't; read with the lag, every phone has it.
+    pub fn heard_at(&self, ms: f64) -> SkyHour {
+        let ahead = self.at_or_default(ms);
+        let seen = self.at_or_default(ms - OBS_LAG_MS);
+        SkyHour {
+            cloud: seen.cloud,
+            precip_mm: seen.precip_mm,
+            snow_cm: seen.snow_cm,
+            temp_c: seen.temp_c,
+            wind_ms: seen.wind_ms,
+            gust_ms: seen.gust_ms,
+            flow: seen.flow,
+            pressure_tend: seen.pressure_tend,
+            busy: seen.busy,
+            ..ahead
+        }
+    }
+
     /// Number of hours on record.
     pub fn len(&self) -> usize {
         self.hours.len()
@@ -958,5 +981,61 @@ mod tests {
         let a = plan_chain(20261023, t0, t0 + 29.0 * 3_600_000.0, &s, &cloudy);
         let b = plan_chain(20261023, t0, t0 + 29.0 * 3_600_000.0, &s, &clear);
         assert!(a.section_at(at).unwrap().key.rung > b.section_at(at).unwrap().key.rung);
+    }
+    #[test]
+    fn an_hours_observations_are_heard_alike_before_and_after_they_arrive() {
+        // The conductor freezes the fleet's busyness and flow, and the METAR
+        // lands, around the hour's start. One phone fetched the sky before,
+        // one after: every bar hears the hour alike.
+        let h = 1_795_000_000_000.0_f64.div_euclid(3_600_000.0) * 3_600_000.0;
+        let before = SkyHour {
+            busy: 1.0,
+            flow: 0.1,
+            temp_c: 2.0,
+            snow_cm: 0.0,
+            ..Default::default()
+        };
+        let mut early = Sky::default();
+        early.set(h - 3_600_000.0, before);
+        let mut late = early.clone();
+        // Frozen ahead (alerts, models): every phone has these already.
+        let ahead = SkyHour {
+            alert: 0.5,
+            mtn_snow_cm: 1.0,
+            ..before
+        };
+        early.set(
+            h,
+            SkyHour {
+                busy: f32::NAN,
+                flow: f32::NAN,
+                ..ahead
+            },
+        );
+        late.set(
+            h,
+            SkyHour {
+                busy: 1.4,
+                flow: -0.6,
+                temp_c: -3.0,
+                snow_cm: 0.4,
+                ..ahead
+            },
+        );
+        for m in [0.0, 5.0, 19.9] {
+            let ms = h + m * 60_000.0;
+            let (a, b) = (early.heard_at(ms), late.heard_at(ms));
+            assert_eq!(a.busy, b.busy);
+            assert_eq!(a.flow, b.flow);
+            assert_eq!(a.temp_c, b.temp_c);
+            assert_eq!(a.snow_cm, b.snow_cm);
+            assert_eq!(a.alert, 0.5, "what was frozen ahead is heard at once");
+            assert_eq!(a.mtn_snow_cm, 1.0);
+        }
+        assert_eq!(
+            late.heard_at(h + 25.0 * 60_000.0).busy,
+            1.4,
+            "and the hour's own after the lag"
+        );
     }
 }

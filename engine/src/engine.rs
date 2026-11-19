@@ -81,6 +81,20 @@ impl Inputs {
     }
 }
 
+/// A number for the outbox's JSON with `.1` digits, or `null` when it isn't
+/// finite (`NaN` isn't JSON). Writes straight into the outbox, no allocation.
+struct Json(f64, usize);
+
+impl core::fmt::Display for Json {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0.is_finite() {
+            write!(f, "{:.*}", self.1, self.0)
+        } else {
+            f.write_str("null")
+        }
+    }
+}
+
 /// A conductor's window of events into a list: the window's rows replace
 /// whatever it had before (a window posted again replaces itself), and an
 /// hour is kept.
@@ -747,7 +761,6 @@ impl Engine {
         };
         let bar = (((l - sec.start_ms) / sec.bar_ms()).floor().max(0.0) as u32).min(sec.bars() - 1);
         self.compose_state = ComposeState::default();
-        let valley = self.inputs.valley();
         // The section before's last bar, silently, for the crash its fill
         // owes this one's downbeat: a phone that joins now hears it too.
         if self.day.is_none()
@@ -758,40 +771,23 @@ impl Engine {
                 .copied()
             && (prev.end_ms() - sec.start_ms).abs() < 5.0
         {
-            compose(
-                &prev,
-                prev.bars() - 1,
-                &valley,
-                &mut self.compose_state,
-                &mut self.scratch,
-            );
+            self.compose_bar(&prev, prev.bars() - 1);
         }
         for b in 0..bar {
-            match &self.day {
-                Some(run) => twelve::compose_day(
-                    &sec,
-                    b,
-                    run,
-                    &valley,
-                    &mut self.compose_state,
-                    &mut self.scratch,
-                ),
-                None => compose(&sec, b, &valley, &mut self.compose_state, &mut self.scratch),
-            }
+            self.compose_bar(&sec, b);
         }
         self.cursor = Some(Cursor { section: sec, bar });
         self.compose_next(l - 50.0);
     }
 
-    /// Compose the cursor's bar, queue it, and advance.
-    fn compose_next(&mut self, not_before: f64) {
-        let Some(cur) = self.cursor else {
-            return;
-        };
+    /// Compose one bar into the scratch, exactly as it plays: with the slow
+    /// values frozen for the bar's own hour (of the day being played, in A
+    /// Day in Twelve Minutes). A phone that joins mid-section replays the
+    /// section's earlier bars through here, so it voices them as the phones
+    /// that played them did.
+    fn compose_bar(&mut self, sec: &Section, bar: u32) {
         let valley = self.inputs.valley();
-        // The slow values of the bar's own hour (of the day being played, in
-        // A Day in Twelve Minutes), as frozen for it: the same on every phone.
-        let bar_ms = cur.section.start_ms + f64::from(cur.bar) * cur.section.bar_ms();
+        let bar_ms = sec.start_ms + f64::from(bar) * sec.bar_ms();
         let slow = valley.slow_at(self.day.as_ref().map_or(bar_ms, |r| r.day_at(bar_ms)));
         let valley = Valley {
             slow: &slow,
@@ -799,21 +795,29 @@ impl Engine {
         };
         match &self.day {
             Some(run) => twelve::compose_day(
-                &cur.section,
-                cur.bar,
+                sec,
+                bar,
                 run,
                 &valley,
                 &mut self.compose_state,
                 &mut self.scratch,
             ),
             None => compose(
-                &cur.section,
-                cur.bar,
+                sec,
+                bar,
                 &valley,
                 &mut self.compose_state,
                 &mut self.scratch,
             ),
         }
+    }
+
+    /// Compose the cursor's bar, queue it, and advance.
+    fn compose_next(&mut self, not_before: f64) {
+        let Some(cur) = self.cursor else {
+            return;
+        };
+        self.compose_bar(&cur.section, cur.bar);
         let day_ms = self
             .day
             .as_ref()
@@ -1244,7 +1248,7 @@ impl Engine {
         let hour = self
             .inputs
             .sky
-            .at_or_default(if day_ms > 0.0 { day_ms } else { h.at_ms });
+            .heard_at(if day_ms > 0.0 { day_ms } else { h.at_ms });
         self.master.set_warmth(warmth_for(hour.temp_c));
         // The grid's now has nothing to say about a day gone by.
         let slow = self.inputs.slow.overlaid(&hour);
@@ -1284,7 +1288,7 @@ impl Engine {
         }
         let _ = writeln!(
             self.outbox,
-            r#"{{"t":"bar","f":{frame:.0},"chain":{},"sec":{},"kind":{},"bar":{bar},"bars":{},"bpm":{:.2},"start":{:.0},"c":{},"r":{},"pc":{},"pr":{},"nc":{},"nr":{},"why":{},"home":{},"tempo":{},"flow":{:.2},"chord":"{}","act":{:.3},"bright":{:.3},"tension":{:.3},"haze":{:.3},"inv":{:.3},"dark":{:.2},"warm":{:.2},"grid":{:.2},"day":{day_ms:.0}}}"#,
+            r#"{{"t":"bar","f":{frame:.0},"chain":{},"sec":{},"kind":{},"bar":{bar},"bars":{},"bpm":{:.2},"start":{:.0},"c":{},"r":{},"pc":{},"pr":{},"nc":{},"nr":{},"why":{},"home":{},"tempo":{},"flow":{},"chord":"{}","act":{},"bright":{},"tension":{},"haze":{},"inv":{},"dark":{},"warm":{},"grid":{},"day":{day_ms:.0}}}"#,
             sec.chain,
             sec.index,
             sec.kind as u8,
@@ -1300,16 +1304,16 @@ impl Engine {
             sec.notes_reason.map_or(-1, |r| r as i32),
             sec.home_reason.map_or(-1, |r| r as i32),
             sec.tempo_reason.map_or(-1, |r| r as i32),
-            sec.flow,
+            Json(f64::from(sec.flow), 2),
             h.chord.symbol(),
-            sec.activity,
-            sec.brightness,
-            sec.tension,
-            self.haze,
-            self.inversion,
-            mix.dark,
-            self.master.warmth(),
-            self.master.energy(),
+            Json(f64::from(sec.activity), 3),
+            Json(f64::from(sec.brightness), 3),
+            Json(f64::from(sec.tension), 3),
+            Json(f64::from(self.haze), 3),
+            Json(f64::from(self.inversion), 3),
+            Json(f64::from(mix.dark), 2),
+            Json(f64::from(self.master.warmth()), 2),
+            Json(f64::from(self.master.energy()), 2),
         );
         if self.fade_in_at.is_some_and(|t| h.at_ms >= t - 1.0) {
             self.master.set_fade(true);
@@ -1318,16 +1322,18 @@ impl Engine {
     }
 
     fn emit_feature(&mut self, f: Feature, frame: f64) {
+        // A reading that's missing is null: `NaN` isn't JSON, and the page
+        // would drop the whole line.
         let _ = writeln!(
             self.outbox,
-            r#"{{"t":"feat","f":{frame:.0},"k":{},"route":{},"stop":{},"ev":{:.0},"late":{},"obs":{},"v":{:.3}}}"#,
+            r#"{{"t":"feat","f":{frame:.0},"k":{},"route":{},"stop":{},"ev":{},"late":{},"obs":{},"v":{}}}"#,
             f.kind as u8,
             f.route,
             f.stop,
-            f.event_ms,
+            Json(f.event_ms, 0),
             f.late_s,
             u8::from(f.observed),
-            f.value
+            Json(f64::from(f.value), 3)
         );
     }
 
@@ -1694,6 +1700,95 @@ mod tests {
         assert!(
             a == b,
             "two phones with the same frozen hours played differently"
+        );
+    }
+    #[test]
+    fn a_phone_joining_late_in_a_section_plays_the_same_bars() {
+        // One phone played the section from its first bar; another joins
+        // late, having fetched different slow values (the lake and the
+        // snowpack set the chords). Both have the conductor's frozen hours,
+        // so the bar the late phone first plays is voiced alike.
+        let l: f64 = (20_755.0 * 24.0 + 6.0 + 17.0) * 3_600_000.0; // Oct 29, 5 PM MDT
+        let phone = |lake_ft: f32, snowpack: f32| {
+            let mut e = Engine::new(48_000.0);
+            e.set_day(day(20261029, 20_755.0, 6.0));
+            for k in -4..3 {
+                let at = (l / 3_600_000.0).floor() * 3_600_000.0 + f64::from(k) * 3_600_000.0;
+                e.set_sky_hour(
+                    at,
+                    crate::plan::SkyHour {
+                        lake_ft: 4189.8,
+                        snowpack: 1.4,
+                        ..Default::default()
+                    },
+                );
+            }
+            e.set_slow(Slow {
+                lake_ft,
+                snowpack,
+                ..Default::default()
+            });
+            e
+        };
+        let mut a = phone(4199.0, 0.5);
+        a.ensure_chain(l);
+        let sec = *a.chain.as_ref().unwrap().section_at(l).unwrap();
+        assert!(sec.bars() > 12, "a section long enough to join late");
+        let k = sec.bars() - 3;
+        let at = |b: u32| sec.start_ms + f64::from(b) * sec.bar_ms();
+        // A: from the first bar to bar k.
+        a.locate(at(0) + 1.0);
+        while a.cursor.is_some_and(|c| c.bar < k) {
+            a.compose_next(f64::NEG_INFINITY);
+        }
+        a.compose_next(f64::NEG_INFINITY);
+        let heard_a: Vec<_> = a.scratch.harmony.iter().map(|h| (h.chord, h.pad)).collect();
+        // B: joins at bar k.
+        let mut b = phone(4185.0, 1.0);
+        b.ensure_chain(l);
+        b.locate(at(k) + 1.0);
+        let heard_b: Vec<_> = b.scratch.harmony.iter().map(|h| (h.chord, h.pad)).collect();
+        assert!(!heard_a.is_empty(), "bar k carries no harmony to compare");
+        assert_eq!(
+            heard_a, heard_b,
+            "the late phone voiced bar {k} differently"
+        );
+    }
+    #[test]
+    fn every_outbox_line_is_json_even_with_readings_missing() {
+        // An hour with no air, flow or grid reading: the lines that carry
+        // them still parse (a missing reading is null, not NaN).
+        let mut e = Engine::new(24_000.0);
+        e.set_day(day(20261029, 20_755.0, 6.0));
+        let l: f64 = (20_755.0 * 24.0 + 6.0 + 17.0) * 3_600_000.0; // Oct 29, 5 PM MDT
+        for k in -4..3 {
+            let at = (l / 3_600_000.0).floor() * 3_600_000.0 + f64::from(k) * 3_600_000.0;
+            e.set_sky_hour(
+                at,
+                crate::plan::SkyHour {
+                    pm25: f32::NAN,
+                    cloud: f32::NAN,
+                    ..Default::default()
+                },
+            );
+        }
+        e.set_clock(0.0, l + DELAY_MS);
+        e.start();
+        let (mut lines, mut feats) = (0, 0);
+        for _ in 0..(150.0 * 24_000.0 / 4096.0) as usize {
+            e.render(4096);
+            for line in e.take_outbox().lines() {
+                let v: serde_json::Value =
+                    serde_json::from_str(line).unwrap_or_else(|err| panic!("{err}: {line}"));
+                lines += 1;
+                if v["t"] == "feat" {
+                    feats += 1;
+                }
+            }
+        }
+        assert!(
+            lines > 100 && feats > 2,
+            "only {lines} lines, {feats} captions"
         );
     }
 }

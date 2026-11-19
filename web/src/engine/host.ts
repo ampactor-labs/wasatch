@@ -488,7 +488,9 @@ export class Host {
       if (!line) continue;
       let e: EngineEvent;
       try {
-        e = JSON.parse(line) as EngineEvent;
+        // The engine writes a missing reading as null; the page reads it as
+        // NaN, the "unknown" every reader already checks for.
+        e = JSON.parse(line, (_k, v: unknown) => (v === null ? Number.NaN : v)) as EngineEvent;
       } catch {
         continue;
       }

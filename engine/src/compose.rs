@@ -691,7 +691,7 @@ fn phrase_len(sec: &Section, phrase: u32) -> u32 {
 /// lagged slot, so every phone has the same; once snow is falling the storm
 /// has arrived and its color lets go.
 pub(crate) fn storm_at(valley: &Valley<'_>, ms: f64) -> f32 {
-    let now = valley.sky.at_or_default(ms);
+    let now = valley.sky.heard_at(ms);
     if now.snow_cm > 0.1 || now.mtn_snow_cm > 0.3 {
         return 0.0;
     }
@@ -1061,7 +1061,7 @@ pub fn compose(
             // 10%; the timetable's own rush and night lean it a step either
             // way. Without the count, the timetable's rate alone.
             let rate = valley.schedule.bus_rate(start + bar_ms * 0.5);
-            let hour = valley.sky.at_or_default(start);
+            let hour = valley.sky.heard_at(start);
             let ks = [0u32, 3, 5, 7, 9, 11, 13];
             let idx = if hour.busy.is_finite() {
                 let lean = ((rate / 240.0 - 0.6) * 2.5).clamp(-1.0, 1.0);
@@ -1506,7 +1506,7 @@ pub fn compose(
     }
 
     // Snow grains while it snows in the mountains (or the valley).
-    let hour = valley.sky.at_or_default(start);
+    let hour = valley.sky.heard_at(start);
     let snowing = hour.mtn_snow_cm.max(hour.snow_cm);
     if mix.grains > 0.0 && snowing > 0.0 {
         let count = ((snowing * 4.0).ceil() as u32).min(6);
@@ -1765,7 +1765,7 @@ fn roads(
         });
     }
     // Plows out while it snows: brushes, more of them the more plows.
-    let hour = valley.sky.at_or_default(start);
+    let hour = valley.sky.heard_at(start);
     let snowing = hour.snow_cm > 0.1 || hour.mtn_snow_cm > 0.3;
     if kit_on && snowing && now.plows >= 5 {
         let steps: &[u32] = if now.plows >= 30 {
