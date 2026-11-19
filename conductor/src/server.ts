@@ -139,9 +139,12 @@ windows.onSeal = (w) => {
 
 /** A measured value for the hour after this one, read in this hour's
  * second half: frozen then, so every phone has it before that hour plays. */
-function freezeNext(now: number, field: "ridgeMs" | "ridgeGustMs" | "pm25" | "pm25Downtown" | "pm25Lake", value: number): void {
+function freezeNext(now: number, field: "ridgeMs" | "ridgeGustMs" | "pm25" | "pm25Downtown" | "pm25Lake" | "stormMm", value: number): void {
   const hour = Math.floor(now / HOUR) * HOUR;
-  if (now - hour >= 30 * 60_000 && slots.freeze(hour + HOUR, field, value, now)) publishSky();
+  // From the half hour to :54, when the next hour is frozen ahead: later
+  // than that, a phone may already have fetched the hour without it.
+  const into = now - hour;
+  if (into >= 30 * 60_000 && into < 54 * 60_000 && slots.freeze(hour + HOUR, field, value, now)) publishSky();
 }
 
 /** The sky as served: its hours with what's frozen for them, and "now" as
@@ -192,7 +195,7 @@ function slowNow(): SlowNow {
 setInterval(() => {
   const now = Date.now();
   const next = skyBase?.value.hours.find((h) => h.at === Math.floor(now / HOUR) * HOUR + HOUR);
-  if (freezeAhead(slots, now, next, slowNow())) publishSky();
+  if (freezeAhead(slots, now, next, slowNow(), skyBase?.value.models)) publishSky();
 }, 60_000);
 
 function publishSlow(): void {
@@ -279,16 +282,21 @@ every(5 * 60_000, "sky", async () => {
   skyBase = { ...skyFrom(raw), source: metars.length >= 12 ? "metar" : "nws" };
   publishSky();
 });
-// The snow forecast at Alta, frozen for each hour the first time it's read
-// in it: it colors bars, so every phone must have the same one.
+// The snow forecast at Alta, read in an hour's second half and frozen for
+// the hour after, by :54, like everything else frozen ahead: it colors bars,
+// so every phone must have the same one before the hour plays.
 every(10 * 60_000, "storm", async () => {
   const now = Date.now();
   const mm = await fetchAltaSnow(now);
-  if (mm !== null && slots.freeze(Math.floor(now / HOUR) * HOUR, "stormMm", mm)) publishSky();
+  if (mm !== null) freezeNext(now, "stormMm", mm);
 });
 every(15 * 60_000, "slow", async () => {
   const [lake, river, snow] = await Promise.all([fetchLake(), fetchRiver(), fetchSnow()]);
-  slowParts = { lake, river, snow };
+  // A failed read keeps the last good one for a while (the slow values move
+  // over days), rather than leaving the next hour unfrozen.
+  const keep = <T extends { observed: number }>(fresh: T | null, was: T | null | undefined): T | null =>
+    fresh ?? (was && Date.now() - was.observed < 12 * HOUR ? was : null);
+  slowParts = { lake: keep(lake, slowParts?.lake), river: keep(river, slowParts?.river), snow: keep(snow, slowParts?.snow) };
   publishSlow();
 });
 every(15 * 60_000, "grid", async () => {
@@ -342,13 +350,18 @@ ground.connect(Date.now() - 120_000).catch((err) => log("ground:", err));
 setInterval(() => {
   const now = Date.now();
   STATIONS.forEach((s, band) => {
-    const meta = { lat: s.lat, lon: s.lon, level: ground.level(band) };
+    // Where the band is heard from: its station, or the one standing in.
+    const at = ground.stationAt(band) ?? s;
+    const meta = { lat: at.lat, lon: at.lon, level: ground.level(band) };
     for (const p of ground.take(band, now)) windows.addGround(band, meta, p.t, p.i, p.q, now);
   });
   const plane = planes.release(now);
   if (plane) windows.addPlane(plane, now);
   windows.seal(now);
 }, 1000);
+
+/** Seconds since `t` (UTC ms), or null. */
+const age = (t: number | undefined | null): number | null => (t === undefined || t === null || !Number.isFinite(t) ? null : Math.round((Date.now() - t) / 1000));
 
 function send(res: ServerResponse, status: number, body: string, cache: string, type = "application/json"): void {
   res.writeHead(status, {
@@ -440,7 +453,21 @@ const server = createServer((req, res) => {
         error: airnow.lastError,
       },
       avalanche: uac.latest && { danger: uac.latest.danger, issued: uac.latest.issued },
-      ground: STATIONS.map((s, b) => ({ station: s.code, level: Number(ground.level(b).toFixed(2)), fresh: ground.freshAt(b, Date.now() - 30_000) })),
+      // How old each source's latest reading is, and what's frozen for this
+      // hour and the next: what every phone will play, at a glance.
+      ages_s: {
+        sky: skyBase ? age(skyBase.observed) : null,
+        sky_source: skyBase?.source ?? null,
+        lake: age(slowParts?.lake?.observed),
+        river: age(slowParts?.river?.observed),
+        snow: age(slowParts?.snow?.observed),
+        grid: grid ? age(grid.hour) : null,
+      },
+      frozen: {
+        now: slots.get(Math.floor(Date.now() / HOUR) * HOUR) ?? null,
+        next: slots.get(Math.floor(Date.now() / HOUR) * HOUR + HOUR) ?? null,
+      },
+      ground: STATIONS.map((s, b) => ({ station: ground.stationAt(b)?.code ?? s.code, standingIn: (ground.stationAt(b)?.code ?? s.code) !== s.code ? s.code : undefined, level: Number(ground.level(b).toFixed(2)), fresh: ground.freshAt(b, Date.now() - 30_000) })),
       errors,
     };
     return send(res, 200, JSON.stringify(body), "no-store");

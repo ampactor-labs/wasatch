@@ -158,7 +158,7 @@ export interface SlowNow {
   powder?: number;
   energy?: number;
   /** Warmer aloft, °C, measured: Snowbird's station (9,170 ft) against
-   * the airport, where both are fresh. Wins over the model's. */
+   * the airport, where both are fresh. Joins the model's levels. */
   inversionC?: number;
 }
 
@@ -170,7 +170,13 @@ const SLOW_FIELDS = ["lakeFt", "lakeDevFt", "river", "snowpack", "newSnowIn", "p
  * alerts say of it, and the slow values as they stand. Wind measured up the
  * canyons, frozen from the half hour, wins over the model's. Returns whether
  * anything was frozen. */
-export function freezeAhead(slots: Slots, now: number, next: SkyHour | undefined, slow: SlowNow): boolean {
+export function freezeAhead(
+  slots: Slots,
+  now: number,
+  next: SkyHour | undefined,
+  slow: SlowNow,
+  models: { alta: boolean; slc: boolean; air: boolean } = { alta: true, slc: true, air: true },
+): boolean {
   const hour = Math.floor(now / HOUR) * HOUR;
   const into = now - hour;
   if (into < 45 * 60_000 || into >= 54 * 60_000) return false;
@@ -179,19 +185,30 @@ export function freezeAhead(slots: Slots, now: number, next: SkyHour | undefined
   const put = (field: keyof SlotValues, v: number | undefined) => {
     if (v !== undefined && slots.freeze(at, field, v, now)) changed = true;
   };
-  if (slow.inversionC !== undefined && Number.isFinite(slow.inversionC) && slots.get(at)?.inversionC === undefined) {
-    put("inversionC", slow.inversionC);
-    put("inversionMeasured", 1);
+  // The inversion: the most warming over the airport, as the model reads
+  // it at four levels from about 4,800 ft up. Snowbird's station measures
+  // one more level, at 9,170 ft, above most of the valley's inversions: it
+  // joins the model's levels rather than standing in for them, so a shallow
+  // inversion the station can't see still counts.
+  const measured = slow.inversionC !== undefined && Number.isFinite(slow.inversionC) ? slow.inversionC : undefined;
+  const model = models.slc && next?.at === at && Number.isFinite(next.inversionC) ? next.inversionC : undefined;
+  if (slots.get(at)?.inversionC === undefined && (measured !== undefined || model !== undefined)) {
+    put("inversionC", Math.max(measured ?? 0, model ?? 0));
+    if (measured !== undefined && measured > (model ?? 0)) put("inversionMeasured", 1);
   }
   if (next?.at === at) {
     put("alert", next.alert);
-    put("mtnSnowCm", next.mtnSnowCm);
-    put("inversionC", next.inversionC);
-    if (slots.get(at)?.ridgeGustMs === undefined && Number.isFinite(next.ridgeGustMs) && Number.isFinite(next.ridgeMs)) {
+    // A model that didn't answer left defaults in the hour: freeze nothing
+    // from it, and the hour falls back the same way on every phone.
+    if (models.alta) put("mtnSnowCm", next.mtnSnowCm);
+    if (models.alta && slots.get(at)?.ridgeGustMs === undefined && Number.isFinite(next.ridgeGustMs) && Number.isFinite(next.ridgeMs)) {
       put("ridgeMs", next.ridgeMs);
       put("ridgeGustMs", next.ridgeGustMs);
       put("ridgeModel", 1);
     }
+    // The air, if AirNow's monitors haven't been frozen for it by the
+    // quarter's last minutes: the model's, so no phone is left to its own.
+    if (models.air && into >= 52 * 60_000) put("pm25", next.pm25);
   }
   for (const k of SLOW_FIELDS) put(k, slow[k]);
   return changed;

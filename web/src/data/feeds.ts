@@ -338,6 +338,10 @@ export interface SkyNow {
   pressureTend?: number;
   alerts: string[];
   hours: SkyHour[];
+  /** Which models answered (older payloads lack it: take all as answered).
+   * One that didn't leaves defaults in the hours, which must never be
+   * frozen as if they were its values. */
+  models?: { alta: boolean; slc: boolean; air: boolean };
 }
 
 const SLOT_WINDOW_MS = 15 * 60_000;
@@ -620,6 +624,7 @@ export function skyFrom(raw: SkyRaw, now = Date.now()): { value: SkyNow; observe
       pressureTend: [...hours].reverse().find((h) => h.pressureTend !== undefined)?.pressureTend ?? Number.NaN,
       alerts: active,
       hours,
+      models: { alta: !!alta, slc: !!slc, air: !!air },
     },
     observed: latest?.t ?? now,
   };

@@ -121,6 +121,9 @@ async function main(): Promise<void> {
     const ended = t0 + AFTER <= now;
     const recent = now - (t0 + AFTER) < RESEAL_DAYS * 86_400_000;
     if (!ended || !recent) continue;
+    // Without the conductor's frozen hours a reseal would strip them from a
+    // day already sealed with them: keep that one.
+    if (frozen.size === 0 && date in sky) continue;
     // KSLC reports every five minutes: a day's 34 hours are about 400 reports.
     // A day that can't be read today is sealed by a later build in the week.
     const raw = await fetchSkyRaw(t0 - BEFORE, t0 + AFTER, 7).catch((err: unknown) => {

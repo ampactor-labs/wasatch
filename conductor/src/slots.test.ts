@@ -56,7 +56,7 @@ test("wind measured up the canyons wins over the model's", () => {
   assert.equal(s.apply([hour(top + HOUR)])[0]!.ridgeGustMs, 8);
 });
 
-test("the inversion measured at Snowbird wins over the model's, and says so", () => {
+test("the inversion measured at Snowbird joins the model's levels, and says when it's the larger", () => {
   const top = Date.parse("2026-12-10T15:00:00Z");
   const s = new Slots(null);
   freezeAhead(s, top + 46 * 60_000, { ...hour(top + HOUR), inversionC: 1.5 }, { inversionC: 6.2 });
@@ -66,5 +66,34 @@ test("the inversion measured at Snowbird wins over the model's, and says so", ()
   freezeAhead(t, top + 46 * 60_000, { ...hour(top + HOUR), inversionC: 1.5 }, {});
   assert.equal(t.get(top + HOUR)!.inversionC, 1.5);
   assert.equal(t.measured(top + HOUR, "inversionC"), false);
+  // A shallow inversion below Snowbird: the station reads no warming, the
+  // model's lower levels do. It isn't lost.
+  const u = new Slots(null);
+  freezeAhead(u, top + 46 * 60_000, { ...hour(top + HOUR), inversionC: 3.1 }, { inversionC: 0 });
+  assert.equal(u.get(top + HOUR)!.inversionC, 3.1);
+  assert.equal(u.measured(top + HOUR, "inversionC"), false);
 });
 
+
+test("a model that didn't answer freezes nothing; the air's model fills in late", () => {
+  const top = Date.parse("2026-12-10T15:00:00Z");
+  const next = { ...hour(top + HOUR), mtnSnowCm: 0, ridgeMs: 4, ridgeGustMs: 6, inversionC: 0, pm25: 7 };
+  // Open-Meteo down: Alta's and the valley's models left their defaults.
+  const s = new Slots(null);
+  freezeAhead(s, top + 46 * 60_000, next, {}, { alta: false, slc: false, air: false });
+  const v = s.get(top + HOUR) ?? {};
+  assert.equal(v.mtnSnowCm, undefined);
+  assert.equal(v.ridgeGustMs, undefined);
+  assert.equal(v.inversionC, undefined);
+  assert.equal(v.alert, 0, "issued alerts aren't a model");
+  // The air's model is frozen only in the quarter's last minutes, after
+  // AirNow's measurement has had its chance.
+  const t = new Slots(null);
+  const all = { alta: true, slc: true, air: true };
+  freezeAhead(t, top + 46 * 60_000, next, {}, all);
+  assert.equal(t.get(top + HOUR)!.pm25, undefined);
+  freezeAhead(t, top + 52 * 60_000, next, {}, all);
+  assert.equal(t.get(top + HOUR)!.pm25, 7);
+  t.freeze(top + HOUR, "pm25", 30);
+  assert.equal(t.get(top + HOUR)!.pm25, 7, "and never revised");
+});
