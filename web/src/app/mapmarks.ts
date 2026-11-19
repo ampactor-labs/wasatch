@@ -246,7 +246,7 @@ export class MapMarks {
     const el = document.createElement("div");
     // The tag goes on whichever side has room.
     const left = x > p.width - 170 * this.u;
-    el.className = `tag${left ? " tag--left" : ""}`;
+    el.className = `maptag${left ? " maptag--left" : ""}`;
     el.style.cssText = `left:${n(x)}px;top:${n(y)}px;--c:${soundColor(e.i)};opacity:${(0.55 + 0.45 * Math.sqrt(loud)).toFixed(2)}`;
     el.textContent = soundName(e, this.network(), this.tidy);
     host.appendChild(el);

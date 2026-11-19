@@ -1054,7 +1054,7 @@ a {
   }
 }
 /* What a sound is, beside it for a moment. */
-.tag {
+.maptag {
   position: absolute;
   transform: translate(calc(12px * var(--map-u, 1)), -50%);
   padding: 2px 6px 1px;
@@ -1067,12 +1067,12 @@ a {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   white-space: nowrap;
-  animation: tag-life 2.6s ease forwards;
+  animation: maptag-life 2.6s ease forwards;
 }
-.tag--left {
+.maptag--left {
   transform: translate(calc(-100% - 12px * var(--map-u, 1)), -50%);
 }
-@keyframes tag-life {
+@keyframes maptag-life {
   from {
     opacity: 0;
   }
@@ -1168,7 +1168,7 @@ a {
   .home--always .home__dot {
     animation: none;
   }
-  .tag {
+  .maptag {
     animation: none;
   }
   .pulse__ring {
