@@ -52,8 +52,16 @@ const manifest = read<Manifest>("manifest.json");
 const network = read<Network>("network.json");
 const dayFor = (date: string) => read<Day>(`day-${manifest.days[date]}.json`);
 const weekdayDates = Object.keys(manifest.days).filter((d) => weekday(d) >= 1 && weekday(d) <= 4);
-// The rest of the tests look at one ordinary weekday: the latest compiled.
 weekdayDates.reverse();
+/** Stop events on a date: rail, bus and ski. */
+const totalOn = (date: string) => {
+  const c = dayFor(date).counts;
+  return c.railStopEvents + c.busStopEvents + c.skiStopEvents;
+};
+// The rest of the tests look at one ordinary weekday: the latest compiled
+// that isn't a holiday running a weekend's service (Thanksgiving came into
+// the window on Nov 18, 2026).
+const ordinary = weekdayDates.find((d) => totalOn(d) >= 0.75 * 243_304) ?? weekdayDates[0]!;
 
 test("the manifest covers yesterday through nine days ahead", () => {
   assert.equal(manifest.version, 1);
@@ -80,21 +88,17 @@ test("service days count from local noon minus 12 hours", () => {
 
 test("a weekday has about 243,304 stop events", () => {
   assert.ok(weekdayDates.length > 0, "a Monday–Thursday in range");
-  const total = (date: string) => {
-    const c = dayFor(date).counts;
-    return c.railStopEvents + c.busStopEvents + c.skiStopEvents;
-  };
   // Most Mondays to Thursdays run weekday service; the odd one is a holiday
   // (Labor Day, Thanksgiving) running reduced service.
-  const holidays = weekdayDates.filter((d) => total(d) < 0.75 * 243_304);
+  const holidays = weekdayDates.filter((d) => totalOn(d) < 0.75 * 243_304);
   assert.ok(holidays.length <= Math.max(1, weekdayDates.length * 0.1), `holiday service on ${holidays.join(", ")}`);
   for (const date of weekdayDates.filter((d) => !holidays.includes(d))) {
-    assert.ok(Math.abs(total(date) - 243_304) / 243_304 < 0.15, `${date}: ${total(date)} stop events`);
+    assert.ok(Math.abs(totalOn(date) - 243_304) / 243_304 < 0.15, `${date}: ${totalOn(date)} stop events`);
   }
 });
 
 test("rail runs 450–900 stop events an hour from 06:00 to 22:00", () => {
-  const day = dayFor(weekdayDates[0]!);
+  const day = dayFor(ordinary);
   const perHour = new Array<number>(30).fill(0);
   for (const trip of day.rail) for (const t of trip.t) perHour[Math.floor(t / 3600)]!++;
   const hours = perHour.slice(6, 22);
@@ -103,7 +107,7 @@ test("rail runs 450–900 stop events an hour from 06:00 to 22:00", () => {
 });
 
 test("buses run 150–300 stop events a minute through the day", () => {
-  const day = dayFor(weekdayDates[0]!);
+  const day = dayFor(ordinary);
   const peak = day.bus.perMinute.slice(6 * 60, 18 * 60).sort((a, b) => a - b);
   const median = peak[Math.floor(peak.length / 2)]!;
   assert.ok(median >= 150 && median <= 300, `median ${median}`);
@@ -114,7 +118,7 @@ test("buses run 150–300 stop events a minute through the day", () => {
 });
 
 test("a few hundred vehicles are in service through the day, none at 3 AM", () => {
-  const day = dayFor(weekdayDates[0]!);
+  const day = dayFor(ordinary);
   assert.equal(day.active.length, 1800);
   assert.equal(day.active[3 * 60], 0);
   for (const hour of [8, 12, 17]) {
@@ -148,7 +152,7 @@ test("FrontRunner runs through Salt Lake Central", () => {
   const fr = network.routes.findIndex((x) => x.kind === "frontrunner");
   const slc = network.stops.findIndex((s) => /salt lake central/i.test(s.name));
   assert.ok(slc >= 0, "a Salt Lake Central stop");
-  const day = dayFor(weekdayDates[0]!);
+  const day = dayFor(ordinary);
   const trips = day.rail.filter((t) => t.r === fr);
   assert.ok(trips.length > 0, "FrontRunner trips on a weekday");
   assert.ok(trips.filter((t) => t.s.includes(slc)).length >= trips.length * 0.9);
