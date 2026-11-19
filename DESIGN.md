@@ -13,6 +13,22 @@ and where it departs from it.
 
 What's live, and where it differs from the rest of this document:
 
+- **Phase 0 of the November upgrade (Nov 18).** Fixes to what plays:
+  - **Observations are heard with the lag.** Bars read an hour's observed
+    fields (the valley's weather, the fleet's flow and buses) from 20
+    minutes back (`Sky::heard_at`), as the plan always did; what's frozen
+    ahead comes from the hour itself.
+  - **A late joiner replays its section as it was played.** `locate()` and
+    `compose_next` share `compose_bar`, with the hour's frozen slow values.
+  - **The usuals are medians that skip holidays** (conductor/README.md).
+  - **Traffic, not snow, moves the flow.** Traction notices play only as
+    the canyon pedal; lateness is against its own usual.
+  - **The inversion takes the larger of Snowbird's and the model's.** It's
+    the most warming over the airport; Snowbird is one more level.
+  - **Freezing.** Nothing is frozen from a model that didn't answer.
+  - **The ground's stand-ins.** The freeway band plays from DOT while SHED
+    (silent since Nov 3) is quiet.
+
 - **The look.** The brand described under "The screen" (black, paper white,
   one monospaced face) gave way to a goofy Wasatch trail-map look: a
   shredder in a neon one-piece riding the skyline summit to summit as the

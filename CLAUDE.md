@@ -66,6 +66,19 @@ is coded and tested, off until its token is set.
 Railway skipped the redeploy it made when the variables were set (watch
 paths); the push that carried the Oct 28 work deployed them.
 
+### The November upgrade (plan approved Nov 18)
+
+The plan is in DESIGN.md "As built" as it lands. Phase 0 (fixes to what
+plays) shipped Nov 18. Next: Phase 1, a scrollable feed of the day's cards,
+rebuilt on each phone from the conductor's event bundles. Then smoother
+phones, more varied music, new voices (each approved by ear), weather on
+screen, and replays that remember.
+
+Phase 0 changed:
+- the usuals (`conductor/src/usual.ts`: medians, holidays skipped);
+- observed sky fields, now read with the lag (`Sky::heard_at`);
+- the ground: DOT stands in for SHED, silent since Nov 3.
+
 ### Next steps, in order
 
 1. `curl https://wasatch-production.up.railway.app/health`: `keys.airnow`

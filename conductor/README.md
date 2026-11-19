@@ -41,9 +41,10 @@ exactly the same thing, and what the browser can't do on its own:
 - **Frozen hours.** What only the conductor knows of an hour is worked out
   once and never revised, kept on disk (`DATA_DIR/slots.json`), served in
   `/sky.json` and `/slots.json`, and copied by the archive into each sealed
-  day: the fleet's flow (its moving speed against the usual for the hour,
-  learned in `DATA_DIR/usual.json`, with the trains' lateness), the snow
-  forecast at Alta (NWS's grid), and with their keys the wind measured up
+  day: the fleet's flow (its moving speed and the trains' lateness, each
+  against the usual for the hour, learned in `DATA_DIR/usual.json`), the
+  buses out against their usual, the snow forecast at Alta (NWS's grid,
+  read in an hour's second half and frozen for the next), and with their keys the wind measured up
   the canyons and the PM2.5 measured at the monitors (each read in an
   hour's second half and frozen for the next). The air is frozen three
   ways: the valley's median, Hawthorne's for downtown and the Beach
@@ -87,7 +88,15 @@ GET /health          what it's doing
 sealed windows and whether they're kept on disk, what realtime it's
 tracking, the fleet's counts and age, the hour's flow, the alerts and
 planes it's seen, the grid, each key's state (`missing`, `set`, `ok` or
-`error`), each seismometer's level, and any feed that's failing.
+`error`), how old each source's latest reading is (`ages_s`), what's frozen
+for this hour and the next (`frozen`), each seismometer's level (and which
+station is standing in for one that's quiet), and any feed that's failing.
+
+**The usuals** (`usual.ts`) are the median of the last five times each hour
+of a weekday, a Saturday and a Sunday was seen; a weekday running a
+weekend's service (Thanksgiving, from the schedule's manifest) is heard
+against them but doesn't teach them. Files from the older running average
+are migrated on start.
 
 ## Keys
 
