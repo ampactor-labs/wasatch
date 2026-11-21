@@ -200,11 +200,55 @@ a {
 }
 
 .play__captions {
+  position: relative;
+  min-width: 0;
+}
+/* The session's captions: a scroller of its own, newest on top. Scrolling
+   it never scrolls the page, so the map beside it never moves. */
+.feed {
+  position: absolute;
+  inset: 0;
+}
+.feed__scroll {
+  height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 7px;
   padding: 12px 12px 10px;
   align-content: start;
+  scrollbar-width: thin;
+}
+.feed__new {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  translate: -50% 0;
+  z-index: 3;
+  padding: 4px 12px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: var(--sun);
+  color: var(--ink);
+  font: 800 12px/1.2 var(--font-body);
+  box-shadow: 0 2px 0 var(--ink);
+  cursor: pointer;
+}
+/* Rows far out of view aren't painted. */
+.caption--old {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .caption {
   min-width: 0;
@@ -216,14 +260,13 @@ a {
     min-height: 210px;
   }
 }
-/* Phones: a fixed caption area, so the map doesn't jump with each sign. */
+/* Phones: a fixed caption area, so the map doesn't jump with each sign;
+   the feed scrolls inside it. */
 @media (max-width: 899px) {
   .play__captions {
     height: 240px;
-    box-sizing: border-box;
-    overflow: hidden;
-    -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent);
-    mask-image: linear-gradient(to bottom, #000 82%, transparent);
+    flex: none;
+    contain: size style;
   }
   .caption__intro {
     display: -webkit-box;
@@ -431,8 +474,10 @@ a {
   }
   .play__captions {
     grid-area: captions;
+    overflow: hidden;
+  }
+  .feed__scroll {
     padding: 12px 16px 16px 8px;
-    overflow: auto;
   }
   .caption--old .sign__line {
     white-space: normal;

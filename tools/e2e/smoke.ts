@@ -187,6 +187,7 @@ try {
     const board = await page.$$eval(".play__conditions .cond", (c) => c.map((x) => x.textContent ?? ""));
     console.log(`  conditions: ${board.join(" · ")}`);
     if (board.length < 8) failures.push(`${view.name}: only ${board.length} readings on the conditions board`);
+    if (view.name === "phone" && !query) await feedScrolls(page, failures);
     if (view.name === "phone" && !query) {
       // While playing, a caption card explains itself too.
       const sign = await page.$(".play__captions .sign[data-topic]");
@@ -228,11 +229,52 @@ async function explains(page: import("puppeteer-core").Page, failures: string[],
   if (shots) await page.screenshot({ path: join(shots, "phone-lowdown.png") });
   await page.click(".sheet__close");
   await sleep(400);
-  // It fades on its own.
-  await page.click('.term[data-topic="trains"]');
+  // It fades on its own. (Any word will do: in the small hours no trains
+  // run, and the status line has no "trains" to tap.)
+  await page.click(".term[data-topic]");
   await sleep(5200);
   const gone = await page.$(".toast--on");
   if (gone) failures.push("the toast didn't fade");
+}
+
+/** The caption feed scrolls by itself: the page and the map stay put, and
+ * a card that arrives while the reader is down the feed waits behind a pill
+ * instead of moving what they're reading. */
+async function feedScrolls(page: import("puppeteer-core").Page, failures: string[]): Promise<void> {
+  const before = await page.evaluate(() => {
+    const map = document.querySelector(".play__map")!.getBoundingClientRect();
+    (document.querySelector(".play__map svg") as SVGElement & { __smoke?: number }).__smoke = 1;
+    return { w: map.width, h: map.height, page: document.scrollingElement?.scrollTop ?? 0 };
+  });
+  const cards = await page.evaluate(async () => {
+    const screen = (window as unknown as { __wasatch: { screen: { caption(c: unknown): void } } }).__wasatch.screen;
+    // Pad the feed so it can scroll, as an hour of listening would.
+    for (let i = 0; i < 12; i++) screen.caption({ text: `Smoke card ${i}`, receipt: "scheduled", at: performance.now(), family: "trax" });
+    const sc = document.querySelector<HTMLElement>(".feed__scroll")!;
+    sc.scrollTop = 200;
+    await new Promise((r) => setTimeout(r, 200));
+    const row = [...sc.querySelectorAll<HTMLElement>(".caption--old")].find((e) => e.getBoundingClientRect().top > sc.getBoundingClientRect().top)!;
+    const reading = row.getBoundingClientRect().top;
+    screen.caption({ text: "Smoke card while away", receipt: "scheduled", at: performance.now(), family: "trax" });
+    await new Promise((r) => setTimeout(r, 100));
+    const pill = document.querySelector<HTMLElement>(".feed__new");
+    const held = !pill?.hidden && /1 new/.test(pill?.textContent ?? "");
+    const still = row.getBoundingClientRect().top === reading;
+    pill?.click();
+    await new Promise((r) => setTimeout(r, 900));
+    return { count: sc.querySelectorAll(".caption").length, held, still, top: sc.querySelector(".sign__line")?.textContent ?? "", scrolled: sc.scrollTop };
+  });
+  const after = await page.evaluate(() => {
+    const map = document.querySelector(".play__map")!.getBoundingClientRect();
+    return { w: map.width, h: map.height, page: document.scrollingElement?.scrollTop ?? 0, same: (document.querySelector(".play__map svg") as SVGElement & { __smoke?: number }).__smoke === 1 };
+  });
+  console.log(`  feed: ${cards.count} cards, held behind the pill ${cards.held}, reading undisturbed ${cards.still}, back to "${cards.top}"`);
+  if (cards.count < 13) failures.push(`the feed kept only ${cards.count} cards`);
+  if (!cards.held) failures.push("a card that came while scrolled away didn't wait behind the pill");
+  if (!cards.still) failures.push("a new card moved what the reader was reading");
+  if (cards.top !== "Smoke card while away" || cards.scrolled > 4) failures.push(`the pill didn't bring the feed back to now (${cards.top}, ${cards.scrolled})`);
+  if (!after.same || after.w !== before.w || after.h !== before.h) failures.push("scrolling the feed resized or redrew the map");
+  if (after.page !== before.page) failures.push("scrolling the feed scrolled the page");
 }
 
 /** Tap each place to listen from: the engine answers with what's near and

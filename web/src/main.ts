@@ -231,7 +231,8 @@ async function main(): Promise<void> {
       if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
       const el = e.target as HTMLElement | null;
       if (el?.closest("input, textarea, select, [contenteditable], .sheet:not([hidden])")) return;
-      if (e.key === " " && !el?.closest("button, [data-topic], [role=slider]")) {
+      // Space inside the feed scrolls it.
+      if (e.key === " " && !el?.closest("button, [data-topic], [role=slider], .feed__scroll")) {
         e.preventDefault();
         void toggle();
       } else if (/^[1-4]$/.test(e.key)) {
@@ -301,6 +302,9 @@ async function main(): Promise<void> {
       valley: v,
       schedule,
       conductor,
+      get screen() {
+        return screen;
+      },
       get state() {
         return h.ctx.state;
       },

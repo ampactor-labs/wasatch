@@ -38,6 +38,7 @@ import {
   type Caption,
   type Family,
 } from "./captions.ts";
+import { FeedView } from "./feedview.ts";
 import { midiName } from "./music.ts";
 import { dialLabels, homePos, keyName, noteName, push, type Key } from "./music.ts";
 import { tidyStation, type Schedule } from "./schedule.ts";
@@ -90,8 +91,8 @@ export class PlayScreen {
   private key: Key = { c: 0, r: 1 };
   private next: Key = { c: 0, r: 1 };
   private bar: Heard<BarEvent> | null = null;
-  private captions: Caption[] = [];
-  private introduced = new Set<Family>();
+  /** The captions, as a scrolling log of the session (app/feedview.ts). */
+  private feed: FeedView | null = null;
   private geo: SkylineGeometry | null = null;
   private proj: MapProjection | null = null;
   private bounds: MapBounds | null = null;
@@ -152,7 +153,7 @@ export class PlayScreen {
         <div class="play__dial" data-topic="key"></div>
         <div class="play__podium" aria-hidden="true">${gull({ pose: "conduct" })}</div>
       </section>
-      <section class="play__captions" aria-live="polite" aria-label="What you're hearing"></section>
+      <section class="play__captions" aria-label="What you're hearing"></section>
       <nav class="play__bar">
         <div class="play__vantage" role="radiogroup" aria-label="Where you're listening from">
           <span class="play__vantage-label" data-topic="vantages">Listen from</span>
@@ -873,27 +874,19 @@ export class PlayScreen {
     this.hopTo(e.s);
   }
 
-  /** Show a caption: newest on top, three at most. */
+  /** Show a caption, on top of the session's log. */
   caption(c: Caption): void {
-    const intro = this.introduced.has(c.family) ? undefined : c.intro;
-    this.introduced.add(c.family);
-    this.captions.unshift({ ...c, intro });
-    // Three on a phone; on a desktop the feed has a column, so it keeps more.
-    this.captions.length = Math.min(this.captions.length, window.matchMedia("(min-width: 900px)").matches ? 7 : 3);
-    const host = this.root.querySelector(".play__captions");
-    if (!host) return;
-    host.innerHTML = this.captions
-      .map(
-        (k, i) => `<div class="sign sign--${k.receipt} caption${i ? " sign--small caption--old" : " caption--new"}" data-topic="${FAMILY_TOPIC[k.family] ?? "receipts"}" tabindex="0">
-          <p class="sign__line">${esc(k.text)}</p>${i === 0 && k.intro ? `<p class="sign__line caption__intro">${esc(k.intro)}</p>` : ""}
-          <span class="sign__receipt">${esc(receiptText(k))}</span></div>`,
-      )
-      .join("");
+    if (!this.feed) {
+      const host = this.root.querySelector<HTMLElement>(".play__captions");
+      if (!host) return;
+      this.feed = new FeedView(host);
+    }
+    this.feed.add(c);
   }
 
-  /** The latest captions, for the lock screen and sharing. */
+  /** The latest caption, for the lock screen and sharing. */
   latest(): Caption | undefined {
-    return this.captions[0];
+    return this.feed?.latest();
   }
 
   currentKey(): Key {
